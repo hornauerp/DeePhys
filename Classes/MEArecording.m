@@ -3,6 +3,7 @@ classdef MEArecording < handle
         Metadata
         RecordingInfo
         Parameters
+        Spikes
         Units
         NetworkFeatures
         UnitFeatures
@@ -40,6 +41,7 @@ classdef MEArecording < handle
         function parseRecordingInfo(obj)
             obj.RecordingInfo.ElectrodeCoordinates = obj.getElectrodeCoordinates();
             obj.RecordingInfo.SamplingRate = obj.getSamplingRate();
+            [obj.Spikes.Times, obj.Spikes.Units] = obj.getSpikeTimes();
             obj.RecordingInfo.Duration = obj.getRecordingDuration();
             disp("Loaded recording information")
         end
@@ -58,9 +60,17 @@ classdef MEArecording < handle
             sampling_rate = str2double(sr{2});
         end
         
+        function [spike_times, spike_units] = getSpikeTimes(obj)
+            spike_times = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_times.npy"))) / obj.RecordingInfo.SamplingRate;
+            spike_units = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_templates.npy")))+1;
+        end
+        
+        function template_matrix = getTemplateMatrix(obj)
+            template_matrix = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
+        end
+        
         function duration = getRecordingDuration(obj)
-            spike_times = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_times.npy")));
-            duration = ceil(max(spike_times)/obj.RecordingInfo.SamplingRate);
+            duration = ceil(max(obj.Spikes.Times));
         end
         
         function parseParameters(obj, parameters)
@@ -88,21 +98,36 @@ classdef MEArecording < handle
         end
         
         function performAnalyses(obj, analyses)
-            obj.generateUnits()
+            if analyses.SingleCell
+                obj.Units = obj.generateUnits();
+                obj.updateSpikeTimes();
+            end
+            
+            if analyses.Regularity
+                
+            end
         end
         
-        function generateUnits(obj)
+        function unit_array = generateUnits(obj)
             [max_amplitudes, norm_wf_matrix] = obj.generateWaveformMatrix();
             [firing_rates, unit_spike_times] = obj.calculateFiringRates();
             good_units = performUnitQC(obj, max_amplitudes, firing_rates, unit_spike_times, norm_wf_matrix);
-            good_amplitudes = max_amplitudes(good_units);
-            good_unit_spike_times = unit_spike_times(good_units);
-            good_wf_matrix = norm_wf_matrix(:,good_units);
-            waveform_features = inferWaveformFeatures(good_amplitudes, good_wf_matrix);
+            if sum(good_units) > 0
+                good_amplitudes = max_amplitudes(good_units);
+                good_unit_spike_times = unit_spike_times(good_units);
+                good_wf_matrix = norm_wf_matrix(:,good_units);
+                waveform_features = obj.inferWaveformFeatures(good_amplitudes, good_wf_matrix);
+                unit_array = Unit();
+                for u = 1:length(waveform_features)
+                    unit_array(u) = Unit(obj, good_wf_matrix(:,u), good_unit_spike_times{u}, waveform_features{u});
+                end
+            else
+                warning("No good units found")
+            end
         end
         
         function [max_amplitudes, norm_wf_matrix] = generateWaveformMatrix(obj)
-            template_matrix = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
+            template_matrix = obj.getTemplateMatrix();
             [max_amplitudes, max_idx] = min(template_matrix,[],[2,3],'linear');
             max_amplitudes = abs(max_amplitudes * obj.Parameters.QC.LSB);
             [~,~,reference_electrode] = ind2sub(size(template_matrix),max_idx);
@@ -112,9 +137,7 @@ classdef MEArecording < handle
         end
         
         function [firing_rates, unit_spike_times] = calculateFiringRates(obj)
-            spike_times = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_times.npy")))/obj.RecordingInfo.SamplingRate;
-            spike_unit = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_templates.npy")))+1;
-            unit_spike_times = splitapply(@(x) {x}, spike_times, spike_unit);
+            unit_spike_times = splitapply(@(x) {x}, obj.Spikes.Times, obj.Spikes.Units);
             firing_rates = cellfun(@length, unit_spike_times)/obj.RecordingInfo.Duration;
         end
         
@@ -178,30 +201,53 @@ classdef MEArecording < handle
             fprintf('Identified %i units as noise\n',sum(is_noisy))
         end
         
-        function waveform_features = inferWaveformFeatures(obj,max_amplitude, good_wf_matrix)
-            x = 1:size(good_wf_matrix,1);
-            xq = 1:0.1:size(good_wf_matrix,1);
-            interp_wf_matrix = double(interp1(x,good_wf_matrix,xq,'pchip'));
+        function waveform_features = inferWaveformFeatures(obj,max_amplitudes, norm_wf_matrix)
+            interpolation_factor = 10;
+            ms_conversion = (obj.RecordingInfo.SamplingRate / 1000) * interpolation_factor;
+            x = 1:size(norm_wf_matrix,1);
+            xq = 1:(1/interpolation_factor):size(norm_wf_matrix,1);
+            interp_wf_matrix = double(interp1(x,norm_wf_matrix,xq,'pchip'));
             zci = @(v) find(v(:).*circshift(v(:), [-1 0]) <= 0); %Function to detect zero crossings
             tx = zci(interp_wf_matrix); %Apply to interpolated waveform matrix
             [sample_idx,electrode_idx] = ind2sub(size(interp_wf_matrix),tx);
             unit_zero_crossings = splitapply(@(x) {x},sample_idx,electrode_idx);
             [unit_trough_value,unit_trough_idx] = min(interp_wf_matrix);
-            [peak_1_value, ~] = max(interp_wf_matrix(1:unit_trough_idx,:));
-            [peak_2_value, peak_2_idx] = max(interp_wf_matrix(unit_trough_idx:end,:));
+            peak_1_cutout = interp_wf_matrix(unit_trough_idx - ms_conversion:unit_trough_idx,:); %Limit detection range for peaks
+            peak_2_cutout = interp_wf_matrix(unit_trough_idx:unit_trough_idx + ms_conversion,:);
+            [peak_1_value, ~] = max(peak_1_cutout);
+            [peak_2_value, peak_2_idx] = max(peak_2_cutout);
             peak_2_idx = peak_2_idx + unit_trough_idx - 1;
             asymmetry = (peak_2_value - peak_1_value) ./ (peak_2_value + peak_1_value);
             t2pdelay = (peak_2_idx - unit_trough_idx) ./ (obj.RecordingInfo.SamplingRate / 1000); %in [ms]
             t2pratio = abs(unit_trough_value ./ peak_2_value);
+            waveform_features = cell(1,length(max_amplitudes));
             for u = 1:size(interp_wf_matrix,2)
                 zc = [1 unit_zero_crossings{u}' length(xq)];
                 [~,zc_pre_trough] = max(zc(zc<unit_trough_idx(u))); %Find zero crossing towards the trough
-                AUC_peak_1 = trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough)));
-                AUC_trough = trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1)));
-                AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2)));
-                rise = slewrate(interp_wf_matrix(unit_trough_idx(u):peak_2_idx(u),u));
-                decay = slewrate(interp_wf_matrix(peak_2_idx(u):end,u));
+                unit_features.AUC_peak_1 = trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough)));
+                unit_features.AUC_trough = abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1))));
+                unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2)));
+                unit_features.Rise = slewrate(interp_wf_matrix(unit_trough_idx(u):peak_2_idx(u),u));
+                unit_features.Decay = slewrate(interp_wf_matrix(peak_2_idx(u):end,u));
+                unit_features.Asymmetry = asymmetry(u);
+                unit_features.T2Pdelay = t2pdelay(u);
+                unit_features.T2Pratio = t2pratio(u);
+                waveform_features{u} = unit_features;
             end
+        end
+        
+        function updateSpikeTimes(obj)
+           % Update spike times and units after the quality control 
+           spike_times = vertcat(obj.Units.SpikeTimes);
+           spike_units = arrayfun(@(x) ones(1,length(obj.Units(x).SpikeTimes))*x,1:length(obj.Units),'un',0);
+           spike_units = horzcat(spike_units{:});
+           [spike_times_sorted, sort_idx] = sort(spike_times,'ascend');
+           spike_units_sorted = spike_units(sort_idx);
+           obj.Spikes.Times = spike_times_sorted;
+           obj.Spikes.Units = spike_units_sorted';
+        end
+        
+        function getRegularity(obj)
             
         end
     end
@@ -226,5 +272,17 @@ classdef MEArecording < handle
             % Parameters for the burst detection
             defaultParams.Regularity.binning = 0.1; %Binning to compute regularity features
         end
+    end
+    
+    methods
+       % Plots
+       function NetworkScatterPlot(obj)
+          figure('Color','w');
+          plot(obj.Spikes.Times,obj.Spikes.Units,'k.')
+          xlabel('Time [s]')
+          ylabel('Unit ID')
+          axis tight
+          box off
+       end
     end
 end
