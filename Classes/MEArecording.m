@@ -112,8 +112,12 @@ classdef MEArecording < handle
                 obj.getBurstStatistics();
             end
             
-            if obj.Parameters.Analyses.Connectivity
-                
+            if obj.Parameters.Analyses.Connectivity.CCG
+                obj.inferConnectivityCCG();
+            end
+            
+            if obj.Parameters.Analyses.Connectivity.DDC
+                obj.inferConnectivityDDC();
             end
         end
        
@@ -356,6 +360,8 @@ classdef MEArecording < handle
             defaultParams.Analyses.SingleCell = true;
             defaultParams.Analyses.Regularity = true;
             defaultParams.Analyses.Bursts = true;
+            defaultParams.Analyses.Connectivity.CCG = false;
+            defaultParams.Analyses.Connectivity.DDC = true;
             
             % Parameters for outlier detection 
             defaultParams.Outlier.Method = "median"; %Method as defined by Matlab's rmoutliers() function // set to [] to skip outlier detection
@@ -386,6 +392,11 @@ classdef MEArecording < handle
             defaultParams.CCG.Duration = 0.1; %100ms, corresponds to the length of one side of ccg
             defaultParams.CCG.Conv_w = .010/defaultParams.CCG.BinSize;  % 10ms window (gaussian convolution)
             defaultParams.CCG.Alpha = 0.001; %Threshold for significance testing
+            
+            % Parameters for DDC calculation
+            defaultParams.DDC.BinSize = .001; %1ms
+            defaultParams.DDC.Threshold = 0; %ReLU treshold
+            
         end
     end
     
@@ -525,7 +536,7 @@ classdef MEArecording < handle
            disp('Finished CCG calculations')
        end
        
-       function [sig_con, ccg_vec, Bounds, ccg_vec_inh, sig_con_inh,ccgR, Pval] = inferConnectivityCCG(obj)
+       function inferConnectivityCCG(obj)
            [ccgR1,tR] = obj.calculateCCGs();
            binSize = obj.Parameters.CCG.BinSize; %.5ms
            conv_w = obj.Parameters.CCG.Conv_w;  % 10ms window
@@ -632,8 +643,49 @@ classdef MEArecording < handle
                ccg_vec_inh=[];
            end
            fprintf('Found %i excitatory and %i inhibitory connections\n', size(sig_con,1), size(sig_con_inh,1))
+           con_mat = zeros(size(ccgR,[2,3]));
+           for e = 1:size(sig_con,1)
+               con_mat(sig_con(e,1),sig_con(e,2)) = 1;
+           end
+           for i = 1:size(sig_con_inh,1)
+               con_mat(sig_con_inh(i,1),sig_con_inh(i,2)) = -1;
+           end
+           obj.Connectivity.CCGResults.ExcitatoryConnection = sig_con;
+           obj.Connectivity.CCGResults.InhibitoryConnection = sig_con_inh;
+           obj.Connectivity.CCGResults.ConnectivityMatrix = con_mat;
+           obj.Connectivity.CCGResults.CCGs = ccgR;
        end
-        
+       
+       function inferConnectivityDDC(obj)%[Cov,precision,B,dCov]
+           %{
+            INPUT:
+            V_obs: time points x variables
+            thres: Relu offset
+            TR: sampling interval (seconds)
+            OUTPUT:
+            B: <ReLu(x),x>
+            dCov: <dx/dt,x>
+            Version2: change the implementation of ReLu, get rid of the translation
+           %}
+           TR = 1;
+           V_obs = zeros(obj.RecordingInfo.Duration * round(1/obj.Parameters.DDC.BinSize),length(obj.Units));
+           spiketimes_ms = round(obj.Spikes.Times * 1000);
+           V_obs(sub2ind(size(V_obs), spiketimes_ms, obj.Spikes.Units)) = 1;
+           V_obs = smoothdata(V_obs,'gaussian',3);
+           [~,N] = size(V_obs);
+           % 	Cov = cov(V_obs);
+           % 	precision = inv(Cov);
+           Fx = V_obs-obj.Parameters.DDC.Threshold; Fx(Fx<0) = 0;
+           % Fx = V_obs; Fx(Fx<thres) = 0;
+           tmp = cov([Fx V_obs]);
+           B = tmp(1:N,N+1:end);
+           dV = (-1/2*V_obs(1:end-2,:) + 1/2*V_obs(3:end,:))/TR; % (z(t+1)-z(t-1))/2
+           dV = [mean(dV);dV;mean(dV)]; % substitute the first and last row with mean
+           tmp = cov([dV V_obs]);
+           dCov = tmp(1:N,N+1:end);
+           obj.Connectivity.DDC = dCov * inv(B);
+       end
+       
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        %Plots
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -692,6 +744,20 @@ classdef MEArecording < handle
            xticks([xlims(1) 0 xlims(2)])
            x_max = obj.Parameters.CCG.duration/2*1000;
            xticklabels([-x_max 0 x_max])
+       end
+       
+       function indsort = communityPlot(con_mat,flag)
+           %flag indicates if squares are drawnaround communities
+           % M     = community_louvain(con_mat,0.0001,[],'negative_asym');
+           M = modularity_dir(con_mat,100);
+           [X,Y,indsort] = grid_communities(M);
+           imagesc(con_mat(indsort,indsort))
+           if flag
+               hold on
+               plot(X,Y,'k','linewidth',1);
+           end
+           cm = othercolor('RdBu5',3);
+           colormap(flipud(cm))
        end
     end
 end
