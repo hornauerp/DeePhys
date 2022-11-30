@@ -215,7 +215,7 @@ classdef MEArecording < handle
             peak_2_idx = peak_2_idx + unit_trough_idx - 1;
             asymmetry = (peak_2_value - peak_1_value) ./ (peak_2_value + peak_1_value);
             t2pdelay = (peak_2_idx - unit_trough_idx) ./ (obj.RecordingInfo.SamplingRate / 1000); %in [ms]
-            t2pratio = abs(unit_trough_value ./ peak_2_value(1));
+            t2pratio = abs(unit_trough_value ./ peak_2_value);
             waveform_features = cell(1,length(max_amplitudes));
             for u = 1:size(interp_wf_matrix,2)
                 unit_features = struct();
@@ -228,40 +228,45 @@ classdef MEArecording < handle
                 %calculations
                 rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_idx(u),u);
                 padded_rise = [ones(100,1)*rise_cutout(1); rise_cutout; ones(100,1)*rise_cutout(end)];
-                unit_features.Rise = slewrate(padded_rise,u);
+                unit_features.Rise = slewrate(padded_rise);
                 decay_cutout = interp_wf_matrix(peak_2_idx(u):end,u);
                 decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout)));
-                unit_features.Decay = slewrate([ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)]);
-                if length([unit_features.Decay]) > 1
-                    error('')
-                end
+                padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
+                unit_features.Decay = slewrate(padded_decay,10);
                 unit_features.Asymmetry = asymmetry(u);
                 unit_features.T2Pdelay = t2pdelay(u);
                 unit_features.T2Pratio = t2pratio(u);
+                feature_names = fieldnames(unit_features);
+                for f = 1:length(feature_names) %If slewrates could not be calculated // should happen very rarely
+                   if isempty(unit_features.(feature_names{f}))
+                       unit_features.(feature_names{f}) = 0;
+                   end
+                end
                 waveform_features{u} = unit_features;
             end
         end
         
         function aggregateSingleCellFeatures(obj)
-            activity_array = [obj.Units.ActivityFeatures];
-            waveform_array = [obj.Units.WaveformFeatures];
-            activity_feature_names = fieldnames(obj.Units(1).ActivityFeatures);
-            waveform_feature_names = fieldnames(obj.Units(1).WaveformFeatures);
+            feature_array = [obj.Units.Features];
+            activity_array = [feature_array.ActivityFeatures];
+            waveform_array = [feature_array.WaveformFeatures];
+            activity_feature_names = fieldnames(obj.Units(1).Features.ActivityFeatures);
+            waveform_feature_names = fieldnames(obj.Units(1).Features.WaveformFeatures);
             if ~isempty(obj.Parameters.Outlier.Method)
                 for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.ActivityFeatures.(activity_feature_names{af}) = mean(rmoutliers([activity_array.(activity_feature_names{af})],...
+                    obj.UnitFeatures.Features.ActivityFeatures.(activity_feature_names{af}) = mean(rmoutliers([activity_array.(activity_feature_names{af})],...
                         obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor));
                 end
                 for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean(rmoutliers([waveform_array.(waveform_feature_names{wf})],...
+                    obj.UnitFeatures.Features.WaveformFeatures.(waveform_feature_names{wf}) = mean(rmoutliers([waveform_array.(waveform_feature_names{wf})],...
                         obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor));
                 end
             else
                 for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})]);
+                    obj.UnitFeatures.Features.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})]);
                 end
                 for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})]);
+                    obj.UnitFeatures.Features.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})]);
                 end
             end
         end
@@ -346,6 +351,7 @@ classdef MEArecording < handle
             fprintf('Detected %i bursts in %.2f seconds using %0.2f minutes of spike data.\n', ...
                 MaxBurstNumber,run_time,diff(obj.Spikes.Times([1 end]))/60);
         end
+        
     end
     
     methods (Static)
@@ -436,8 +442,8 @@ classdef MEArecording < handle
            TEMP(1) = 0;
            freq_domain = abs(TEMP(1:NFFT/2));
            [mag,freq_idx] = max(freq_domain);
-           obj.NetworkFeatures.RegularityFrequency = F(freq_idx);
-           obj.NetworkFeatures.RegularityMagnitude = mag;
+           obj.NetworkFeatures.Regularity.NetworkRegularityFrequency = F(freq_idx);
+           obj.NetworkFeatures.Regularity.NetworkRegularityMagnitude = mag;
            
            norm_freq_domain = freq_domain/max(freq_domain);
            l = [];
@@ -454,9 +460,9 @@ classdef MEArecording < handle
            log_p = log10(p)-min(log10(p)); % Make data positive to be able to fit
            try
                f = fit(cumsum(l),log_p,'exp1');
-               obj.NetworkFeatures.RegularityFit = f.b;
+               obj.NetworkFeatures.Regularity.NetworkRegularityFit = f.b;
            catch
-               obj.NetworkFeatures.RegularityFit = NaN;
+               obj.NetworkFeatures.Regularity.NetworkRegularityFit = NaN;
            end
        end
        
@@ -515,16 +521,16 @@ classdef MEArecording < handle
                   cellfun_input,'un',0);
           end
           feature_means = cellfun(@mean, cellfun_input,'un',0);
-          [obj.NetworkFeatures.MeanInterBurstInterval,...
-              obj.NetworkFeatures.MeanBurstDuration,...
-              obj.NetworkFeatures.MeanRiseTime,...
-              obj.NetworkFeatures.MeanFallTime,...
-              obj.NetworkFeatures.MeanRiseVelocity,...
-              obj.NetworkFeatures.MeanDecayVelocity] = feature_means{:};
-          obj.NetworkFeatures.VarianceBurstDuration = var(BDs);
-          obj.NetworkFeatures.VarianceInterBurstInterval = var(IBIs);
-          obj.NetworkFeatures.IntraBurstFiringRate = inburst_spikes/obj.RecordingInfo.Duration;
-          obj.NetworkFeatures.InterBurstFiringRate = (length(obj.Spikes.Times) - inburst_spikes)/obj.RecordingInfo.Duration;
+          [obj.NetworkFeatures.Burst.MeanInterBurstInterval,...
+              obj.NetworkFeatures.Burst.MeanBurstDuration,...
+              obj.NetworkFeatures.Burst.MeanRiseTime,...
+              obj.NetworkFeatures.Burst.MeanFallTime,...
+              obj.NetworkFeatures.Burst.MeanRiseVelocity,...
+              obj.NetworkFeatures.Burst.MeanDecayVelocity] = feature_means{:};
+          obj.NetworkFeatures.Burst.VarianceBurstDuration = var(BDs);
+          obj.NetworkFeatures.Burst.VarianceInterBurstInterval = var(IBIs);
+          obj.NetworkFeatures.Burst.IntraBurstFiringRate = inburst_spikes/obj.RecordingInfo.Duration;
+          obj.NetworkFeatures.Burst.InterBurstFiringRate = (length(obj.Spikes.Times) - inburst_spikes)/obj.RecordingInfo.Duration;
        end
        
        function [ccg,t] = calculateCCGs(obj)
@@ -684,6 +690,28 @@ classdef MEArecording < handle
            tmp = cov([dV V_obs]);
            dCov = tmp(1:N,N+1:end);
            obj.Connectivity.DDC = dCov * inv(B);
+       end
+       
+       function feat_table = concatenateFeatures(~,feat_struct, feat_names) %Usable for unit and network features
+           feat_array = squeeze(struct2cell(feat_struct));
+           if ~isequal(feat_names,"all")
+               feat_array = feat_array(contains(fieldnames(feat_struct), feat_names,'IgnoreCase',true),:);
+           end
+           feat_tables = cellfun(@struct2table, feat_array,'un',0);
+           
+           feat_table = arrayfun(@(x) [feat_tables{:,x}],1:size(feat_tables,2),'un',0);
+           feat_table = vertcat(feat_table{:});
+       end
+       
+       function feat_table = getFeatureTable(obj, unit_features, network_features)
+           arguments
+               obj MEArecording
+               unit_features string = "all"
+               network_features string = "all"
+           end
+           unit_table = concatenateFeatures(obj,[obj.UnitFeatures], unit_features);
+           network_table = concatenateFeatures(obj,[obj.NetworkFeatures], network_features);
+           feat_table = [unit_table network_table];
        end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
