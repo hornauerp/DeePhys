@@ -5,6 +5,7 @@ classdef Unit < handle
         ReferenceElectrode
         SpikeTimes
         Features
+        ClusterID
     end
     
     methods

@@ -698,7 +698,9 @@ classdef MEArecording < handle
                feat_array = feat_array(contains(fieldnames(feat_struct), feat_names,'IgnoreCase',true),:);
            end
            feat_tables = cellfun(@struct2table, feat_array,'un',0);
-           
+           if isstruct(feat_tables{1}(1,1).Variables) %For unit features
+               feat_tables = arrayfun(@(x) struct2table(feat_tables{1}(1,x).Variables),1:size(feat_tables{1},2),'un',0)';
+           end
            feat_table = arrayfun(@(x) [feat_tables{:,x}],1:size(feat_tables,2),'un',0);
            feat_table = vertcat(feat_table{:});
        end

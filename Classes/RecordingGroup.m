@@ -2,6 +2,7 @@ classdef RecordingGroup < handle
     properties
         Recordings
         Units
+        Cultures
         Parameters %Inclusion // exclusion criteria
         Clustering
         Classification        
@@ -14,24 +15,26 @@ classdef RecordingGroup < handle
                 parameters struct = struct();
             end
             rg.parseParameters(parameters);
-            rg.Recordings = rg.filterRecordingArray(recording_array);
+            keep_recordings = rg.filterRecordingArray(recording_array);
+            rg.Recordings = recording_array(keep_recordings);
             rg.Units = [rg.Recordings.Units];
+            rg.Cultures = rg.groupCultures();
             fprintf('Initialized RecordingGroup with %i recordings and %i units\n',...
                 length(rg.Recordings),length(rg.Units))
         end
         
-        function parseParameters(obj, parameters)
-            obj.Parameters = obj.returnDefaultParams();
+        function parseParameters(rg, parameters)
+            rg.Parameters = rg.returnDefaultParams();
             parameter_fields = fieldnames(parameters);
             if isempty(parameter_fields)
                 warning("No parameters provided, using default ones")
             else
                 for pf = parameter_fields
-                    if ismember(pf,fieldnames(obj.Parameters))
+                    if ismember(pf,fieldnames(rg.Parameters))
                         subfields = fieldnames(parameters.(pf));
                         for sf = subfields
-                            if ismember(sf,fieldnames(obj.Parameters.(pf)))
-                                obj.Parameters.(pf).(sf) = parameters.(pf).(sf);
+                            if ismember(sf,fieldnames(rg.Parameters.(pf)))
+                                rg.Parameters.(pf).(sf) = parameters.(pf).(sf);
                             else
                                 warning("Unrecognized parameter field: %s.%s",pf,sf)
                             end
@@ -44,39 +47,77 @@ classdef RecordingGroup < handle
             end
         end
         
-        function array = filterRecordingArray(obj, recording_array)
+        function filtered_idx = filterRecordingArray(rg, metadata_array, inclusion, exclusion)
+            arguments
+                rg RecordingGroup
+                metadata_array
+                inclusion = rg.Parameters.Selection.Inclusion;
+                exclusion = rg.Parameters.Selection.Exclusion;
+            end
             % Input as cell arrays
-            inclusion = obj.Parameters.Selection.Inclusion;
             for i = 1:length(inclusion)
                 if isnumeric(inclusion{i}{2})
-                    value_vector = [recording_array.(inclusion{i}{1})];
+                    value_vector = [metadata_array.(inclusion{i}{1})];
                     idx = ismember(value_vector,[inclusion{i}{2:end}]);
                 else
-                    value_vector = {recording_array.(inclusion{i}{1})};
+                    value_vector = {metadata_array.(inclusion{i}{1})};
                     idx = ismember(value_vector,inclusion{i}(2:end));
                 end
-                recording_array = recording_array(idx);
+                if ~exist('inclusion_idx','var')
+                    inclusion_idx = idx;
+                else
+                    inclusion_idx = idx & inclusion_idx;
+                end
+            end
+            if ~exist('inclusion_idx','var')
+               inclusion_idx = ones(1,length(metadata_array)); 
             end
             
-            exclusion = obj.Parameters.Selection.Exclusion;
             for i = 1:length(exclusion)
                 if isnumeric(exclusion{i}{2})
-                    value_vector = [recording_array.(exclusion{i}{1})];
+                    value_vector = [metadata_array.(exclusion{i}{1})];
                     idx = ismember(value_vector,[exclusion{i}{2:end}]);
                 else
-                    value_vector = {recording_array.(exclusion{i}{1})};
+                    value_vector = {metadata_array.(exclusion{i}{1})};
                     idx = ismember(value_vector,exclusion{i}(2:end));
                 end
-                recording_array = recording_array(~idx);
+                if ~exist('exclusion_idx','var')
+                    exclusion_idx = idx;
+                else
+                    exclusion_idx = idx | exclusion_idx;
+                end
             end
-            array = recording_array;
+            if ~exist('exclusion_idx','var')
+               exclusion_idx = zeros(1,length(metadata_array)); 
+            end
+            
+            filtered_idx = inclusion_idx & ~exclusion_idx;
+        end
+        
+        function cultures = groupCultures(rg)
+            cultures = [];
+            metadata = [rg.Recordings.Metadata];
+            chip_ids = unique([metadata.ChipID]);
+            for id = chip_ids
+                inclusion = {{'ChipID',id}};
+                chip_idx = rg.filterRecordingArray(metadata, inclusion);
+                chip_array = rg.Recordings(chip_idx);
+                chip_metadata = [chip_array.Metadata];
+                chip_plating_dates = unique([chip_metadata.PlatingDate]);
+                for pd = chip_plating_dates
+                   inclusion = {{'PlatingDate',pd}};
+                   plating_idx = rg.filterRecordingArray(metadata, inclusion);
+                   culture_array = chip_array(plating_idx);
+                   cultures = [cultures {culture_array}];
+                end
+            end
         end
     end
     
     methods (Static)
        function defaultParams = returnDefaultParams()
            %Input to the filterRecordingArray function
-           defaultParams.Selection.Inclusion = {}; %Cell array of cell arrays with fieldname + value
+           defaultParams.Selection.Inclusion = {}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
            defaultParams.Selection.Exclusion = {}; %Cell array of cell arrays with fieldname + value
        end
     end
@@ -101,33 +142,54 @@ classdef RecordingGroup < handle
                rg RecordingGroup
                level string = "unit" %Unit, recording or culture level
                method string = "umap" %UMAP, PCA
-               normalization string = "PlatingDate" %Has to correspond to MEArecording metadata field
+               normalization string = "PlatingDate" %Has to correspond to a MEArecording metadata field
             end
             
             fprintf('Performing %s dimensionality reduction on %ss and normalizing by %s\n', method, level, normalization)
             
             switch level
-                case "unit"
+                case {"unit","Unit","u","U"}
                     unit_array = [rg.Units];
                     ref_wf = [unit_array.ReferenceWaveform];
                     unit_feature_array = [unit_array.Features];
-                    input_mat = rg.Recordings.concatenateFeatures(unit_feature_array,["Activity"]);
-                    norm_mat = normalize(input_mat.Variables,1);
-                    input_mat = double([ref_wf' norm_mat]);
-                case "recording"
+                    if isempty(unit_feature_array)
+                        fprintf('No unit features found. Continuing using only the reference waveform. \n')
+                        input_mat = double(ref_wf');
+                    else
+                        input_mat = rg.Recordings.concatenateFeatures(unit_feature_array,"Activity");
+                        norm_mat = normalize(input_mat.Variables,1);
+                        input_mat = double([ref_wf' norm_mat]);
+                    end
                     
-                case "culture" %Create function to group recordings of same culture
+                case {"recording","Recording","r","R"}
+                    
+                case {"culture","Culture","c","C"} %Create function to group recordings of same culture
                     
             end
+            
             switch method
-                case "umap"
-                    [reduction, umap, clusterIdentifiers, extras]=run_umap(input_mat,'n_components',2,'n_neighbors',100,'min_dist',0.1,'cluster_detail','adaptive','spread',1,'sgd_tasks',20,...
-                        'verbose','none','color_file','C:\Users\Philipp\Downloads\umapAndEppFileExchange (4.1)\colorsByName.properties');
-                    cluster_idx = kmeans(reduction,2);
-                case "pca"
+                case {"umap","UMAP","Umap"}
+                    color_file = fullfile(rg.Recordings(1).getParentPath(),'umap','colorsByName.properties');
+                    [reduction, umap, clusterIdentifiers, extras] = run_umap(input_mat,'n_components',2,'n_neighbors',100,'min_dist',0.1,'cluster_detail','adaptive','spread',1,'sgd_tasks',20,...
+                        'verbose','none','color_file',color_file);
+                    cluster_idx = clusterIdentifiers;%kmeans(reduction,2);
+                case {"pca","PCA","Pca"}
                     [coeff,reduction,latent] = pca(input_mat);
                     cluster_idx = kmeans(reduction,2);
             end
+            
+            cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
+            
+            switch level
+                case {"unit","Unit","u","U"}
+                    [rg.Units] = deal(cluster_idx{:});
+                case {"recording","Recording","r","R"}
+                    [rg.Recordings] = deal(cluster_idx{:});
+                case {"culture","Culture","c","C"} %Create function to group recordings of same culture
+                    
+            end
+            
+            
         end
     end
 end
