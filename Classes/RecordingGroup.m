@@ -177,19 +177,36 @@ classdef RecordingGroup < handle
                     [coeff,reduction,latent] = pca(input_mat);
                     cluster_idx = kmeans(reduction,2);
             end
-            
+            rg.plot_cluster_scatter(reduction,cluster_idx);
             cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
             
             switch level
                 case {"unit","Unit","u","U"}
-                    [rg.Units] = deal(cluster_idx{:});
+                    [rg.Units.ClusterID] = deal(cluster_idx{:});
                 case {"recording","Recording","r","R"}
-                    [rg.Recordings] = deal(cluster_idx{:});
+                    [rg.Recordings.ClusterID] = deal(cluster_idx{:});
                 case {"culture","Culture","c","C"} %Create function to group recordings of same culture
                     
             end
             
             
+        end
+        
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % Plots
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        function plot_cluster_scatter(rg,reduction,cluster_idx)
+            figure('Color','w');
+            if size(reduction,2) == 2
+                scatter(reduction(:,1),reduction(:,2),5,cluster_idx,'filled')
+            else
+                scatter3(reduction(:,1),reduction(:,2),reduction(:,3),5,cluster_idx,'filled')
+            end
+            N_clust = double(max(cluster_idx));
+            c_map = othercolor('Set19',N_clust);
+            colormap(c_map)
+            cb = colorbar; cb.Title.String = "Cluster Index";
+            cb.Ticks = linspace(cb.Limits(1) + (N_clust-1)/(2*N_clust), cb.Limits(2) - (N_clust-1)/(2*N_clust), N_clust); cb.TickLabels = 1:N_clust;
         end
     end
 end

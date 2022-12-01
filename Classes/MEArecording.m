@@ -10,6 +10,7 @@ classdef MEArecording < handle
         UnitFeatures
         Connectivity
         GraphFeatures
+        ClusterID
     end
     
     methods (Hidden)
