@@ -66,7 +66,7 @@ classdef MEArecording < handle
             spike_times = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_times.npy"))) / obj.RecordingInfo.SamplingRate;
             spike_units = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_templates.npy")))+1;
             
-            % Find units ids that do not have any spikes
+            % Find unit ids that do not have any spikes
             max_ids = 1:max(spike_units);
             hasSpikes = ismember(max_ids,spike_units);
         end
@@ -254,26 +254,26 @@ classdef MEArecording < handle
         end
         
         function aggregateSingleCellFeatures(obj)
-            feature_array = [obj.Units.Features];
+            feature_array = [obj.Units.AverageFeatures];
             activity_array = [feature_array.ActivityFeatures];
             waveform_array = [feature_array.WaveformFeatures];
-            activity_feature_names = fieldnames(obj.Units(1).Features.ActivityFeatures);
-            waveform_feature_names = fieldnames(obj.Units(1).Features.WaveformFeatures);
+            activity_feature_names = fieldnames(obj.Units(1).AverageFeatures.ActivityFeatures);
+            waveform_feature_names = fieldnames(obj.Units(1).AverageFeatures.WaveformFeatures);
             if ~isempty(obj.Parameters.Outlier.Method)
                 for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.Features.ActivityFeatures.(activity_feature_names{af}) = mean(rmoutliers([activity_array.(activity_feature_names{af})],...
+                    obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean(rmoutliers([activity_array.(activity_feature_names{af})],...
                         obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor));
                 end
                 for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.Features.WaveformFeatures.(waveform_feature_names{wf}) = mean(rmoutliers([waveform_array.(waveform_feature_names{wf})],...
+                    obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean(rmoutliers([waveform_array.(waveform_feature_names{wf})],...
                         obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor));
                 end
             else
                 for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.Features.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})]);
+                    obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})]);
                 end
                 for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.Features.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})]);
+                    obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})]);
                 end
             end
         end

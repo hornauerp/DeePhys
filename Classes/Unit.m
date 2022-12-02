@@ -5,6 +5,10 @@ classdef Unit < handle
         ReferenceElectrode
         SpikeTimes
         Features
+        
+    end
+
+    properties(SetObservable = true)
         ClusterID
     end
     

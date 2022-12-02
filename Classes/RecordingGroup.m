@@ -185,7 +185,7 @@ classdef RecordingGroup < handle
                     [rg.Units.ClusterID] = deal(cluster_idx{:});
                 case {"recording","Recording","r","R"}
                     [rg.Recordings.ClusterID] = deal(cluster_idx{:});
-                case {"culture","Culture","c","C"} %Create function to group recordings of same culture
+                case {"culture","Culture","c","C"} 
                     
             end
             
