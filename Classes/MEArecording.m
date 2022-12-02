@@ -43,7 +43,7 @@ classdef MEArecording < handle
         function parseRecordingInfo(obj)
             obj.RecordingInfo.ElectrodeCoordinates = obj.getElectrodeCoordinates();
             obj.RecordingInfo.SamplingRate = obj.getSamplingRate();
-            [obj.Spikes.Times, obj.Spikes.Units] = obj.getSpikeTimes();
+            [obj.Spikes.Times, obj.Spikes.Units, obj.Spikes.hasSpikes] = obj.getSpikeTimes();
             obj.RecordingInfo.Duration = obj.getRecordingDuration();
             disp("Loaded recording information")
         end
@@ -62,13 +62,18 @@ classdef MEArecording < handle
             sampling_rate = str2double(sr{2});
         end
         
-        function [spike_times, spike_units] = getSpikeTimes(obj)
+        function [spike_times, spike_units, hasSpikes] = getSpikeTimes(obj)
             spike_times = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_times.npy"))) / obj.RecordingInfo.SamplingRate;
             spike_units = double(readNPY(fullfile(obj.Metadata.InputPath, "spike_templates.npy")))+1;
+            
+            % Find units ids that do not have any spikes
+            max_ids = 1:max(spike_units);
+            hasSpikes = ismember(max_ids,spike_units);
         end
         
         function template_matrix = getTemplateMatrix(obj)
             template_matrix = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
+            template_matrix = template_matrix(obj.Spikes.hasSpikes,:,:);
         end
         
         function duration = getRecordingDuration(obj)
@@ -134,7 +139,8 @@ classdef MEArecording < handle
         
         function [firing_rates, unit_spike_times] = calculateFiringRates(obj)
             [spike_times, spike_units] = obj.getSpikeTimes();
-            unit_spike_times = splitapply(@(x) {x}, spike_times, spike_units);
+            G = findgroups(spike_units); % To prevent error from unit_ids without corresponding spikes
+            unit_spike_times = splitapply(@(x) {x}, spike_times, G);
             firing_rates = cellfun(@length, unit_spike_times)/obj.RecordingInfo.Duration;
         end
         
@@ -414,8 +420,9 @@ classdef MEArecording < handle
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
        function unit_array = generateUnits(obj)
-           [max_amplitudes, reference_electrode, norm_wf_matrix] = obj.generateWaveformMatrix();
            [firing_rates, unit_spike_times] = obj.calculateFiringRates();
+           [max_amplitudes, reference_electrode, norm_wf_matrix] = obj.generateWaveformMatrix();
+           
            good_units = performUnitQC(obj, max_amplitudes, firing_rates, unit_spike_times, norm_wf_matrix);
            if sum(good_units) > 0
                good_amplitudes = max_amplitudes(good_units);
