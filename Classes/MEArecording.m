@@ -16,7 +16,7 @@ classdef MEArecording < handle
     methods (Hidden)
         function mearec = MEArecording(metadata, parameters)
             arguments
-                metadata (1,1) struct %Metadata to be parsed // InputPath is required
+                metadata (1,1) struct = struct()%Metadata to be parsed // InputPath is required
                 parameters (1,1) struct = struct()
             end
             
@@ -37,6 +37,10 @@ classdef MEArecording < handle
             else
                 obj.Metadata = metadata;
                 disp("Imported metadata")
+            end
+            
+            if isfield(metadata,"RecordingDate") && ~isempty(metadata.RecordingDate) && isfield(metadata,"PlatingDate") && ~isempty(metadata.PlatingDate)
+               obj.Metadata.DIV = day(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(obj.Metadata.PlatingDate,"InputFormat","yyMMdd"));
             end
         end
         
@@ -86,14 +90,14 @@ classdef MEArecording < handle
             if isempty(parameter_fields)
                 warning("No parameters provided, using default ones")
             else
-                for pf = parameter_fields
-                    if ismember(pf,fieldnames(obj.Parameters))
-                        subfields = fieldnames(parameters.(pf));
-                        for sf = subfields
-                            if ismember(sf,fieldnames(obj.Parameters.(pf)))
-                                obj.Parameters.(pf).(sf) = parameters.(pf).(sf);
+                for pf = 1:length(parameter_fields)
+                    if ismember(parameter_fields(pf),fieldnames(obj.Parameters))
+                        subfields = fieldnames(parameters.(parameter_fields{pf}));
+                        for sf = 1:length(subfields)
+                            if ismember(subfields{sf},fieldnames(obj.Parameters.(parameter_fields{pf})))
+                                obj.Parameters.(parameter_fields{pf}).(subfields{sf}) = parameters.(parameter_fields{pf}).(subfields{sf});
                             else
-                                warning("Unrecognized parameter field: %s.%s",pf,sf)
+                                warning("Unrecognized parameter field: %s.%s",parameter_fields{pf},subfields{sf})
                             end
                         end
                     else
@@ -239,7 +243,7 @@ classdef MEArecording < handle
                 decay_cutout = interp_wf_matrix(peak_2_idx(u):end,u);
                 decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout)));
                 padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
-                unit_features.Decay = slewrate(padded_decay,10);
+                unit_features.Decay = mean(slewrate(padded_decay,10));
                 unit_features.Asymmetry = asymmetry(u);
                 unit_features.T2Pdelay = t2pdelay(u);
                 unit_features.T2Pratio = t2pratio(u);
@@ -262,18 +266,18 @@ classdef MEArecording < handle
             if ~isempty(obj.Parameters.Outlier.Method)
                 for af = 1:length(activity_feature_names)
                     obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean(rmoutliers([activity_array.(activity_feature_names{af})],...
-                        obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor));
+                        obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
                 end
                 for wf = 1:length(waveform_feature_names)
                     obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean(rmoutliers([waveform_array.(waveform_feature_names{wf})],...
-                        obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor));
+                        obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
                 end
             else
                 for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})]);
+                    obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})],"omitnan");
                 end
                 for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})]);
+                    obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})],"omitnan");
                 end
             end
         end
@@ -514,8 +518,9 @@ classdef MEArecording < handle
               norm_activity = binned_activity/max_binned;
               pre_lower_level = min(norm_activity(1:imax_binned));
               post_lower_level = min(norm_activity(imax_binned:end));
-              RiseTime(iburst) = risetime([ones(1,Fs)*pre_lower_level norm_activity(1:imax_binned) ones(1,Fs)],Fs);
-              FallTime(iburst) = falltime([ones(1,Fs) norm_activity(imax_binned:end) ones(1,Fs)*post_lower_level],Fs);
+              % Using mean to account for the rare case where rise/fall is split
+              RiseTime(iburst) = mean(risetime([ones(1,Fs)*pre_lower_level norm_activity(1:imax_binned) ones(1,Fs)],Fs)); 
+              FallTime(iburst) = mean(falltime([ones(1,Fs) norm_activity(imax_binned:end) ones(1,Fs)*post_lower_level],Fs));
               RiseRate(iburst) = 0.8/RiseTime(iburst);
               FallRate(iburst) = 0.8/FallTime(iburst);
               inburst_spikes = inburst_spikes + length(burst_activity);
@@ -700,7 +705,12 @@ classdef MEArecording < handle
            obj.Connectivity.DDC = dCov * inv(B);
        end
        
-       function feat_table = concatenateFeatures(~,feat_struct, feat_names) %Usable for unit and network features
+       function feat_table = concatenateFeatures(obj,feat_struct, feat_names) %Usable for unit and network features
+           arguments
+              obj MEArecording
+              feat_struct struct
+              feat_names string = "all"
+           end
            feat_array = squeeze(struct2cell(feat_struct));
            if ~isequal(feat_names,"all")
                feat_array = feat_array(contains(fieldnames(feat_struct), feat_names,'IgnoreCase',true),:);

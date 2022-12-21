@@ -4,7 +4,7 @@ classdef Unit < handle
         ReferenceWaveform
         ReferenceElectrode
         SpikeTimes
-        Features
+        AverageFeatures
         
     end
 
@@ -19,7 +19,7 @@ classdef Unit < handle
                 unit.ReferenceWaveform = waveform;
                 unit.ReferenceElectrode = reference_electrode;
                 unit.SpikeTimes = spike_times;
-                unit.Features.WaveformFeatures = waveform_features;
+                unit.AverageFeatures.WaveformFeatures = waveform_features;
                 unit.inferActivityFeatures();
             end
         end
@@ -27,11 +27,11 @@ classdef Unit < handle
         function inferActivityFeatures(unit)
             for u = unit
                 isi = diff(u.SpikeTimes);
-                u.Features.ActivityFeatures.MeanInterSpikeInterval = mean(isi);
-                u.Features.ActivityFeatures.VarianceInterSpikeInterval = std(isi);
-                u.Features.ActivityFeatures.CVInterSpikeInterval = std(isi)/mean(isi);
+                u.AverageFeatures.ActivityFeatures.MeanInterSpikeInterval = mean(isi);
+                u.AverageFeatures.ActivityFeatures.VarianceInterSpikeInterval = std(isi);
+                u.AverageFeatures.ActivityFeatures.CVInterSpikeInterval = std(isi)/mean(isi);
                 pacf = parcorr(isi,1);
-                u.Features.ActivityFeatures.PartialAutocorrelation = pacf(2);
+                u.AverageFeatures.ActivityFeatures.PartialAutocorrelation = pacf(2);
                 u.getRegularity();
             end
         end
@@ -45,8 +45,8 @@ classdef Unit < handle
            TEMP(1) = 0;
            freq_domain = abs(TEMP(1:NFFT/2));
            [mag,freq_idx] = max(freq_domain);
-           unit.Features.ActivityFeatures.RegularityFrequency = F(freq_idx);
-           unit.Features.ActivityFeatures.RegularityMagnitude = mag;
+           unit.AverageFeatures.ActivityFeatures.RegularityFrequency = F(freq_idx);
+           unit.AverageFeatures.ActivityFeatures.RegularityMagnitude = mag;
            
            norm_freq_domain = freq_domain/max(freq_domain);
            l = [];
@@ -63,9 +63,9 @@ classdef Unit < handle
            log_p = log10(p)-min(log10(p)); % Make data positive to be able to fit
            try
                f = fit(cumsum(l),log_p,'exp1');
-               unit.Features.ActivityFeatures.RegularityFit = f.b;
+               unit.AverageFeatures.ActivityFeatures.RegularityFit = f.b;
            catch
-               unit.Features.ActivityFeatures.RegularityFit = NaN;
+               unit.AverageFeatures.ActivityFeatures.RegularityFit = NaN;
            end
        end
        
