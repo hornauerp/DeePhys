@@ -1,9 +1,11 @@
 classdef RecordingGroup < handle
+    
     properties
         Recordings
         Units
         Cultures
         Parameters %Inclusion // exclusion criteria
+        DimensionalityReduction
         Clustering
         Classification        
     end
@@ -14,8 +16,9 @@ classdef RecordingGroup < handle
                 recording_array MEArecording
                 parameters struct = struct();
             end
+            
             rg.parseParameters(parameters);
-            keep_recordings = rg.filterRecordingArray(recording_array);
+            keep_recordings = rg.filterRecordingArray([recording_array.Metadata]);
             rg.Recordings = recording_array(keep_recordings);
             rg.Units = [rg.Recordings.Units];
             if isfield([rg.Recordings.Metadata],'ChipID')
@@ -33,16 +36,16 @@ classdef RecordingGroup < handle
             else
                 for pf = parameter_fields
                     if ismember(pf,fieldnames(rg.Parameters))
-                        subfields = fieldnames(parameters.(pf));
+                        subfields = fieldnames(parameters.(pf{:}));
                         for sf = subfields
-                            if ismember(sf,fieldnames(rg.Parameters.(pf)))
-                                rg.Parameters.(pf).(sf) = parameters.(pf).(sf);
+                            if ismember(sf,fieldnames(rg.Parameters.(pf{:})))
+                                rg.Parameters.(pf{:}).(sf{:}) = parameters.(pf{:}).(sf{:});
                             else
-                                warning("Unrecognized parameter field: %s.%s",pf,sf)
+                                warning("Unrecognized parameter field: %s.%s",pf{:},sf{:})
                             end
                         end
                     else
-                        warning("Unrecognized parameter field: %s",pf)
+                        warning("Unrecognized parameter field: %s",pf{:})
                     end
                 end
                 disp("Imported custom parameters")
@@ -56,6 +59,7 @@ classdef RecordingGroup < handle
                 inclusion = rg.Parameters.Selection.Inclusion;
                 exclusion = rg.Parameters.Selection.Exclusion;
             end
+            
             % Input as cell arrays
             for i = 1:length(inclusion)
                 if isnumeric(inclusion{i}{2}) || isstring((inclusion{i}{2}))
@@ -120,7 +124,7 @@ classdef RecordingGroup < handle
                     warning('No plating date provided, cannot differentiate batches')
                     return
                 end
-                chip_plating_dates = unique({chip_metadata.PlatingDate});
+                chip_plating_dates = unique([chip_metadata.PlatingDate]);
                 for pd = chip_plating_dates
                    inclusion = {{'PlatingDate',pd}};
                    plating_idx = rg.filterRecordingArray(chip_metadata, inclusion);
@@ -218,13 +222,17 @@ classdef RecordingGroup < handle
                 case 'Unit'
                     recordings = [object_group.MEArecording];
                     metadata = [recordings.Metadata];
+                    metadata = [metadata.(grouping_var)];
+                    
                 case 'MEArecording'
                     metadata = [object_group.Metadata];
-                case 'RecordingGroup'
+                    metadata = [metadata.(grouping_var)];
+                    
+                case 'cell'
                     metadata = cellfun(@(x) string(x(1).Metadata.(grouping_var)),object_group);
             end
             
-            metadata = [metadata.(grouping_var)];
+            
             [iG,G] = findgroups(metadata);
             for g = unique(iG)
                 iBatch_train = (iG == g) & train_idx;
@@ -260,7 +268,7 @@ classdef RecordingGroup < handle
                grouping_var string = "PlatingDate" %Has to correspond to a MEArecording metadata field
                unit_features string = "all"
                network_features string = "all"
-               age {isnumeric} = [7,14,21,28] %Only relevant for clustering on the culture level
+               age {isnumeric} = [7,14,21,28] %Only relevant for DimensionalityReduction on the culture level
                tolerance {isnumeric} = 1 %Gives tolerance for culture selection by age (e.g. age=7 tolerance=1 allows DIVs 6-8)
             end
             
@@ -276,8 +284,10 @@ classdef RecordingGroup < handle
                         fprintf('No unit features found. Continuing using only the reference waveform. \n')
                         input_mat = double(ref_wf');
                     else
+                        %                         feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"Activity");
+                        %                         input_mat = double([ref_wf' feature_table.Variables]);
                         feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"Activity");
-                        input_mat = double([ref_wf' feature_table.Variables]);
+                        input_mat = feature_table.Variables;
                     end
                     
                 case "Recording"
@@ -299,23 +309,21 @@ classdef RecordingGroup < handle
                     color_file = fullfile(rg.Recordings(1).getParentPath(),'umap','colorsByName.properties');
                     [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data,'n_components',n_dims,'n_neighbors',100,'min_dist',0.1,'cluster_detail','adaptive','spread',1,'sgd_tasks',20,...
                         'verbose','none','color_file',color_file);
-                    rg.Clustering.(level).Reduction.(method) = reduction;
                     
                 case "PCA"
                     [coeff,reduction,latent] = pca(norm_data);
                     reduction = reduction(:,1:n_dims);
                     
             end
-            rg.plot_cluster_scatter(reduction);
+            
+            rg.DimensionalityReduction.(level).(method).Reduction = reduction;
+            rg.DimensionalityReduction.(level).(method).GroupingVariable = grouping_var;
+            rg.DimensionalityReduction.(level).(method).UnitFeatures = unit_features;
+            rg.DimensionalityReduction.(level).(method).NetworkFeatures = network_features;
+            rg.DimensionalityReduction.(level).ObjectGroup = object_group;
+            rg.plot_dimensionality_reduction(reduction);
             %             cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
             %             [rg.Units.ClusterID] = deal(cluster_idx{:});
-            
-            rg.Clustering.(level).(method).Reduction = reduction;
-            rg.Clustering.(level).(method).GroupingVariable = grouping_var;
-            rg.Clustering.(level).(method).UnitFeatures = unit_features;
-            rg.Clustering.(level).(method).NetworkFeatures = network_features;
-            rg.Clustering.(level).ObjectGroup = object_group;
-            
         end
         
         function [iMetadata, metadata_groups] = returnMetadataArray(rg, metadata_object, metadata_name)
@@ -337,6 +345,12 @@ classdef RecordingGroup < handle
                       metadata_object = cellfun(@(x) x(1),rg.Cultures);
                       
               end
+              
+           elseif iscell(metadata_object)
+               metadata_object = cellfun(@(x) x(1),metadata_object);
+               
+           elseif class(metadata_object) == "Unit"
+               metadata_object = [rg.Units.MEArecording];
            end
            
            metadata_struct = [metadata_object.Metadata];
@@ -345,14 +359,225 @@ classdef RecordingGroup < handle
            [iMetadata, metadata_groups] = findgroups(metadata);
         end
         
+        function [cluster_idx, group_labels_comb] = combineMetadataIndices(rg, metadata_object, metadata_names)
+            arguments
+                rg RecordingGroup
+                metadata_object %Can be a string referring to the respective group (Unit,Recording,Culture) within the RecordingGroup, or a Unit,Recording or Culture array
+                metadata_names string
+            end
+            
+            idx_array = cell(1,length(metadata_names));
+            group_array = cell(1,length(metadata_names));
+            for m = 1:length(metadata_names)
+                [idx_array{m}, group_array{m}] = returnMetadataArray(rg, metadata_object, metadata_names(m));
+            end
+            group_vals = cellfun(@unique, idx_array, "un",0);
+            group_combs = combvec(group_vals{:});
+            group_idx = vertcat(idx_array{:});
+            [~,cluster_idx] = ismember(group_idx', group_combs','rows');
+            group_labels = arrayfun(@(x) group_array{x}(group_combs(x,:))',1:length(group_array),"un",0);
+            group_labels_comb = join([group_labels{:}]);
+            
+        end
+        
+        function cluster_idx = clusterByFeatures(rg, input_type, level, method, N_clust, grouping_var)
+           arguments
+                rg RecordingGroup
+                input_type string = "UMAP" %"RAW","UMAP","PCA"
+                level string = "Unit" %Unit, Recording, Culture
+                method string = "kmeans" %kmeans, hierarchical, spectral, gmm
+                N_clust {isnumeric} = 0 %Number of imposed clusters // 0 selects N_clust by finding the optimal silhouette score
+                grouping_var string = "PlatingDate" % only for input_type "RAW"
+           end
+           
+           if strcmp(input_type, "RAW")
+               object_group = [rg.Units];
+               unit_feature_array = [object_group.AverageFeatures];
+               feature_table = rg.Recordings.concatenateFeatures(unit_feature_array, "all");
+               input_mat = feature_table.Variables;
+               input_mat(isnan(input_mat)) = 0;%Handle rare case where NaN appears
+               norm_data = normalizeByGroup(rg, input_mat, object_group, grouping_var); %Normalize
+               feat_mat = norm_data./max(abs(norm_data)); %Scale data
+           elseif contains(input_type, ["PCA","UMAP"])
+               feat_mat = rg.DimensionalityReduction.(level).(input_type).Reduction;
+           else
+              error("Unknown input type") 
+           end
+           
+           switch method
+               case "kmeans"
+                   cluster_fun = @(x,k) kmeans(x,k); 
+                   
+               case "hierarchical"
+                   cluster_fun = @(x,k) clusterdata(x,k); 
+                   
+               case "dbscan"
+                   
+               case "spectral"
+                   cluster_fun = @(x,k) spectralcluster(x,k);
+                   
+               case "gmm"
+                   assert(size(feat_mat,1)>size(feat_mat,2),"GMM needs more samples than variables")
+                   cluster_fun = @(x,k) cluster(fitgmdist(x,k),x);
+                   
+           end
+           if N_clust == 0
+               evaluation = evalclusters(feat_mat,cluster_fun,'silhouette',"KList",1:6);
+               N_clust = evaluation.OptimalK;
+               cluster_idx = cluster_fun(feat_mat,N_clust);
+           else
+               cluster_idx = cluster_fun(feat_mat,N_clust);
+           end
+           rg.Clustering.(level).(method).Index = cluster_idx;
+           rg.Clustering.(level).(method).k = N_clust;
+           rg.Clustering.(level).(method).Input = input_type;
+           
+           figure('Color','w');
+           plot_cluster_outlines(rg,feat_mat, cluster_idx)
+           title(sprintf('%s clustering on %ss',method, level))
+        end
+        
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Plots
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
-        function plot_cluster_scatter(rg,reduction,cluster_idx)
+        function plot_true_clusters(rg, level, method, grouping_var)
             arguments
                 rg RecordingGroup
-                reduction {isnumeric} = rg.Clustering.reduction
+                level string = "Unit" %Unit, Recording, Culture
+                method string = "UMAP" %dim reduction method: "UMAP","PCA"
+                grouping_var string = "CellLine"
+            end
+            reduction = rg.DimensionalityReduction.(level).(method).Reduction;
+            metadata_object = rg.DimensionalityReduction.(level).ObjectGroup;
+            [cluster_idx, group_labels_comb] = combineMetadataIndices(rg, metadata_object, grouping_var);
+            plot_cluster_outlines(rg,reduction, cluster_idx)
+            if length(group_labels_comb) == 1
+                group_labels_comb = strsplit(group_labels_comb, ' ');
+            end
+            legend(group_labels_comb,"Location","best","Box","off")
+        end
+        
+        function plot_cluster_outlines(rg,reduction, cluster_idx, nodeSz, mapSz, sigma, cmap)
+           arguments
+               rg RecordingGroup
+               reduction {isnumeric}
+               cluster_idx (1,:) {isnumeric}
+               nodeSz (1,1) {isnumeric} = 10
+               mapSz {isnumeric} = 300
+               sigma (1,1) {isnumeric} = mapSz/60
+               cmap (:,3) {isnumeric} = othercolor('Set19',length(unique(cluster_idx)));
+           end
+           
+           buffer_ratio = 0.5; 
+           reduction = reduction - min(min(reduction)) * (1 + buffer_ratio);
+           
+           xrng = ...                      % range of x coordinates (with buffer)
+               [min(reduction(:,1)) - buffer_ratio*range(reduction(:,1)),max(reduction(:,1)) + buffer_ratio*range(reduction(:,1))];
+           yrng = ...                      % range of y coordinates (with buffer)
+               [min(reduction(:,2)) - buffer_ratio*range(reduction(:,2)),max(reduction(:,2)) + buffer_ratio*range(reduction(:,2))];
+           
+           grid = zeros(mapSz,mapSz,max(cluster_idx));
+           for i = 1:max(cluster_idx)                  % loop over all categories
+               gridtemp = zeros(mapSz);        % temporary grid
+               idx = cluster_idx == i;                 % get current category
+               coori = reduction(idx,:);            % coordinates
+               x = interp1(xrng,[1,mapSz],coori(:,1)); % map x coordinates to cells
+               y = interp1(yrng,[1,mapSz],coori(:,2)); % same for y
+               rx = round(x);                  % round to whole #
+               ry = round(y);                  % ditto
+               pts = (rx - 1)*mapSz + ry;
+               gridtemp(pts) = 1;
+               grid(:,:,i) = gridtemp;
+           end
+           reduction(:,1) = interp1(xrng,[1,mapSz],reduction(:,1));
+           reduction(:,2) = interp1(yrng,[1,mapSz],reduction(:,2));
+           
+           sz = ceil(sqrt(mapSz));
+           x = linspace(-sz,sz);
+           y = linspace(-sz,sz);
+           [mx,my] = meshgrid(x,y);
+           kernel = exp(-(mx.^2 + my.^2)./(2*sigma.^2));
+           kernel = kernel/sum(kernel(:));
+           
+           tot = zeros(mapSz,mapSz,3);
+           colall = zeros(mapSz,mapSz,3,max(cluster_idx));
+           for i = 1:max(cluster_idx)
+               gridsmooth = conv2(grid(:,:,i),kernel,'same');
+               prob = gridsmooth/max(gridsmooth(:));
+               tot(:,:,i) = prob;
+               
+               P = bsxfun(@minus,ones(mapSz,mapSz,3),prob);
+               C = ones(mapSz,mapSz,3);
+               for k = 1:3
+                   C(:,:,k) = cmap(i,k)*prob;
+               end
+               col = P + C;
+               colall(:,:,:,i) = col;
+           end
+           
+           [~,idx] = max(tot,[],3);
+           cc = ones(mapSz,mapSz,3);
+           for i = 1:max(cluster_idx)
+               mask = idx == i;
+               [u,v] = find(mask);
+               for j = 1:length(u)
+                   cc(u(j),v(j),:) = colall(u(j),v(j),:,i);
+               end
+           end
+           
+           for i = 1:3
+               cc(:,:,i) = conv2(cc(:,:,i),kernel,'same');
+           end
+%            prct = round(mapSz*0.1);
+%            cc(1:prct,:,:) = 1;
+%            cc(:,1:prct,:) = 1;
+%            cc(:,(end - prct + 1):end,:) = 1;
+%            cc((end - prct + 1):end,:,:) = 1;
+           ax = axes;
+           hold(ax,'on');
+           imagesc(cc)
+           for i = 1:max(cluster_idx)
+               idx = cluster_idx == i;
+               coori = reduction(idx,:);scatter(coori(:,1),coori(:,2),nodeSz,repmat(cmap(i,:),sum(idx),1),'o','filled', 'MarkerEdgeColor','k');
+           end
+           xlim([mapSz*0.1 mapSz*0.9])
+           ylim([mapSz*0.1 mapSz*0.9])
+           axis off
+%            axis image square;
+        end
+        
+        function plot_single_cluster(rg, reduction, cluster_idx)
+            arguments
+                rg RecordingGroup
+                reduction {isnumeric}
+                cluster_idx (1,:) {isnumeric} = ones(1,size(reduction,1))
+            end
+            
+            if length(cluster_idx)>100
+                sz = 5;
+            else
+                sz = 20;
+            end
+            
+            N_clust = length(unique(cluster_idx));
+            
+            nexttile
+            if size(reduction,2) == 2
+                scatter(reduction(:,1),reduction(:,2),sz,cluster_idx,'filled')
+            else
+                scatter3(reduction(:,1),reduction(:,2),reduction(:,3),sz,cluster_idx,'filled')
+            end
+            
+            c_map = othercolor('Set19',N_clust);
+            colormap(c_map)
+            
+        end
+        
+        function plot_dimensionality_reduction(rg,reduction,cluster_idx)
+            arguments
+                rg RecordingGroup
+                reduction {isnumeric}
                 cluster_idx (1,:) {isnumeric} = ones(1,size(reduction,1))
             end
             
@@ -390,6 +615,23 @@ classdef RecordingGroup < handle
                         scatter3(reduction(cluster_idx==i,1),reduction(cluster_idx==i,2),reduction(cluster_idx==i,3),sz,'filled')
                     end
                 end
+            end
+        end
+        
+        function plot_cluster_waveforms(rg,method)
+            object_group = [rg.Units];
+            ref_wf = [object_group.ReferenceWaveform];
+            ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
+            
+            cluster_idx = [rg.Clustering.Unit.(method).Index];
+            N_clust = length(unique(cluster_idx));
+            figure("Color","w");
+            for c = 1:N_clust
+                cluster_wfs = ref_wf(:,cluster_idx == c);
+                avg_wf = mean(cluster_wfs,2);
+%                 p = plot(cluster_wfs,"k","LineWidth",0.1,'Color',[0 0 0 0.1]); %arrayfun(@(x) set(p(x),'Color',[0 0 0 0.9]),1:length(p));
+                hold on
+                plot(avg_wf,"LineWidth",2)
             end
         end
     end

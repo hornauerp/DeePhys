@@ -16,7 +16,7 @@ classdef MEArecording < handle
     methods (Hidden)
         function mearec = MEArecording(metadata, parameters)
             arguments
-                metadata (1,1) struct = struct()%Metadata to be parsed // InputPath is required
+                metadata (1,1) struct = struct()%Metadata to be parsed // metadata.InputPath is required
                 parameters (1,1) struct = struct()
             end
             
