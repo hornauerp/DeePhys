@@ -284,10 +284,11 @@ classdef RecordingGroup < handle
                         fprintf('No unit features found. Continuing using only the reference waveform. \n')
                         input_mat = double(ref_wf');
                     else
-                        %                         feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"Activity");
-                        %                         input_mat = double([ref_wf' feature_table.Variables]);
                         feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"Activity");
-                        input_mat = feature_table.Variables;
+                        aligned_wf = rg.alignWaveforms();
+                        input_mat = double([aligned_wf' feature_table.Variables]);
+%                         feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"all");
+%                         input_mat = feature_table.Variables;
                     end
                     
                 case "Recording"
@@ -302,6 +303,7 @@ classdef RecordingGroup < handle
             
             input_mat(isnan(input_mat)) = 0;%Handle rare case where NaN appears
             norm_data = normalizeByGroup(rg, input_mat, object_group, grouping_var); %Normalize
+            norm_data(:,any(isnan(norm_data))) = [];%Remove peak NaNs
             norm_data = norm_data./max(abs(norm_data)); %Scale data
             
             switch method
@@ -435,6 +437,29 @@ classdef RecordingGroup < handle
            figure('Color','w');
            plot_cluster_outlines(rg,feat_mat, cluster_idx)
            title(sprintf('%s clustering on %ss',method, level))
+        end
+        
+        function aligned_wf = alignWaveforms(rg)
+            object_group = [rg.Units];
+            ref_wf = [object_group.ReferenceWaveform];
+            ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
+            [~,i] = min(ref_wf,[],1);
+            peak_idx = mean(i);
+            max_offset = round(peak_idx/2);
+            x = max_offset:size(ref_wf,1)+max_offset-1;
+            xq = 1:size(ref_wf,1)+2*max_offset;
+            
+            interp_wf = interp1(x,ref_wf,xq,"linear",'extrap');
+            rm_idx = find(abs(peak_idx - i) >= max_offset);
+            aligned_wf = zeros(size(ref_wf));
+            for r = 1:size(interp_wf,2)
+                if ~any(rm_idx == r)
+                    start_idx = i(r) - max_offset;
+                    aligned_wf(:,r) = interp_wf(start_idx:start_idx + size(ref_wf,1) - 1 ,r);
+                else
+                    aligned_wf(:,r) = ref_wf(:,r);
+                end
+            end
         end
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -619,19 +644,35 @@ classdef RecordingGroup < handle
         end
         
         function plot_cluster_waveforms(rg,method)
-            object_group = [rg.Units];
-            ref_wf = [object_group.ReferenceWaveform];
-            ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
+            arguments
+                rg RecordingGroup
+                method string = "kmeans"
+            end
             
             cluster_idx = [rg.Clustering.Unit.(method).Index];
+            aligned_wf = rg.alignWaveforms();
             N_clust = length(unique(cluster_idx));
-            figure("Color","w");
+            avg_wf = cell(1,N_clust);
+            cluster_wfs = cell(1,N_clust);
+            cluster_size = groupcounts(cluster_idx);
+            time_vector = 1:size(aligned_wf,1)/20;
+            
             for c = 1:N_clust
-                cluster_wfs = ref_wf(:,cluster_idx == c);
-                avg_wf = mean(cluster_wfs,2);
-%                 p = plot(cluster_wfs,"k","LineWidth",0.1,'Color',[0 0 0 0.1]); %arrayfun(@(x) set(p(x),'Color',[0 0 0 0.9]),1:length(p));
+                cluster_wfs{c} = aligned_wf(:,cluster_idx == c);
+                avg_wf{c} = median(cluster_wfs{c},2);
+            end
+            
+            figure("Color","w");
+            nexttile
+            plot(time_vector,horzcat(avg_wf{:}),"LineWidth",2)
+            legend(num2str(cluster_size))
+            box off; xlabel("Time [ms]")
+            for c = 1:N_clust
+                nexttile
+                p = plot(time_vector,cluster_wfs{c},"k","LineWidth",0.1,'Color',[0 0 0 0.1]);
                 hold on
-                plot(avg_wf,"LineWidth",2)
+                plot(time_vector,horzcat(avg_wf{c}),"LineWidth",2)
+                box off; xlabel("Time [ms]")
             end
         end
     end

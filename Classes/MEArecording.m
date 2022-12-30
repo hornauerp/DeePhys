@@ -461,12 +461,16 @@ classdef MEArecording < handle
            l = [];
            p = [];
            for i = 1:obj.Parameters.Regularity.N_peaks
-               [pks,locs,~,~] = findpeaks(norm_freq_domain,'NPeaks',1,'SortStr','descend');
-               norm_freq_domain = norm_freq_domain(locs:end);
-               l = [l; locs]; %#ok<AGROW>
-               p = [p; pks]; %#ok<AGROW>
-               if isempty(pks)
+               if length(norm_freq_domain) < 10
                    break
+               else
+                   [pks,locs,~,~] = findpeaks(norm_freq_domain,'NPeaks',1,'SortStr','descend');
+                   norm_freq_domain = norm_freq_domain(locs:end);
+                   l = [l; locs]; %#ok<AGROW>
+                   p = [p; pks]; %#ok<AGROW>
+                   if isempty(pks)
+                       break
+                   end
                end
            end
            log_p = log10(p)-min(log10(p)); % Make data positive to be able to fit
