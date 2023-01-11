@@ -482,17 +482,21 @@ classdef RecordingGroup < handle
         % Plots
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
-        function plot_true_clusters(rg, level, method, grouping_var)
+        function [cluster_idx, group_labels_comb] = plot_true_clusters(rg, level, method, grouping_var, nodeSz, mapSz, sigma)
             arguments
                 rg RecordingGroup
                 level string = "Unit" %Unit, Recording, Culture
                 method string = "UMAP" %dim reduction method: "UMAP","PCA"
                 grouping_var string = "Mutation"
+                nodeSz (1,1) {isnumeric} = 10
+                mapSz {isnumeric} = 300
+                sigma (1,1) {isnumeric} = mapSz/60
+%                 cmap (:,3) {isnumeric} = othercolor('Set19',max(cluster_idx));
             end
             reduction = rg.DimensionalityReduction.(level).(method).Reduction;
             metadata_object = rg.DimensionalityReduction.(level).ObjectGroup;
             [cluster_idx, group_labels_comb] = combineMetadataIndices(rg, metadata_object, grouping_var);
-            plot_cluster_outlines(rg,reduction, cluster_idx)
+            plot_cluster_outlines(rg,reduction, cluster_idx, nodeSz)
             if length(group_labels_comb) == 1
                 group_labels_comb = strsplit(group_labels_comb, ' ');
             end
@@ -507,7 +511,7 @@ classdef RecordingGroup < handle
                nodeSz (1,1) {isnumeric} = 10
                mapSz {isnumeric} = 300
                sigma (1,1) {isnumeric} = mapSz/60
-               cmap (:,3) {isnumeric} = othercolor('Set19',max(cluster_idx));
+               cmap (:,3) {isnumeric} = othercolor('Spectral9',max(cluster_idx));
            end
            
            buffer_ratio = 0.5; 

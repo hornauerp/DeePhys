@@ -5,17 +5,17 @@ sorting_path_list = ["/net/bs-filesvr02/export/group/hierlemann/intermediate_dat
     "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230105/M04163/well005/sorted"];
 
 %% Generate sorting_path_list automatically
-root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/";
-path_logic = fullfile("*","*","w*"); %Each string corresponds to one subdirectory
+root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230106";
+path_logic = fullfile("*","w*"); %Each string corresponds to one subdirectory
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
 
 %% Set parameters values
 emptyRec = MEArecording();
 params = emptyRec.returnDefaultParams();
 params.QC.Amplitude = [];
-params.QC.FiringRate = [0.1 100];
-params.QC.Axon = 0.8;
-params.QC.Noise = 10;
+params.QC.FiringRate = [0.01 100];
+params.QC.Axon = 1;
+params.QC.Noise = 8;
 params.Analyses.Bursts = 0;
 params.Analyses.Connectivity.DDC = 0;
 params.Outlier.Method = []; %No outlier removal
@@ -38,16 +38,16 @@ end
 rec_array = [rec_array{:}];
 
 %% Remove MEArecordings without units 
-empty_idx = arrayfun(@(x) isempty(rec_array(x).Units),1:length(rec_array));
-rec_array(empty_idx) = [];
+N_units = arrayfun(@(x) length(rec_array(x).Units),1:length(rec_array));
+rec_array(N_units<5) = [];
 
 %%
-rg_params.Selection.Inclusion = {{'Source','FCDI'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Inclusion = {{'Source','Taylor'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
 rg_params.Selection.Exclusion = {}; %Cell array of cell arrays with fieldname + value
 rec_group = RecordingGroup(rec_array, rg_params);
 
 %%
-dr_method = "UMAP";
+dr_method = "PCA";
 dr_level = "Unit";
 n_dims = 2; %Number of output dimensions
 grouping_var = []; %Has to correspond to a MEArecording metadata field // leave empty to normalize the whole dataset together
@@ -58,13 +58,17 @@ rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_f
 clust_method = "spectral";
 rec_group.clusterByFeatures(dr_method,dr_level,clust_method);
 %%
-figure("Color","w");
+% figure("Color","w");
 rec_group.plot_cluster_waveforms(clust_method);
 
 %%
-grouping_var = "Treatment";
+grouping_var = ["Mutation"];
 figure("Color","w");
-rec_group.plot_true_clusters(dr_level, dr_method, grouping_var)
+[cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var);
+
+%%
+figure("Color","w");
+rec_group.plot_dimensionality_reduction(rec_group.DimensionalityReduction.Unit.UMAP.Reduction, cluster_idx)
 
 %%
 method = "spectral";
@@ -72,16 +76,16 @@ calc_feat = true;
 assignUnitClusterIdx(rec_group,method,calc_feat);
 
 %%
-dr_method = "PCA";
+dr_method = "UMAP";
 dr_level = "Recording";
 n_dims = 2; %Number of output dimensions
 grouping_var = []; %Has to correspond to a MEArecording metadata field
 unit_features = "all";
-network_features = "all";
-useClustered = true;
+network_features = [];
+useClustered = false;
 rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features, network_features, useClustered);
 
 %%
-grouping_var = "Mutation";
+grouping_var = ["Treatment","Mutation"];
 figure("Color","w");
-rec_group.plot_true_clusters(dr_level, dr_method, grouping_var)
+[cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var,50);

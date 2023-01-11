@@ -302,8 +302,7 @@ classdef MEArecording < handle
         end
         
         function calculateClusterSingleCellFeatures(obj)
-            iClust = unique([obj.Units.ClusterID]);
-            for c = iClust
+            for c = 1:obj.NumUnitClusters
                 unit_array = obj.Units([obj.Units.ClusterID] == c);
                 if isempty(unit_array) %Add empty clusters to have consistent feature matrix sizes
                     fnames = fieldnames(obj.UnitFeatures);
@@ -779,36 +778,39 @@ classdef MEArecording < handle
            obj.Connectivity.DDC = dCov * inv(B);
        end
        
-       function full_table = concatenateClusteredFeatures(obj,cluster_id, feature_group)
+       function merged_table = concatenateClusteredFeatures(obj,cluster_id, feature_group)
            arguments
-              obj MEArecording
-              cluster_id (1,:) {isnumeric} = 0 %Cluster IDs to be concatenated; 0 concatenates all
-              feature_group string = "all" %"ActivityFeatures","WaveformFeatures" or "all"
-          end
-           unit_array = [obj.Units];
-           if ~isempty([unit_array.ClusterID])
-               if cluster_id == 0
-                   cluster_id = 1:obj(1).NumUnitClusters;
-               end
-               
-               feat_array = [obj.ClusteredFeatures];
-               fnames = fieldnames([feat_array{:}]);
-               
-               clust_table = cell(1,max(cluster_id));
-               clust_cell = struct2cell([feat_array{:}]);
-               for i = cluster_id
-                   if feature_group == "all"
-                       feat_idx = 1:length(fnames);
-                   else
-                       feat_idx = find(contains(fnames, feature_group));
+               obj MEArecording
+               cluster_id (1,:) {isnumeric} = 0 %Cluster IDs to be concatenated; 0 concatenates all
+               feature_group string = "all" %"ActivityFeatures","WaveformFeatures" or "all"
+           end
+           for rec = 1:length(obj)
+               unit_array = [obj(rec).Units];
+               if ~isempty([unit_array.ClusterID])
+                   if cluster_id == 0
+                       cluster_id = 1:obj(rec).NumUnitClusters;
                    end
                    
-                   clust_table{i} = [clust_cell{feat_idx,:,i}];
-                   clust_table{i}.Properties.VariableNames = string(clust_table{i}.Properties.VariableNames) + "_" + num2str(i);
+                   feat_array = [obj(rec).ClusteredFeatures];
+                   fnames = fieldnames([feat_array{:}]);
+                   
+                   clust_table = cell(1,max(cluster_id));
+                   clust_cell = struct2cell([feat_array{:}]);
+                   for i = cluster_id
+                       if feature_group == "all"
+                           feat_idx = 1:length(fnames);
+                       else
+                           feat_idx = find(contains(fnames, feature_group));
+                       end
+                       
+                       clust_table{i} = [clust_cell{feat_idx,:,i}];
+                       clust_table{i}.Properties.VariableNames = string(clust_table{i}.Properties.VariableNames) + "_" + num2str(i);
+                   end
+                   full_table = [clust_table{:}];
+               else
+                   error("Unit clustering needs to be performed before using clustered features")
                end
-               full_table = [clust_table{:}];
-           else
-               error("Unit clustering needs to be performed before using clustered features")
+               merged_table(rec,:) = full_table;
            end
        end
        
