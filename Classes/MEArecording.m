@@ -1,4 +1,10 @@
 classdef MEArecording < handle
+    
+    %%%%%%%TODO%%%%%%%
+    % Implement GraphFeatures
+    % Implement clustered UnitFeatures
+    %%%%%%%%%%%%%%%%%%
+    
     properties
         Metadata
         RecordingInfo
@@ -8,15 +14,16 @@ classdef MEArecording < handle
         Units
         NetworkFeatures
         UnitFeatures
+        ClusteredFeatures
         Connectivity
         GraphFeatures
-        ClusterID
+        NumUnitClusters % Number of unit clusters
     end
     
     methods (Hidden)
         function mearec = MEArecording(metadata, parameters)
             arguments
-                metadata (1,1) struct = struct()%Metadata to be parsed // metadata.InputPath is required
+                metadata (1,1) struct = struct() %Metadata to be parsed // metadata.InputPath is required
                 parameters (1,1) struct = struct()
             end
             
@@ -30,10 +37,17 @@ classdef MEArecording < handle
         end
                 
         function parseMetadata(obj, metadata)
+            arguments
+               obj MEArecording
+               metadata struct
+            end
+            
             if isempty(fieldnames(metadata)) %Check if any metadata is provided
                 error("No metadata provided, cannot continue");
             elseif ~isfield(metadata,"InputPath")
                 error("Metadata does not provide InputPath, cannot continue");
+            elseif isfield(metadata,"LookupPath") && isfile(metadata.LookupPath)
+                obj.Metadata = obj.retrieveMetadata(metadata);
             else
                 obj.Metadata = metadata;
                 disp("Imported metadata")
@@ -43,6 +57,7 @@ classdef MEArecording < handle
                obj.Metadata.DIV = day(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(obj.Metadata.PlatingDate,"InputFormat","yyMMdd"));
             end
         end
+        
         
         function parseRecordingInfo(obj)
             obj.RecordingInfo.ElectrodeCoordinates = obj.getElectrodeCoordinates();
@@ -111,7 +126,10 @@ classdef MEArecording < handle
         function performAnalyses(obj)
             if obj.Parameters.Analyses.SingleCell
                 obj.generateUnits();
-                obj.aggregateSingleCellFeatures();
+                if isempty(obj.Units)
+                    return
+                end
+                obj.UnitFeatures = obj.aggregateSingleCellFeatures(obj.Units);
             end
             
             if obj.Parameters.Analyses.Regularity
@@ -186,7 +204,7 @@ classdef MEArecording < handle
         end
         
         function [is_axonal, is_noisy] = checkWaveform(obj, norm_wf_matrix)
-            if ~isnan(obj.Parameters.QC.Axon)
+            if ~isempty(obj.Parameters.QC.Axon) && ~isnan(obj.Parameters.QC.Axon)
                 amplitude_ratio = -(max(norm_wf_matrix)./min(norm_wf_matrix))';
                 %Fit two gaussians and try to find cutoff
                 is_axonal = amplitude_ratio > obj.Parameters.QC.Axon;
@@ -195,13 +213,15 @@ classdef MEArecording < handle
             end
             fprintf('Identified %i units as axonal\n',sum(is_axonal))
             
-            if ~isnan(obj.Parameters.QC.Noise)
+            if ~isempty(obj.Parameters.QC.Noise) && ~isnan(obj.Parameters.QC.Noise)
                 [~,peak_amp_idx] = min(norm_wf_matrix);
-                cutout_idx = peak_amp_idx + obj.Parameters.QC.NoiseCutout(1) * obj.RecordingInfo.SamplingRate/1000:...
-                    peak_amp_idx + obj.Parameters.QC.NoiseCutout(2) * obj.RecordingInfo.SamplingRate/1000;
+                cutout_idx = round(median(peak_amp_idx)) + obj.Parameters.QC.NoiseCutout(1) * obj.RecordingInfo.SamplingRate/1000:...
+                    round(median(peak_amp_idx)) + obj.Parameters.QC.NoiseCutout(2) * obj.RecordingInfo.SamplingRate/1000;
+                bad_peak = peak_amp_idx < cutout_idx(1) | peak_amp_idx > cutout_idx(end);
                 noise_indicator = sum(abs(diff(diff(norm_wf_matrix(cutout_idx,:))>0)))'; %Check for non-monotomies in waveform shapes as noise indicators
                 
                 is_noisy = noise_indicator > obj.Parameters.QC.Noise;
+                is_noisy = is_noisy | bad_peak';
             else
                 is_noisy = zeros(size(norm_wf_matrix,2),1);
             end
@@ -257,27 +277,43 @@ classdef MEArecording < handle
             end
         end
         
-        function aggregateSingleCellFeatures(obj)
-            feature_array = [obj.Units.AverageFeatures];
-            activity_array = [feature_array.ActivityFeatures];
-            waveform_array = [feature_array.WaveformFeatures];
-            activity_feature_names = fieldnames(obj.Units(1).AverageFeatures.ActivityFeatures);
-            waveform_feature_names = fieldnames(obj.Units(1).AverageFeatures.WaveformFeatures);
-            if ~isempty(obj.Parameters.Outlier.Method)
-                for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean(rmoutliers([activity_array.(activity_feature_names{af})],...
-                        obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
+        function aggregated_struct = aggregateSingleCellFeatures(obj, unit_array)
+            arguments
+                obj MEArecording
+                unit_array Unit = [obj.Units]
+            end
+            if length(unit_array) > 1
+                activity_table = vertcat(unit_array.ActivityFeatures);
+                waveform_table = vertcat(unit_array.WaveformFeatures);
+                
+                if ~isempty(obj.Parameters.Outlier.Method)
+                    act_means = mean(rmoutliers(activity_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
+                    wf_means = mean(rmoutliers(waveform_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
+                else
+                    act_means = mean(activity_table.Variables,"omitnan");
+                    wf_means = mean(waveform_table.Variables,"omitnan");
                 end
-                for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean(rmoutliers([waveform_array.(waveform_feature_names{wf})],...
-                        obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
-                end
+                aggregated_struct.ActivityFeatures = array2table(act_means,"VariableNames",activity_table.Properties.VariableNames);
+                aggregated_struct.WaveformFeatures = array2table(wf_means,"VariableNames",waveform_table.Properties.VariableNames);
             else
-                for af = 1:length(activity_feature_names)
-                    obj.UnitFeatures.AverageFeatures.ActivityFeatures.(activity_feature_names{af}) = mean([activity_array.(activity_feature_names{af})],"omitnan");
-                end
-                for wf = 1:length(waveform_feature_names)
-                    obj.UnitFeatures.AverageFeatures.WaveformFeatures.(waveform_feature_names{wf}) = mean([waveform_array.(waveform_feature_names{wf})],"omitnan");
+                aggregated_struct.ActivityFeatures = unit_array.ActivityFeatures;
+                aggregated_struct.WaveformFeatures = unit_array.WaveformFeatures;
+            end
+        end
+        
+        function calculateClusterSingleCellFeatures(obj)
+            iClust = unique([obj.Units.ClusterID]);
+            for c = iClust
+                unit_array = obj.Units([obj.Units.ClusterID] == c);
+                if isempty(unit_array) %Add empty clusters to have consistent feature matrix sizes
+                    fnames = fieldnames(obj.UnitFeatures);
+                    for f = 1:length(fnames)
+                    	empty_struct.(fnames{f}) = obj.UnitFeatures.(fnames{f});
+                        empty_struct.(fnames{f}).Variables = zeros(size(empty_struct.(fnames{f}).Variables));
+                    end
+                    obj.ClusteredFeatures{c} = empty_struct;
+                else
+                    obj.ClusteredFeatures{c} = obj.aggregateSingleCellFeatures(unit_array);
                 end
             end
         end
@@ -371,6 +407,38 @@ classdef MEArecording < handle
             ParentPath = fileparts(fileparts(which('MEArecording')));
         end
         
+        function metadata_struct = retrieveMetadata(metadata)
+            arguments
+                metadata struct
+            end
+            
+            path_parts = strsplit(metadata.InputPath,"/");
+            recording_date = path_parts(end-3);
+            metadata_struct.RecordingDate = recording_date;
+            plate_id = path_parts(end-2);
+            well_id = char(path_parts(end-1));
+            well_id = well_id(end);
+            chip_id = plate_id + "_" + well_id;
+            metadata_struct.ChipID = chip_id;
+            metadata_struct.InputPath = metadata.InputPath;
+            info_table = readtable(metadata.LookupPath,"ReadVariableNames",true);
+            for ids = 1:size(info_table,1)
+                chip_ids = strsplit(info_table.Chip_IDs{ids},",");
+                if contains(chip_id,chip_ids)
+                    metadata_vars = string(info_table.Properties.VariableNames(1:end-1)); %Exclude Chip_IDs
+                    for m = metadata_vars
+                        try
+                            metadata_struct.(m) = string(info_table.(m){ids});
+                        catch
+                            metadata_struct.(m) = info_table.(m)(ids);
+                        end
+                    end
+                    break
+                end
+            end
+            
+        end
+        
         function defaultParams = returnDefaultParams()
             % Fields to set true for the respective analyses that should be
             % performed
@@ -392,6 +460,7 @@ classdef MEArecording < handle
             defaultParams.QC.Axon = 0.8; %Ratio (positive amplitude)/ (maximum amplitude) to be considered axonal
             defaultParams.QC.Noise = 14; % # of sign changes for the waveform derivative ("up-and-down" waveform)
             defaultParams.QC.NoiseCutout = [-1 1]; % [ms] before and after peak to be considered for noise detection
+            defaultParams.QC.N_Units = 5; % Minimum number of units that need to pass the QC to continue with the analysis
             
             % Parameters for the burst detection
             defaultParams.Bursts.N = 0.9; %0.0015; %Number of spikes in bursts (if < 1 used as a percentage of the mean network firing rate)
@@ -428,7 +497,7 @@ classdef MEArecording < handle
            [max_amplitudes, reference_electrode, norm_wf_matrix] = obj.generateWaveformMatrix();
            
            good_units = performUnitQC(obj, max_amplitudes, firing_rates, unit_spike_times, norm_wf_matrix);
-           if sum(good_units) > 0
+           if sum(good_units) >= obj.Parameters.QC.N_Units
                good_amplitudes = max_amplitudes(good_units);
                good_unit_spike_times = unit_spike_times(good_units);
                good_wf_matrix = norm_wf_matrix(:,good_units);
@@ -439,9 +508,8 @@ classdef MEArecording < handle
                end
                obj.Units = unit_array;
                obj.updateSpikeTimes();
-               obj.aggregateSingleCellFeatures();
            else
-               warning("No good units found")
+               warning("Not enough good units found")
            end
        end
        
@@ -454,8 +522,8 @@ classdef MEArecording < handle
            TEMP(1) = 0;
            freq_domain = abs(TEMP(1:NFFT/2));
            [mag,freq_idx] = max(freq_domain);
-           obj.NetworkFeatures.Regularity.NetworkRegularityFrequency = F(freq_idx);
-           obj.NetworkFeatures.Regularity.NetworkRegularityMagnitude = mag;
+           Regularity.NetworkRegularityFrequency = F(freq_idx);
+           Regularity.NetworkRegularityMagnitude = mag;
            
            norm_freq_domain = freq_domain/max(freq_domain);
            l = [];
@@ -476,10 +544,11 @@ classdef MEArecording < handle
            log_p = log10(p)-min(log10(p)); % Make data positive to be able to fit
            try
                f = fit(cumsum(l),log_p,'exp1');
-               obj.NetworkFeatures.Regularity.NetworkRegularityFit = f.b;
+               Regularity.NetworkRegularityFit = f.b;
            catch
-               obj.NetworkFeatures.Regularity.NetworkRegularityFit = NaN;
+               Regularity.NetworkRegularityFit = NaN;
            end
+           obj.NetworkFeatures.Regularity = struct2table(Regularity);
        end
        
        function Burst = detectBursts(obj)
@@ -496,7 +565,7 @@ classdef MEArecording < handle
            Burst = detectBurstsISIN(obj, N, ISI_N);
            N_bursts = length(Burst.T_start);
            
-           %Merge bursts with too short IBIs (< IBI_merge)
+%            Merge bursts with too short IBIs (< IBI_merge)
            short_burst_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1)> IBI_merge);
            Burst.T_start = Burst.T_start([1 short_burst_idx+1]);
            Burst.T_end = Burst.T_end([short_burst_idx length(Burst.T_end)]);
@@ -538,16 +607,17 @@ classdef MEArecording < handle
                   cellfun_input,'un',0);
           end
           feature_means = cellfun(@mean, cellfun_input,'un',0);
-          [obj.NetworkFeatures.Burst.MeanInterBurstInterval,...
-              obj.NetworkFeatures.Burst.MeanBurstDuration,...
-              obj.NetworkFeatures.Burst.MeanRiseTime,...
-              obj.NetworkFeatures.Burst.MeanFallTime,...
-              obj.NetworkFeatures.Burst.MeanRiseVelocity,...
-              obj.NetworkFeatures.Burst.MeanDecayVelocity] = feature_means{:};
-          obj.NetworkFeatures.Burst.VarianceBurstDuration = var(BDs);
-          obj.NetworkFeatures.Burst.VarianceInterBurstInterval = var(IBIs);
-          obj.NetworkFeatures.Burst.IntraBurstFiringRate = inburst_spikes/obj.RecordingInfo.Duration;
-          obj.NetworkFeatures.Burst.InterBurstFiringRate = (length(obj.Spikes.Times) - inburst_spikes)/obj.RecordingInfo.Duration;
+          [Burst.MeanInterBurstInterval,...
+              Burst.MeanBurstDuration,...
+              Burst.MeanRiseTime,...
+              Burst.MeanFallTime,...
+              Burst.MeanRiseVelocity,...
+              Burst.MeanDecayVelocity] = feature_means{:};
+          Burst.VarianceBurstDuration = var(BDs);
+          Burst.VarianceInterBurstInterval = var(IBIs);
+          Burst.IntraBurstFiringRate = inburst_spikes/obj.RecordingInfo.Duration;
+          Burst.InterBurstFiringRate = (length(obj.Spikes.Times) - inburst_spikes)/obj.RecordingInfo.Duration;
+          obj.NetworkFeatures. Burst = struct2table(Burst);
        end
        
        function [ccg,t] = calculateCCGs(obj)
@@ -709,33 +779,106 @@ classdef MEArecording < handle
            obj.Connectivity.DDC = dCov * inv(B);
        end
        
-       function feat_table = concatenateFeatures(obj,feat_struct, feat_names) %Usable for unit and network features
+       function full_table = concatenateClusteredFeatures(obj,cluster_id, feature_group)
            arguments
               obj MEArecording
-              feat_struct struct
-              feat_names string = "all"
+              cluster_id (1,:) {isnumeric} = 0 %Cluster IDs to be concatenated; 0 concatenates all
+              feature_group string = "all" %"ActivityFeatures","WaveformFeatures" or "all"
+          end
+           unit_array = [obj.Units];
+           if ~isempty([unit_array.ClusterID])
+               if cluster_id == 0
+                   cluster_id = 1:obj(1).NumUnitClusters;
+               end
+               
+               feat_array = [obj.ClusteredFeatures];
+               fnames = fieldnames([feat_array{:}]);
+               
+               clust_table = cell(1,max(cluster_id));
+               clust_cell = struct2cell([feat_array{:}]);
+               for i = cluster_id
+                   if feature_group == "all"
+                       feat_idx = 1:length(fnames);
+                   else
+                       feat_idx = find(contains(fnames, feature_group));
+                   end
+                   
+                   clust_table{i} = [clust_cell{feat_idx,:,i}];
+                   clust_table{i}.Properties.VariableNames = string(clust_table{i}.Properties.VariableNames) + "_" + num2str(i);
+               end
+               full_table = [clust_table{:}];
+           else
+               error("Unit clustering needs to be performed before using clustered features")
            end
-           feat_array = squeeze(struct2cell(feat_struct));
-           if ~isequal(feat_names,"all")
-               feat_array = feat_array(contains(fieldnames(feat_struct), feat_names,'IgnoreCase',true),:);
-           end
-           feat_tables = cellfun(@struct2table, feat_array,'un',0);
-           if isstruct(feat_tables{1}(1,1).Variables) %For unit features
-               feat_tables = arrayfun(@(x) struct2table(feat_tables{1}(1,x).Variables),1:size(feat_tables{1},2),'un',0)';
-           end
-           feat_table = arrayfun(@(x) [feat_tables{:,x}],1:size(feat_tables,2),'un',0);
-           feat_table = vertcat(feat_table{:});
        end
        
-       function feat_table = getFeatureTable(obj, unit_features, network_features)
+       function feat_table = getRecordingFeatures(obj,network_features, unit_features, useClustered) %Usable for unit and network features
            arguments
                obj MEArecording
-               unit_features string = "all"
-               network_features string = "all"
+               network_features string = "all" %"all" or []
+               unit_features string = "all" %"ActivityFeatures","WaveformFeatures" or "all"
+               useClustered logical = false
            end
-           unit_table = concatenateFeatures(obj,[obj.UnitFeatures], unit_features);
-           network_table = concatenateFeatures(obj,[obj.NetworkFeatures], network_features);
-           feat_table = [unit_table network_table];
+           if ~isempty(network_features)
+               fnames = fieldnames([obj.NetworkFeatures]);
+               
+               if network_features == "all"
+                   nw_idx = 1:length(fnames);
+               else
+                   nw_idx = find(contains(fnames,network_features));
+               end
+               
+               network_cell = squeeze(struct2cell([obj.NetworkFeatures]));
+               network_cell = reshape(network_cell,[],length(obj)); %Ensure correct orientation of cell array
+               for i = 1:size(network_cell,2)
+                  network_table(i,:) = [network_cell{nw_idx,i}]; 
+               end
+           else
+               network_table = table();
+           end
+           
+           if ~isempty(unit_features)
+               if useClustered
+                   unit_table = concatenateClusteredFeatures(obj, 0, unit_features);
+               else
+                   fnames = fieldnames([obj.UnitFeatures]);
+                   
+                   if unit_features == "all"
+                       feat_idx = 1:length(fnames);
+                   else
+                       feat_idx = find(contains(fnames, unit_features));
+                   end
+                   unit_cell = squeeze(struct2cell([obj.UnitFeatures]));
+                   unit_cell = reshape(unit_cell,[],length(obj)); %Ensure correct orientation of cell array
+                   for i = 1:size(unit_cell,2)
+                       unit_table(i,:) = [unit_cell{feat_idx,i}];
+                   end
+               end
+           else
+               unit_table = table();
+           end
+           
+           feat_table = [network_table unit_table];
+       end
+       
+       function feat_table = getUnitFeatures(obj, unit_features)
+           arguments
+               obj MEArecording
+               unit_features string = ["ReferenceWaveform","ActivityFeatures"] %Alternatively WaveformFeatures
+           end
+           unit_array = [obj.Units];
+           feature_tables = {};
+           for f = 1:length(unit_features)
+               
+               if unit_features(f) == "ReferenceWaveform"
+                   aligned_wf = RecordingGroup.alignWaveforms([obj.Units]);
+                   var_names = "Waveform" + (1:size(aligned_wf,1));
+                   feature_tables{f} = array2table(aligned_wf',"VariableNames",var_names);
+               else
+                   feature_tables{f} = vertcat(unit_array.(unit_features(f)));
+               end
+           end
+           feat_table = [feature_tables{:}];
        end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

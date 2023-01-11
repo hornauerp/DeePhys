@@ -4,8 +4,8 @@ classdef Unit < handle
         ReferenceWaveform
         ReferenceElectrode
         SpikeTimes
-        AverageFeatures
-        
+        WaveformFeatures
+        ActivityFeatures
     end
 
     properties(SetObservable = true)
@@ -19,24 +19,24 @@ classdef Unit < handle
                 unit.ReferenceWaveform = waveform;
                 unit.ReferenceElectrode = reference_electrode;
                 unit.SpikeTimes = spike_times;
-                unit.AverageFeatures.WaveformFeatures = waveform_features;
-                unit.inferActivityFeatures();
+                unit.WaveformFeatures = struct2table(waveform_features);
+                unit.ActivityFeatures = unit.inferActivityFeatures();
             end
         end
         
-        function inferActivityFeatures(unit)
-            for u = unit
-                isi = diff(u.SpikeTimes);
-                u.AverageFeatures.ActivityFeatures.MeanInterSpikeInterval = mean(isi);
-                u.AverageFeatures.ActivityFeatures.VarianceInterSpikeInterval = std(isi);
-                u.AverageFeatures.ActivityFeatures.CVInterSpikeInterval = std(isi)/mean(isi);
-                pacf = parcorr(isi,1);
-                u.AverageFeatures.ActivityFeatures.PartialAutocorrelation = pacf(2);
-                u.getRegularity();
-            end
+        function full_table = inferActivityFeatures(unit)
+            isi = diff(unit.SpikeTimes);
+            act_feat.MeanInterSpikeInterval = mean(isi);
+            act_feat.VarianceInterSpikeInterval = std(isi);
+            act_feat.CVInterSpikeInterval = std(isi)/mean(isi);
+            pacf = parcorr(isi,1);
+            act_feat.PartialAutocorrelation = pacf(2);
+            activity_table = struct2table(act_feat);
+            regularity_table = unit.getRegularity();
+            full_table = [activity_table,regularity_table];
         end
         
-        function getRegularity(unit)
+        function regularity_table = getRegularity(unit)
            binned_activity = histcounts(unit.SpikeTimes,'BinLimits',[0 unit.MEArecording.RecordingInfo.Duration],'BinWidth',unit.MEArecording.Parameters.Regularity.Binning);
            norm_activity = binned_activity/max(binned_activity);
            NFFT = length(norm_activity);
@@ -45,8 +45,8 @@ classdef Unit < handle
            TEMP(1) = 0;
            freq_domain = abs(TEMP(1:NFFT/2));
            [mag,freq_idx] = max(freq_domain);
-           unit.AverageFeatures.ActivityFeatures.RegularityFrequency = F(freq_idx);
-           unit.AverageFeatures.ActivityFeatures.RegularityMagnitude = mag;
+           reg_feat.RegularityFrequency = F(freq_idx);
+           reg_feat.RegularityMagnitude = mag;
            
            norm_freq_domain = freq_domain/max(freq_domain);
            l = [];
@@ -63,10 +63,11 @@ classdef Unit < handle
            log_p = log10(p)-min(log10(p)); % Make data positive to be able to fit
            try
                f = fit(cumsum(l),log_p,'exp1');
-               unit.AverageFeatures.ActivityFeatures.RegularityFit = f.b;
+               reg_feat.RegularityFit = f.b;
            catch
-               unit.AverageFeatures.ActivityFeatures.RegularityFit = NaN;
+               reg_feat.RegularityFit = NaN;
            end
+           regularity_table = struct2table(reg_feat);
        end
        
     end

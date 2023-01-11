@@ -1,5 +1,10 @@
 classdef RecordingGroup < handle
     
+    %%%%%%%TODO%%%%%%%
+    % Classification
+    % Clustering waveform vs waveform features
+    %%%%%%%%%%%%%%%%%%
+    
     properties
         Recordings
         Units
@@ -34,14 +39,14 @@ classdef RecordingGroup < handle
             if isempty(parameter_fields)
                 warning("No parameters provided, using default ones")
             else
-                for pf = parameter_fields
-                    if ismember(pf,fieldnames(rg.Parameters))
-                        subfields = fieldnames(parameters.(pf{:}));
-                        for sf = subfields
-                            if ismember(sf,fieldnames(rg.Parameters.(pf{:})))
-                                rg.Parameters.(pf{:}).(sf{:}) = parameters.(pf{:}).(sf{:});
+                for pf = 1:length(parameter_fields)
+                    if ismember(parameter_fields{pf},fieldnames(rg.Parameters))
+                        subfields = fieldnames(parameters.(parameter_fields{pf}));
+                        for sf = 1:length(subfields)
+                            if ismember(subfields{sf},fieldnames(rg.Parameters.(parameter_fields{pf})))
+                                rg.Parameters.(parameter_fields{pf}).(subfields{sf}) = parameters.(parameter_fields{pf}).(subfields{sf});
                             else
-                                warning("Unrecognized parameter field: %s.%s",pf{:},sf{:})
+                                warning("Unrecognized parameter field: %s.%s",parameter_fields{pf}{:},subfields{sf}{:})
                             end
                         end
                     else
@@ -69,7 +74,7 @@ classdef RecordingGroup < handle
                     value_vector = {metadata_array.(inclusion{i}{1})};
                     idx = ismember(value_vector,inclusion{i}{2:end});
                 else
-                    value_vector = {metadata_array.(inclusion{i}{1})};
+                    value_vector = [metadata_array.(inclusion{i}{1})];
                     idx = ismember(value_vector,inclusion{i}(2:end));
                 end
                 if ~exist('inclusion_idx','var')
@@ -141,30 +146,53 @@ classdef RecordingGroup < handle
            defaultParams.Selection.Inclusion = {}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
            defaultParams.Selection.Exclusion = {}; %Cell array of cell arrays with fieldname + value
        end
+       
+       function aligned_wf = alignWaveforms(unit_array)
+           ref_wf = [unit_array.ReferenceWaveform];
+           ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
+           [~,i] = min(ref_wf,[],1);
+           peak_idx = mean(i);
+           max_offset = round(peak_idx/2);
+           x = max_offset:size(ref_wf,1)+max_offset-1;
+           xq = 1:size(ref_wf,1)+2*max_offset;
+           
+           interp_wf = interp1(x,ref_wf,xq,"linear",'extrap');
+           rm_idx = find(abs(peak_idx - i) >= max_offset);
+           aligned_wf = zeros(size(ref_wf));
+           for r = 1:size(interp_wf,2)
+               if ~any(rm_idx == r)
+                   start_idx = i(r) - max_offset;
+                   aligned_wf(:,r) = interp_wf(start_idx:start_idx + size(ref_wf,1) - 1 ,r);
+               else
+                   aligned_wf(:,r) = ref_wf(:,r);
+               end
+           end
+       end
     end
     
     methods 
-        function feature_table = aggregateRecordingFeatureTables(rg, unit_features, network_features)
-            arguments
-                rg RecordingGroup
-                unit_features string = "all"
-                network_features string = "all"
-            end
-            
-            feature_array = cell(1,length(rg.Recordings));
-            for r = 1:length(rg.Recordings)
-                feature_array{r} = getFeatureTable(rg.Recordings(r), unit_features, network_features);
-            end
-            feature_table = vertcat(feature_array{:});
-        end
+%         function feature_table = aggregateRecordingFeatureTables(rg, unit_features, network_features)
+%             arguments
+%                 rg RecordingGroup
+%                 unit_features string = "all"
+%                 network_features string = "all"
+%             end
+%             
+%             feature_array = cell(1,length(rg.Recordings));
+%             for r = 1:length(rg.Recordings)
+%                 feature_array{r} = getFeatureTable(rg.Recordings(r), unit_features, network_features);
+%             end
+%             feature_table = vertcat(feature_array{:});
+%         end
         
-        function [feature_table, culture_array] = aggregateCultureFeatureTables(rg, age, tolerance, unit_features, network_features)
+        function [feature_table, culture_array] = aggregateCultureFeatureTables(rg, age, tolerance, unit_features, network_features, useClustered)
             arguments
                 rg RecordingGroup
                 age {isnumeric} = [7,14,21,28] %refers to DIV // 0 to use the maximum number of available timepoints
                 tolerance {isnumeric} = 1 %deviation from the actual age that will still be considered valid (e.g. age = 7 and tolerance = 1 considers DIVs 6-8)
                 unit_features string = "all"
                 network_features string = "all"
+                useClustered logical = false
             end
             
             rec_metadata = [rg.Recordings.Metadata];
@@ -189,7 +217,7 @@ classdef RecordingGroup < handle
                         sel_rec = rg.Cultures{iC}(age_count == 1);
                         culture_array = [culture_array {sel_rec}];
                         for iR = 1:length(sel_rec)
-                            iR_table = getFeatureTable(rg.Cultures{iC}(iR), unit_features, network_features);
+                            iR_table = getRecordingFeatures(rg.Cultures{iC}(iR), unit_features, network_features, useClustered);
                             iR_table.Properties.VariableNames = iR_table.Properties.VariableNames + "_" + string(div(iR));
                             rec_table_array{iR} = iR_table;
                         end
@@ -259,15 +287,16 @@ classdef RecordingGroup < handle
             end
         end
         
-        function reduction = reduceDimensionality(rg, level, method, n_dims, grouping_var, unit_features, network_features, age, tolerance)
+        function reduction = reduceDimensionality(rg, level, method, n_dims, grouping_var, unit_features, network_features, useClustered, age, tolerance)
             arguments
                rg RecordingGroup
                level string = "Unit" %Unit, Recording or Culture level
                method string = "UMAP" %UMAP, PCA
                n_dims (1,1) {isnumeric} = 2 %Number of output dimensions
                grouping_var string = "PlatingDate" %Has to correspond to a MEArecording metadata field
-               unit_features string = "all"
+               unit_features string = ["ReferenceWaveform","ActivityFeatures"]
                network_features string = "all"
+               useClustered logical = false
                age {isnumeric} = [7,14,21,28] %Only relevant for DimensionalityReduction on the culture level
                tolerance {isnumeric} = 1 %Gives tolerance for culture selection by age (e.g. age=7 tolerance=1 allows DIVs 6-8)
             end
@@ -276,33 +305,25 @@ classdef RecordingGroup < handle
             
             switch level
                 case "Unit"
+                    input_table = rg.Recordings.getUnitFeatures(unit_features);
                     object_group = [rg.Units];
-                    ref_wf = [object_group.ReferenceWaveform];
-                    ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
-                    unit_feature_array = [object_group.AverageFeatures];
-                    if isempty(unit_feature_array)
-                        fprintf('No unit features found. Continuing using only the reference waveform. \n')
-                        input_mat = double(ref_wf');
-                    else
-                        feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"Activity");
-                        aligned_wf = rg.alignWaveforms();
-                        input_mat = double([aligned_wf' feature_table.Variables]);
-%                         feature_table = rg.Recordings.concatenateFeatures(unit_feature_array,"all");
-%                         input_mat = feature_table.Variables;
-                    end
                     
                 case "Recording"
-                    object_group = rg.Recordings;
-                    feature_table = rg.aggregateRecordingFeatureTables(unit_features, network_features);
-                    input_mat = feature_table.Variables;
+                    object_group = [rg.Recordings];
+                    input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                    
                     
                 case "Culture" 
-                    [feature_table, object_group] = aggregateCultureFeatureTables(rg, age, tolerance, unit_features, network_features);
-                    input_mat = feature_table.Variables;
+                    [input_table, object_group] = aggregateCultureFeatureTables(rg, age, tolerance, unit_features, network_features);
+                    
             end
-            
+            input_mat = input_table.Variables;
             input_mat(isnan(input_mat)) = 0;%Handle rare case where NaN appears
-            norm_data = normalizeByGroup(rg, input_mat, object_group, grouping_var); %Normalize
+            if isempty(grouping_var)
+                norm_data = normalize(input_mat);
+            else
+                norm_data = normalizeByGroup(rg, input_mat, object_group, grouping_var); %Normalize
+            end
             norm_data(:,any(isnan(norm_data))) = [];%Remove peak NaNs
             norm_data = norm_data./max(abs(norm_data)); %Scale data
             
@@ -324,8 +345,6 @@ classdef RecordingGroup < handle
             rg.DimensionalityReduction.(level).(method).NetworkFeatures = network_features;
             rg.DimensionalityReduction.(level).ObjectGroup = object_group;
             rg.plot_dimensionality_reduction(reduction);
-            %             cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
-            %             [rg.Units.ClusterID] = deal(cluster_idx{:});
         end
         
         function [iMetadata, metadata_groups] = returnMetadataArray(rg, metadata_object, metadata_name)
@@ -414,6 +433,7 @@ classdef RecordingGroup < handle
                    cluster_fun = @(x,k) clusterdata(x,k); 
                    
                case "dbscan"
+                   error("Not yet implemented")
                    
                case "spectral"
                    cluster_fun = @(x,k) spectralcluster(x,k);
@@ -439,27 +459,23 @@ classdef RecordingGroup < handle
            title(sprintf('%s clustering on %ss',method, level))
         end
         
-        function aligned_wf = alignWaveforms(rg)
-            object_group = [rg.Units];
-            ref_wf = [object_group.ReferenceWaveform];
-            ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
-            [~,i] = min(ref_wf,[],1);
-            peak_idx = mean(i);
-            max_offset = round(peak_idx/2);
-            x = max_offset:size(ref_wf,1)+max_offset-1;
-            xq = 1:size(ref_wf,1)+2*max_offset;
-            
-            interp_wf = interp1(x,ref_wf,xq,"linear",'extrap');
-            rm_idx = find(abs(peak_idx - i) >= max_offset);
-            aligned_wf = zeros(size(ref_wf));
-            for r = 1:size(interp_wf,2)
-                if ~any(rm_idx == r)
-                    start_idx = i(r) - max_offset;
-                    aligned_wf(:,r) = interp_wf(start_idx:start_idx + size(ref_wf,1) - 1 ,r);
-                else
-                    aligned_wf(:,r) = ref_wf(:,r);
-                end
-            end
+        function assignUnitClusterIdx(rg,method,calc_feat)
+           arguments
+               rg RecordingGroup
+               method string = "kmeans"
+               calc_feat logical = true %(Re)calculate unit feature averages per cluster
+           end
+           cluster_idx = rg.Clustering.Unit.(method).Index;
+           cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
+           [rg.Units.ClusterID] = deal(cluster_idx{:});
+           
+           if calc_feat
+               N_clust = num2cell(ones(size(rg.Recordings))*max([cluster_idx{:}]));
+               [rg.Recordings.NumUnitClusters] = deal(N_clust{:});
+               for r = 1:length(rg.Recordings)
+                  rg.Recordings(r).calculateClusterSingleCellFeatures();
+               end
+           end
         end
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -471,7 +487,7 @@ classdef RecordingGroup < handle
                 rg RecordingGroup
                 level string = "Unit" %Unit, Recording, Culture
                 method string = "UMAP" %dim reduction method: "UMAP","PCA"
-                grouping_var string = "CellLine"
+                grouping_var string = "Mutation"
             end
             reduction = rg.DimensionalityReduction.(level).(method).Reduction;
             metadata_object = rg.DimensionalityReduction.(level).ObjectGroup;
@@ -491,7 +507,7 @@ classdef RecordingGroup < handle
                nodeSz (1,1) {isnumeric} = 10
                mapSz {isnumeric} = 300
                sigma (1,1) {isnumeric} = mapSz/60
-               cmap (:,3) {isnumeric} = othercolor('Set19',length(unique(cluster_idx)));
+               cmap (:,3) {isnumeric} = othercolor('Set19',max(cluster_idx));
            end
            
            buffer_ratio = 0.5; 
@@ -650,12 +666,12 @@ classdef RecordingGroup < handle
             end
             
             cluster_idx = [rg.Clustering.Unit.(method).Index];
-            aligned_wf = rg.alignWaveforms();
+            aligned_wf = rg.alignWaveforms([rg.Units]);
             N_clust = length(unique(cluster_idx));
             avg_wf = cell(1,N_clust);
             cluster_wfs = cell(1,N_clust);
             cluster_size = groupcounts(cluster_idx);
-            time_vector = 1:size(aligned_wf,1)/20;
+            time_vector = (1:size(aligned_wf,1))/20;
             
             for c = 1:N_clust
                 cluster_wfs{c} = aligned_wf(:,cluster_idx == c);
@@ -664,14 +680,15 @@ classdef RecordingGroup < handle
             
             figure("Color","w");
             nexttile
-            plot(time_vector,horzcat(avg_wf{:}),"LineWidth",2)
-            legend(num2str(cluster_size))
+            p = plot(time_vector,horzcat(avg_wf{:}),"LineWidth",2);
+            
+            l = legend("N = " + string(cluster_size)); l.Box = "off";
             box off; xlabel("Time [ms]")
             for c = 1:N_clust
                 nexttile
-                p = plot(time_vector,cluster_wfs{c},"k","LineWidth",0.1,'Color',[0 0 0 0.1]);
+                plot(time_vector,cluster_wfs{c},"LineWidth",0.1,'Color',[p(c).Color,0.1]);
                 hold on
-                plot(time_vector,horzcat(avg_wf{c}),"LineWidth",2)
+                plot(time_vector,horzcat(avg_wf{c}),"LineWidth",2,'Color',[p(c).Color])
                 box off; xlabel("Time [ms]")
             end
         end
