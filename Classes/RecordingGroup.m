@@ -157,7 +157,7 @@ classdef RecordingGroup < handle
            xq = 1:size(ref_wf,1)+2*max_offset;
            
            interp_wf = interp1(x,ref_wf,xq,"linear",'extrap');
-           rm_idx = find(abs(peak_idx - i) >= max_offset);
+           rm_idx = find(ceil(abs(peak_idx - i)) >= max_offset);
            aligned_wf = zeros(size(ref_wf));
            for r = 1:size(interp_wf,2)
                if ~any(rm_idx == r)
@@ -168,61 +168,144 @@ classdef RecordingGroup < handle
                end
            end
        end
+       
+       function [clf,train_acc] = create_classifier(X_train,Y_train,alg,N_hyper)
+           if N_hyper > 0
+               switch alg
+                   case 'svm'
+                       clf = fitcsvm(X_train,Y_train,'OptimizeHyperparameters','all','HyperparameterOptimizationOptions',...
+                           struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
+                           'Verbose',0));
+                   case 'cnb'
+                       clf = fitcnb(X_train,Y_train,'OptimizeHyperparameters','all','HyperparameterOptimizationOptions',...
+                           struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
+                           'Verbose',0));
+                   case 'knn'
+                       clf = fitcknn(X_train,Y_train,'OptimizeHyperparameters','all','HyperparameterOptimizationOptions',...
+                           struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
+                           'Verbose',0));
+                   case 'rf'
+                       hyperparams = {'NumLearningCycles','MinLeafSize','MaxNumSplits','SplitCriterion','NumVariablesToSample'};
+                       t = templateTree('Reproducible',true);
+                       clf = fitcensemble(X_train,Y_train,'Method','Bag','OptimizeHyperparameters',hyperparams,'Learners',t, ...
+                           'HyperparameterOptimizationOptions',struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
+                           'Verbose',0));
+               end
+               train_acc = clf.HyperparameterOptimizationResults.MinObjective;
+           else
+               switch alg
+                   case 'svm'
+                       clf = fitcsvm(X_train,Y_train);
+                   case 'cnb'
+                       clf = fitcnb(X_train,Y_train);
+                   case 'knn'
+                       clf = fitcknn(X_train,Y_train);
+                   case 'rf'
+                       t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all','Reproducible',true);
+                       clf = fitcensemble(X_train,Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset("UseParallel",true));
+               end
+               train_acc = 1-resubLoss(clf,'LossFun','classiferror');
+           end
+       end
+       
+       function [Y_train, Y_test, train_idx, test_idx] = cv_split(Y, cv, k)
+          arguments
+             Y
+             cv cvpartition
+             k double
+          end
+          
+           if iscell(Y)
+               Y_train = [Y{cv.training(k)}];
+               Y_test = [Y{cv.test(k)}];
+               k_train = cv.training(k);
+               train_idx = arrayfun(@(x) ones(size(Y{x})) * k_train(x),1:length(Y),'un',0);
+               train_idx = [train_idx{:}];
+               test_idx = ~train_idx;
+               
+           else
+               Y_train = Y(cv.training(k));
+               Y_test = Y(cv.test(k));
+               train_idx = cv.training(k);
+               test_idx = cv.test(k);
+           end
+       end
     end
     
     methods 
-%         function feature_table = aggregateRecordingFeatureTables(rg, unit_features, network_features)
-%             arguments
-%                 rg RecordingGroup
-%                 unit_features string = "all"
-%                 network_features string = "all"
-%             end
-%             
-%             feature_array = cell(1,length(rg.Recordings));
-%             for r = 1:length(rg.Recordings)
-%                 feature_array{r} = getFeatureTable(rg.Recordings(r), unit_features, network_features);
-%             end
-%             feature_table = vertcat(feature_array{:});
-%         end
         
-        function [feature_table, culture_array] = aggregateCultureFeatureTables(rg, age, tolerance, unit_features, network_features, useClustered)
+        function [feature_table, culture_array] = aggregateCultureFeatureTables(rg, level, metadata_field, values, tolerance, network_features, unit_features, normalization, useClustered)
             arguments
                 rg RecordingGroup
-                age {isnumeric} = [7,14,21,28] %refers to DIV // 0 to use the maximum number of available timepoints
+                level string = "Recording"
+                metadata_field string = "DIV"
+                values {isnumeric} = [7,14,21,28] %refers to values of metadata_field // NaN to use the maximum number of available timepoints
                 tolerance {isnumeric} = 1 %deviation from the actual age that will still be considered valid (e.g. age = 7 and tolerance = 1 considers DIVs 6-8)
-                unit_features string = "all"
                 network_features string = "all"
+                unit_features string = "all"
+                normalization = "baseline" % "baseline" (divided by first timepoint) or "scaled (scaled between 0 and 1)
                 useClustered logical = false
             end
             
             rec_metadata = [rg.Recordings.Metadata];
-            ages = unique([rec_metadata.DIV]);
-            age_dev = abs(age - ages');
-            age_count = sum(age_dev<=tolerance);
-            if any(age_count == 0)
-               warning("DIV " + num2str(age(age_count == 0)) + " without corresponding cultures")
+            unique_values = unique([rec_metadata.(metadata_field)]);
+            if isnan(values)
+                values = unique_values;
             end
-            age = age(age_count > 0);
-            
+            value_dev = abs(values - unique_values');
+            value_count = sum(value_dev<=tolerance);
+            if any(value_count == 0)
+               warning("DIV " + num2str(values(value_count == 0)) + " without corresponding cultures")
+            end
+            values = values(value_count > 0);
+            if isempty(values)
+               error('No recordings found') 
+            end
             culture_table_array = {};
             culture_array = {};
             for iC = 1:length(rg.Cultures)
-                rec_table_array = cell(1,length(age));
+                rec_table_array = cell(1,length(values));
                 culture_metadata = [rg.Cultures{iC}.Metadata];
-                div = [culture_metadata.DIV];
-                if length(div) >= length(age)
-                    age_dev = abs(div - age');
-                    age_count = sum(age_dev<=tolerance);
-                    if sum(age_count == 1) == length(age) % Need to find a way to handle two recordings falling within the tolerance window
-                        sel_rec = rg.Cultures{iC}(age_count == 1);
+                value = [culture_metadata.(metadata_field)];
+                if length(value) >= length(values)
+                    value_dev = abs(value - values');
+                    value_count = sum(value_dev<=tolerance);
+                    value = value(value_count==1);
+                    if sum(value_count == 1) == length(values) % Need to find a way to handle two recordings falling within the tolerance window
+                        sel_rec = rg.Cultures{iC}(value_count == 1);
                         culture_array = [culture_array {sel_rec}];
                         for iR = 1:length(sel_rec)
-                            iR_table = getRecordingFeatures(rg.Cultures{iC}(iR), unit_features, network_features, useClustered);
-                            iR_table.Properties.VariableNames = iR_table.Properties.VariableNames + "_" + string(div(iR));
+                            if level == "Unit"
+                                iR_table = getUnitFeatures(rg.Cultures{iC}(iR), unit_features);
+                            elseif level == "Recording"
+                                iR_table = getRecordingFeatures(rg.Cultures{iC}(iR), network_features, unit_features, useClustered);
+                            else 
+                                error('Unknown level, select either "Unit" or "Recording"')
+                            end
+                            iR_table.Properties.VariableNames = iR_table.Properties.VariableNames + "_" + string(value(iR));
                             rec_table_array{iR} = iR_table;
                         end
-                        culture_table_array{iC} = [rec_table_array{:}];
-                        
+                        if normalization == "baseline"
+                            norm_mat = arrayfun(@(x) rec_table_array{x}.Variables./rec_table_array{1}.Variables,1:length(rec_table_array),'un',0);
+                            norm_mat = [norm_mat{2:end}];
+                            norm_mat(isnan(norm_mat)) = 0;
+                            norm_mat(isinf(norm_mat)) = max(norm_mat(norm_mat < Inf),[],'all');
+                            
+                            norm_table = [rec_table_array{2:end}];
+                            norm_vars = norm_table.Properties.VariableNames;
+                            culture_table_array{iC} = array2table(norm_mat,'VariableNames',norm_vars);
+                            
+                        elseif normalization == "scaled"
+                            norm_mat = cellfun(@(x) x.Variables,rec_table_array,'un',0);
+                            norm_mat = cat(3,norm_mat{:});
+                            norm_mat = normalize(norm_mat,3,'range',[0 1]);
+                            re_mat = reshape(norm_mat,size(norm_mat,1),[]);
+                            norm_table = [rec_table_array{:}];
+                            norm_vars = norm_table.Properties.VariableNames;
+                            culture_table_array{iC} = array2table(re_mat,'VariableNames',norm_vars);
+                        else
+                            culture_table_array{iC} = [rec_table_array{:}];
+                        end
                     else
                         continue
                     end
@@ -231,6 +314,8 @@ classdef RecordingGroup < handle
                end
             end
             feature_table = vertcat(culture_table_array{:});
+            keep_idx = ~isnan(std(feature_table.Variables,'omitnan')); %Remove variables with 0 variance
+            feature_table = feature_table(:,keep_idx);
         end
         
         function [norm_train_data, norm_test_data] = normalizeByGroup(rg, feat_mat, object_group, grouping_var, train_idx, test_idx)
@@ -239,8 +324,8 @@ classdef RecordingGroup < handle
                 feat_mat {isnumeric}
                 object_group %Units/recordings/cultures corresponding to the rows of feat_mat
                 grouping_var string = "PlatingDate" %Has to correspond to a MEArecording metadata field
-                train_idx (1,:) {isnumeric} = ones(1,size(feat_mat,1)) %Default to unsupervised // should be binary and length of object_group
-                test_idx (1,:) {isnumeric} = zeros(1,size(feat_mat,1))
+                train_idx (1,:) logical = logical(ones(1,size(feat_mat,1))) %Default to unsupervised // should be binary and length of object_group
+                test_idx (1,:) logical = logical(zeros(1,size(feat_mat,1)))
             end
             
             train_idx = logical(train_idx);
@@ -287,57 +372,102 @@ classdef RecordingGroup < handle
             end
         end
         
-        function reduction = reduceDimensionality(rg, level, method, n_dims, grouping_var, unit_features, network_features, useClustered, age, tolerance)
+        function [norm_train, norm_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx)
+            arguments
+                rg RecordingGroup
+                input_table table
+                object_group %Units/recordings/cultures corresponding to the rows of feat_mat
+                normalization_var string = "PlatingDate" %Has to correspond to a MEArecording metadata field
+                train_idx (1,:) logical = logical(ones(1,size(input_table,1))) %Default to unsupervised // should be logical and length of object_group
+                test_idx (1,:) logical = logical(zeros(1,size(input_table,1)))
+            end
+            
+            input_mat = input_table.Variables;
+            input_mat(isnan(input_mat)) = 0;%Handle rare case where NaN appears
+            if isempty(normalization_var)
+                mean_train = mean(input_mat(train_idx,:));
+                sd_train = std(input_mat(train_idx,:));
+                norm_train = (input_mat(train_idx,:) - mean_train)./sd_train;
+                norm_train(:,any(isnan(norm_train))) = [];
+                norm_train = norm_train./max(abs(norm_train)); %Scale data
+                if sum(test_idx) > 0
+                    norm_test = (input_mat(test_idx,:) - mean_train)/sd_train;
+                    norm_test = norm_test./max(abs(norm_train));
+                else
+                    norm_test = [];
+                end
+            else
+                [norm_train, norm_test] = normalizeByGroup(rg, input_mat, object_group, normalization_var, train_idx, test_idx); %Normalize
+                norm_train(:,any(isnan(norm_train))) = [];
+                norm_train = norm_train./max(abs(norm_train)); %Scale data
+                if sum(test_idx) > 0
+                    norm_test(:,any(isnan(norm_test))) = [];%Remove peak NaNs
+                    norm_test = norm_test./max(abs(norm_train)); %Scale data
+                else
+                    norm_test = [];
+                end
+            end
+            
+        end
+        
+        function reduction = reduceDimensionality(rg, level, method, n_dims, unit_features, network_features, useClustered,...
+                    normalization_var, grouping_var, grouping_values, normalization, tolerance)
             arguments
                rg RecordingGroup
                level string = "Unit" %Unit, Recording or Culture level
                method string = "UMAP" %UMAP, PCA
                n_dims (1,1) {isnumeric} = 2 %Number of output dimensions
-               grouping_var string = "PlatingDate" %Has to correspond to a MEArecording metadata field
                unit_features string = ["ReferenceWaveform","ActivityFeatures"]
                network_features string = "all"
                useClustered logical = false
-               age {isnumeric} = [7,14,21,28] %Only relevant for DimensionalityReduction on the culture level
+               normalization_var string = "PlatingDate"
+               grouping_var string = [] %Has to correspond to a MEArecording metadata field
+               grouping_values {isnumeric} = [7,14,21,28] %Only relevant for DimensionalityReduction on the culture level
+               normalization string = "scaled" %"scaled" or "baseline" or []
                tolerance {isnumeric} = 1 %Gives tolerance for culture selection by age (e.g. age=7 tolerance=1 allows DIVs 6-8)
             end
             
-            fprintf('Performing %s dimensionality reduction on %ss and normalizing by %s\n', method, level, grouping_var)
-            
-            switch level
-                case "Unit"
-                    input_table = rg.Recordings.getUnitFeatures(unit_features);
-                    object_group = [rg.Units];
-                    
-                case "Recording"
-                    object_group = [rg.Recordings];
-                    input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
-                    
-                    
-                case "Culture" 
-                    [input_table, object_group] = aggregateCultureFeatureTables(rg, age, tolerance, unit_features, network_features);
-                    
-            end
-            input_mat = input_table.Variables;
-            input_mat(isnan(input_mat)) = 0;%Handle rare case where NaN appears
-            if isempty(grouping_var)
-                norm_data = normalize(input_mat);
+%             fprintf('Performing %s dimensionality reduction on %ss and normalizing by %s\n', method, level, grouping_var)
+            if isempty(grouping_var) %Get group indices for stratification
+                object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
             else
-                norm_data = normalizeByGroup(rg, input_mat, object_group, grouping_var); %Normalize
+                [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
             end
-            norm_data(:,any(isnan(norm_data))) = [];%Remove peak NaNs
-            norm_data = norm_data./max(abs(norm_data)); %Scale data
+            
+            if isempty(grouping_var)
+                if level == "Unit"
+                    input_table = object_group.getUnitFeatures(unit_features);
+                    object_group = [rg.Units];
+                elseif level == "Recording"
+                    input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                else 
+                    error('Unknown level')
+                end
+            else
+                if level == "Unit"
+                    object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);
+                    object_group = [object_group{:}];
+                end
+            end
+            
+            norm_data = prepareInputMatrix(rg, input_table, object_group, normalization_var);
+            %             norm_data = norm_data(:,10:40);
+%             norm_data = input_table.Variables;
             
             switch method
                 case "UMAP"
                     color_file = fullfile(rg.Recordings(1).getParentPath(),'umap','colorsByName.properties');
                     [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data,'n_components',n_dims,'n_neighbors',100,'min_dist',0.1,'cluster_detail','adaptive','spread',1,'sgd_tasks',20,...
                         'verbose','none','color_file',color_file);
-                    
+%                     [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data,'n_components',n_dims,'sgd_tasks',20,...
+%                         'verbose','none','color_file',color_file);
                 case "PCA"
                     [coeff,reduction,latent] = pca(norm_data);
-                    reduction = reduction(:,1:n_dims);
                     
+                case "tSNE"
+                    reduction = tsne(norm_data,'Algorithm','exact','Exaggeration',10,'Perplexity',30);
             end
+            reduction = reduction(:,1:n_dims);
             
             rg.DimensionalityReduction.(level).(method).Reduction = reduction;
             rg.DimensionalityReduction.(level).(method).GroupingVariable = grouping_var;
@@ -345,6 +475,175 @@ classdef RecordingGroup < handle
             rg.DimensionalityReduction.(level).(method).NetworkFeatures = network_features;
             rg.DimensionalityReduction.(level).ObjectGroup = object_group;
             rg.plot_dimensionality_reduction(reduction);
+        end
+        
+        function result = predictAge(rg, level, alg, stratification_var, stratification_values, network_features, unit_features, useClustered, normalization_var, N_hyper, K_fold)
+            arguments
+                rg RecordingGroup
+                level string = "Recording" %Unit or Recording
+                alg string = "rf" %rf, svm, cnb, knn
+                stratification_var = "Mutation" %Specify the variable by which to split training and test dataset (e.g. train on wildtype, test on mutation)
+                stratification_values = [] %Corresponding to stratification_var, if a value is specified then this will be used as training data
+                network_features string = "all"
+                unit_features string = "all"
+                useClustered logical = false
+                normalization_var string = "PlatingDate"
+                N_hyper (1,1) double = 0 %If >0 do hyperparameter optimization
+                K_fold (1,1) double = 5 % number of K-fold CV
+            end
+            
+            if any(arrayfun(@(x) ~isfield(rg.Recordings(x).Metadata,"DIV"),1:length(rg.Recordings)))
+                error('Age data missing')
+            end
+            
+            object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
+            [rec_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, stratification_var);
+            
+            if isempty(stratification_values)
+                stratification_var = [stratification_var "DIV"];
+                [rec_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, stratification_var);
+                cv = cvpartition(rec_group_idx,'KFold',K_fold);
+                t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
+                
+                for k = 1:K_fold
+                    if level == "Unit"
+                        train_table = object_group(cv.training(k)).getUnitFeatures(unit_features);
+                        test_table = object_group(cv.test(k)).getUnitFeatures(unit_features);
+                        train_idx = logical([ones(1, size(train_table,1)) zeros(1, size(test_table,1))]);
+                        test_idx = ~train_idx;
+                        input_group = [object_group(cv.training(k)).Units, object_group(cv.test(k)).Units];
+                        input_table = [train_table;test_table];
+                        unit_recordings = [object_group.MEArecording];
+                        metadata = [unit_recordings.Metadata];
+                        true_age = [metadata.DIV];
+                        Y_train = true_age(train_idx);
+                        Y_test = true_age(test_idx);
+                    else
+                        input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                        train_idx = cv.training(k);
+                        test_idx = cv.test(k);
+                        input_group = object_group;
+                        metadata = [object_group.Metadata];
+                        true_age = [metadata.DIV];
+                        Y_train = true_age(train_idx);
+                        Y_test = true_age(test_idx);
+                    end
+                    
+                    [X_train, X_test] = prepareInputMatrix(rg, input_table, input_group, normalization_var, train_idx, test_idx);
+                    
+                    clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t);
+                    Y_pred = predict(clf, X_test);
+                    predImp = clf.oobPermutedPredictorImportance;
+                    
+                    result(k).Mdl = clf;
+                    result(k).Y_pred = Y_pred;
+                    result(k).Y_test = Y_test;
+                    result(k).mse_train = resubLoss(clf);
+                    result(k).predImp = predImp;
+                    result(k).GroupLabels = group_labels_comb;
+                end
+            else
+                train_group = find(group_labels_comb == stratification_values);
+                
+                if level == "Unit"
+                    input_table = object_group.getUnitFeatures(unit_features);
+                    object_group = [object_group.Units];
+                    [unit_group_idx, ~] = combineMetadataIndices(rg, object_group, stratification_var);
+                    train_idx = unit_group_idx == train_group;
+                    test_idx = unit_group_idx ~= train_group;
+                    unit_recordings = [object_group.MEArecording];
+                    metadata = [unit_recordings.Metadata];
+                    true_age = [metadata.DIV];
+                    
+                elseif level == "Recording"
+                    input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                    train_idx = rec_group_idx == train_group;
+                    test_idx = rec_group_idx ~= train_group;
+                    metadata = [object_group.Metadata];
+                    true_age = [metadata.DIV];
+                    
+                end
+                [X_train, X_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
+                Y_train = true_age(train_idx);
+                Y_test = true_age(test_idx);
+                t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
+                clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t);
+                Y_pred = predict(clf,X_test);
+                predImp = clf.oobPermutedPredictorImportance;
+                
+            end
+            
+            
+        end
+        
+        function result = classifyByFeatures(rg, level, alg, classification_var, network_features, unit_features, useClustered,... 
+                                    grouping_var, grouping_values, normalization, normalization_var, N_hyper, K_fold, tolerance)
+            arguments
+                rg RecordingGroup
+                level string = "Recording" %Unit or Recording
+                alg string = "rf" %rf, svm, 
+                classification_var string = "Mutation" %Metadata field that determines y_test/y_train
+                network_features string = "all"
+                unit_features string = "all"
+                useClustered logical = false
+                grouping_var string = [] %Metadata field that groups recordings to cultures
+                grouping_values = nan %Selected values corresponding to grouping_var
+                normalization = [] %Normalization within grouped units/recordings, "baseline" (divided by first datapoint) or "scaled" [0 1]
+                normalization_var string = "PlatingDate" % normalization by each value of normalization_var
+                N_hyper (1,1) double = 0 %If >0 do hyperparameter optimization
+                K_fold (1,1) double = 5 % number of K-fold CV
+                tolerance double = 1
+            end
+            
+            if isempty(grouping_var) %Get group indices for stratification
+                object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
+            else
+                [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+            end
+            [group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+            cv = cvpartition(group_idx,'KFold',K_fold);
+            
+            if isempty(grouping_var)
+                if level == "Unit"
+                    input_table = object_group.getUnitFeatures(unit_features);
+                    object_group = [rg.Units];
+                    [Y, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+                elseif level == "Recording"
+                    input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                    Y = group_idx;
+                else 
+                    error('Unknown level')
+                end
+            else
+                if level == "Unit"
+                    Y = arrayfun(@(x) ones(1,length([object_group{x}(1).Units]))*group_idx(x),1:length(group_idx),'un',0);
+                    object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);
+                    object_group = [object_group{:}];
+                else
+                    Y = group_idx;
+                end
+            end
+            
+            
+            
+            for k = 1:K_fold
+                [Y_train, Y_test, train_idx, test_idx] = cv_split(Y, cv, k);
+                
+                [X_train, X_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
+                
+                [clf,train_acc] = rg.create_classifier(X_train,Y_train,alg,N_hyper);
+                [Y_pred,scores] = predict(clf, X_test);
+                predImp = clf.oobPermutedPredictorImportance();
+                
+                result(k).Mdl = clf;
+                result(k).Y_pred = Y_pred;
+                result(k).Y_test = Y_test;
+                result(k).scores = scores;
+                result(k).train_acc = train_acc;
+                result(k).predImp = predImp;
+                result(k).GroupLabels = group_labels_comb;
+            end
+            
         end
         
         function [iMetadata, metadata_groups] = returnMetadataArray(rg, metadata_object, metadata_name)
@@ -371,7 +670,7 @@ classdef RecordingGroup < handle
                metadata_object = cellfun(@(x) x(1),metadata_object);
                
            elseif class(metadata_object) == "Unit"
-               metadata_object = [rg.Units.MEArecording];
+               metadata_object = [metadata_object.MEArecording];
            end
            
            metadata_struct = [metadata_object.Metadata];
@@ -390,15 +689,26 @@ classdef RecordingGroup < handle
             idx_array = cell(1,length(metadata_names));
             group_array = cell(1,length(metadata_names));
             for m = 1:length(metadata_names)
-                [idx_array{m}, group_array{m}] = returnMetadataArray(rg, metadata_object, metadata_names(m));
+                [idx_array{end-m+1}, group_array{end-m+1}] = returnMetadataArray(rg, metadata_object, metadata_names(m));
             end
             group_vals = cellfun(@unique, idx_array, "un",0);
             group_combs = combvec(group_vals{:});
             group_idx = vertcat(idx_array{:});
             [~,cluster_idx] = ismember(group_idx', group_combs','rows');
             group_labels = arrayfun(@(x) group_array{x}(group_combs(x,:))',1:length(group_array),"un",0);
-            group_labels_comb = join([group_labels{:}]);
-            
+            if length(metadata_names) == 1
+                group_labels_comb = [group_labels{:}];
+            else
+                group_labels_comb = join([group_labels{end:-1:1}]);
+                cluster_ids = unique(cluster_idx);
+                max_clust = length(group_labels_comb);
+                group_labels_comb = group_labels_comb(cluster_ids);
+                new_ids = cumsum(sum(cluster_ids == 1:max_clust)); %Remove ids without corresponding group
+                cluster_idx = new_ids(cluster_idx);
+            end
+            if ~isstring(group_labels_comb)
+                group_labels_comb = string(group_labels_comb);
+            end
         end
         
         function cluster_idx = clusterByFeatures(rg, input_type, level, method, N_clust, grouping_var)
@@ -459,6 +769,8 @@ classdef RecordingGroup < handle
            title(sprintf('%s clustering on %ss',method, level))
         end
         
+        
+        
         function assignUnitClusterIdx(rg,method,calc_feat)
            arguments
                rg RecordingGroup
@@ -467,7 +779,7 @@ classdef RecordingGroup < handle
            end
            cluster_idx = rg.Clustering.Unit.(method).Index;
            cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
-           [rg.Units.ClusterID] = deal(cluster_idx{:});
+           [rg.DimensionalityReduction.Units.ClusterID] = deal(cluster_idx{:});
            
            if calc_feat
                N_clust = num2cell(ones(size(rg.Recordings))*max([cluster_idx{:}]));
@@ -476,6 +788,35 @@ classdef RecordingGroup < handle
                   rg.Recordings(r).calculateClusterSingleCellFeatures();
                end
            end
+        end
+        
+        function removeUnitsByCluster(rg, method, ID, concatenated)
+            arguments
+               rg RecordingGroup
+               method string
+               ID double
+               concatenated = false % If true, units are removed for each recording of a culture and not only for individual recordings
+            end
+            rg.assignUnitClusterIdx(method,false);
+            
+            if concatenated
+                for c = 1:length([rg.Cultures])
+                    rm_idx = [];
+                    for r = 1:length([rg.Cultures{c}])
+                        rm_idx = [rm_idx find([rg.Cultures{c}(r).Units.ClusterID] == ID)];
+                    end
+                    rm_idx = unique(rm_idx);
+                    for r = 1:length([rg.Cultures{c}])
+                        rg.Cultures{c}(r).Units(rm_idx) = [];
+                    end
+                end
+            else
+                
+                for r = 1:length([rg.Recordings])
+                    units = [rg.Recordings(r).Units];
+                    rg.Recordings(r).Units([units.ClusterID] == ID) = [];
+                end
+            end
         end
         
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -619,14 +960,15 @@ classdef RecordingGroup < handle
             
         end
         
-        function plot_dimensionality_reduction(rg,reduction,cluster_idx)
+        function plot_dimensionality_reduction(rg,reduction,cluster_idx,group_labels_comb)
             arguments
                 rg RecordingGroup
                 reduction {isnumeric}
                 cluster_idx (1,:) {isnumeric} = ones(1,size(reduction,1))
+                group_labels_comb string = "Cluster " + unique(cluster_idx)
             end
             
-            if length(cluster_idx)>100
+            if length(cluster_idx)>500
                 sz = 5;
             else
                 sz = 20;
@@ -636,28 +978,32 @@ classdef RecordingGroup < handle
             figure('Color','w');
             if size(reduction,2) == 2
                 nexttile
-                scatter(reduction(:,1),reduction(:,2),sz,cluster_idx,'filled')
-                c_map = othercolor('Set19',N_clust);
+                scatter(reduction(:,1),reduction(:,2),sz,cluster_idx,'filled','MarkerEdgeColor','k')
+                c_map = othercolor('Spectral9',N_clust);
                 colormap(c_map)
                 cb = colorbar; cb.Title.String = "Cluster Index";
                 cb.Ticks = linspace(cb.Limits(1) + (N_clust-1)/(2*N_clust), cb.Limits(2) - (N_clust-1)/(2*N_clust), N_clust); cb.TickLabels = 1:N_clust;
                 if N_clust > 1
+                    xl = xlim; yl = ylim;
                     for i = 1:N_clust
                         nexttile
-                        scatter(reduction(cluster_idx==i,1),reduction(cluster_idx==i,2),sz,'filled')
+                        scatter(reduction(cluster_idx==i,1),reduction(cluster_idx==i,2),sz,c_map(i,:),'filled','MarkerEdgeColor','k')
+                        title(group_labels_comb(i))
+                        xlim(xl); ylim(yl)
                     end
                 end
             else
                 nexttile
-                scatter3(reduction(:,1),reduction(:,2),reduction(:,3),sz,'filled')
-                c_map = othercolor('Set19',N_clust);
+                scatter3(reduction(:,1),reduction(:,2),reduction(:,3),sz,'filled','MarkerEdgeColor','k')
+                c_map = othercolor('Spectral9',N_clust);
                 colormap(c_map)
                 cb = colorbar; cb.Title.String = "Cluster Index";
                 cb.Ticks = linspace(cb.Limits(1) + (N_clust-1)/(2*N_clust), cb.Limits(2) - (N_clust-1)/(2*N_clust), N_clust); cb.TickLabels = 1:N_clust;
                 if N_clust > 1
                     for i = 1:N_clust
                         nexttile
-                        scatter3(reduction(cluster_idx==i,1),reduction(cluster_idx==i,2),reduction(cluster_idx==i,3),sz,'filled')
+                        scatter3(reduction(cluster_idx==i,1),reduction(cluster_idx==i,2),reduction(cluster_idx==i,3),sz,c_map(i,:),'filled','MarkerEdgeColor','k')
+                        title(group_labels_comb(i))
                     end
                 end
             end
@@ -683,18 +1029,139 @@ classdef RecordingGroup < handle
             end
             
             figure("Color","w");
-            nexttile
+            ax = nexttile;
             p = plot(time_vector,horzcat(avg_wf{:}),"LineWidth",2);
+            ax.ColorOrder = othercolor('Spectral9',max(cluster_idx));
             
             l = legend("N = " + string(cluster_size)); l.Box = "off";
-            box off; xlabel("Time [ms]")
+            box off; xlabel("Time [ms]"); ylim([-1 1])
             for c = 1:N_clust
                 nexttile
                 plot(time_vector,cluster_wfs{c},"LineWidth",0.1,'Color',[p(c).Color,0.1]);
                 hold on
-                plot(time_vector,horzcat(avg_wf{c}),"LineWidth",2,'Color',[p(c).Color])
-                box off; xlabel("Time [ms]")
+                plot(time_vector,horzcat(avg_wf{c}),"LineWidth",2,'Color',[0 0 0 0.5])
+                box off; axis tight; xlabel("Time [ms]"); ylim([-1 1])
             end
+        end
+        
+        function plot_feature_trajectories(rg, metadata_field, timepoints, feature_group, normalization, feature_name, grouping_var, useClustered, tolerance)
+            arguments
+                rg RecordingGroup
+                metadata_field string
+                timepoints (1,:) {isnumeric}
+                feature_group string
+                normalization string = "scaled" %"baseline" or "scaled"
+                feature_name string = []
+                grouping_var = "Mutation"
+                useClustered logical = false
+                tolerance = 1
+            end
+            switch feature_group
+                case "UnitFeatures"
+                    unit_features = "all";
+                    network_features = [];
+                case "NetworkFeatures"
+                    unit_features = [];
+                    network_features = "all";
+            end
+            [feature_table, culture_array] = aggregateCultureFeatureTables(rg, level, metadata_field, timepoints, tolerance, network_features, unit_features, normalization, useClustered);
+            [group_idx, group_labels_comb] = combineMetadataIndices(rg, culture_array, grouping_var);
+            N_features = size(feature_table,2)/numel(timepoints);
+            N_groups = length(group_labels_comb);
+            jitter = linspace(-1,1,N_groups);
+            c = othercolor('RdBu4',N_groups);
+            fontsz = 8;
+            
+            figure('Color','w','Position',[100 100 1500 1000]);
+            tiledlayout('flow','TileSpacing','tight')
+            for f = 1:N_features
+                nexttile
+                feature_parts = strsplit(feature_table.Properties.VariableNames{f},"_");
+                feature_name = [feature_parts{1:end-1}];
+                feature_matrix = feature_table(:,f:N_features:end).Variables;
+                for g = 1:N_groups
+                    x = timepoints + jitter(g);
+                    xx = linspace(min(x),max(x),100);
+                    data_mat = feature_matrix(group_idx==g,:);
+                    y = mean(data_mat,1,'omitnan');
+                    yy = pchip(x,y,xx);
+                    y_err = std(data_mat,[],1,'omitnan');
+                    plot(xx,yy,'Color',c(g,:),'HandleVisibility','off')
+                    hold on
+                    errorbar(timepoints+jitter(g),y,y_err,...
+                        'LineWidth',1,'Color',c(g,:),'CapSize',0,'LineStyle','none','Marker','o','MarkerSize',2,...
+                        'MarkerFaceColor',c(g,:));
+                    set(gca,'FontSize',fontsz)
+                    marg = get(gca,'ylabel');
+                    set(marg,'Margin',3)
+                end
+                title(feature_name)
+                xlabel(metadata_field)
+                box off
+            end
+            l = legend(group_labels_comb,'Box','off');
+%             l.Position = [0.02 0.8 0.1 0.1];
+        end
+        
+        function [value_array, group_labels_comb] = plot_cluster_densities(rg, level, method, grouping_var, n_bins)
+            arguments
+                rg RecordingGroup
+                level string = "Unit" %Unit, Recording, Culture
+                method string = "UMAP" %dim reduction method: "UMAP","PCA"
+                grouping_var string = "Mutation"
+                n_bins (1,1) {isnumeric} = 100
+            end
+            reduction = rg.DimensionalityReduction.(level).(method).Reduction;
+            metadata_object = rg.DimensionalityReduction.(level).ObjectGroup;
+            [cluster_idx, group_labels_comb] = combineMetadataIndices(rg, metadata_object, grouping_var);
+            N_clust = length(unique(cluster_idx));
+            edges = {linspace(min(reduction(:,1)), max(reduction(:,1)),n_bins) linspace(min(reduction(:,2)), max(reduction(:,2)),n_bins)};
+            value_array = zeros(n_bins,n_bins,N_clust);
+            
+            figure('Color','w');
+            tiledlayout('flow','TileSpacing','compact')
+            for i = 1:N_clust
+                
+                plot_idx = cluster_idx==i;
+                data = [reduction(plot_idx,1),reduction(plot_idx,2)];
+                ax(i) = nexttile;
+                values = hist3(data, edges);
+                value_array(:,:,i) = values;
+%                 values = values.'./length(cluster_idx);
+                imagesc(values);
+                
+                title(group_labels_comb(i))
+                xticks([])
+                yticks([])
+            end
+            arrayfun(@(x) set(x,'CLim',[0 max(value_array,[],'all')]),ax)
+        end
+        
+        function plot_cluster_shifts(rg, value_array, group_labels_comb)
+            arguments
+                rg RecordingGroup
+                value_array double
+                group_labels_comb string
+            end
+            N_clust = size(value_array,3);
+            clust_comp = combvec(1:N_clust,1:N_clust);
+            clust_comp = clust_comp(:,clust_comp(1,:) > clust_comp(2,:));
+            N_data = sum(sum(value_array(:,:,1)));
+            comp_array = zeros(size(value_array));
+            
+            for i = 1:size(clust_comp,2)
+                comp_data = value_array(:,:,clust_comp(2,i)) - value_array(:,:,clust_comp(1,i));
+                comp_array(:,:,i) = comp_data./N_data;
+                ax(i) = nexttile;
+                imagesc(comp_array(:,:,i))
+                title(group_labels_comb(clust_comp(2,i)) + " -> " + group_labels_comb(clust_comp(1,i)))
+                xticks([])
+                yticks([])
+            end
+            max_change = max(abs(comp_array),[],'all')/5;
+            cmap = othercolor('RdBu9',100);
+            colormap(cmap)
+            arrayfun(@(x) set(x,'CLim',[-max_change max_change]),ax)
         end
     end
 end

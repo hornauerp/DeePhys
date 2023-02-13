@@ -1,13 +1,14 @@
 addpath(genpath("/home/phornauer/Git/DeePhys"))
 
 %% Generate sorting_path_list manually
-sorting_path_list = ["/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230106/M05562/well000/sorted",
-    "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230105/M04163/well005/sorted"];
+% sorting_path_list = ["/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230106/M05562/well000/sorted",
+%     "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230105/M04163/well005/sorted"];
 
 %% Generate sorting_path_list automatically
-root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/SCR_rebuttal_week_4/230106";
-path_logic = fullfile("*","w*"); %Each string corresponds to one subdirectory
+root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
+path_logic = {'SCR*','*','*','w*'}; %Each cell corresponds to one subdirectory
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
+fprintf("Generated %i sorting paths\n",length(sorting_path_list))
 
 %% Set parameters values
 emptyRec = MEArecording();
@@ -23,7 +24,7 @@ params.Outlier.Method = []; %No outlier removal
 %%
 rec_array = {};
 
-parfor iPath = 1:length(sorting_path_list)
+parfor (iPath = 1:length(sorting_path_list),12)
     metadata = struct();
     metadata.LookupPath = "/home/phornauer/Git/DeePhys/Data/cellline_lookup.xlsx";
     metadata.InputPath = sorting_path_list(iPath);
@@ -38,25 +39,36 @@ end
 rec_array = [rec_array{:}];
 
 %% Remove MEArecordings without units 
+min_N_units = 20;
 N_units = arrayfun(@(x) length(rec_array(x).Units),1:length(rec_array));
-rec_array(N_units<5) = [];
+rec_array_filtered = rec_array(N_units > min_N_units);
+fprintf("Kept %i out of %i units\n", length(rec_array_filtered),length(rec_array))
 
 %%
-rg_params.Selection.Inclusion = {{'Source','Taylor'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Inclusion = {{'Source','Taylor'},{'Mutation','WT'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+%
 rg_params.Selection.Exclusion = {}; %Cell array of cell arrays with fieldname + value
-rec_group = RecordingGroup(rec_array, rg_params);
+rec_group = RecordingGroup(rec_array_filtered, rg_params);
 
 %%
-dr_method = "PCA";
-dr_level = "Unit";
+dr_level = "Unit"; %Unit or Recording
+dr_method = "UMAP";
 n_dims = 2; %Number of output dimensions
-grouping_var = []; %Has to correspond to a MEArecording metadata field // leave empty to normalize the whole dataset together
-unit_features = ["ReferenceWaveform","ActivityFeatures"];
-rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features);
+unit_features = ["ReferenceWaveform","ActivityFeatures"];%"ReferenceWaveform",
+network_features = "all"; %Only relevant for level = Recording 
+useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
+normalization_var = []; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
+grouping_var = [];%"Timepoint"; %Only relevant when the recording was concatenated and units can be tracked (e.g. Timepoint or DIV)
+grouping_values = nan; %Values corresponding to grouping_var (use nan if you want to use all available values)
+normalization = "baseline"; %"baseline" (divided by first data point) or "scaled" [0 1]
+tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
+rec_group.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, useClustered,...
+                    normalization_var, grouping_var, grouping_values, normalization, tolerance);
 
 %%
 clust_method = "spectral";
 rec_group.clusterByFeatures(dr_method,dr_level,clust_method);
+
 %%
 % figure("Color","w");
 rec_group.plot_cluster_waveforms(clust_method);
@@ -67,8 +79,7 @@ figure("Color","w");
 [cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var);
 
 %%
-figure("Color","w");
-rec_group.plot_dimensionality_reduction(rec_group.DimensionalityReduction.Unit.UMAP.Reduction, cluster_idx)
+rec_group.plot_dimensionality_reduction(rec_group.DimensionalityReduction.Unit.UMAP.Reduction, cluster_idx,group_labels_comb)
 
 %%
 method = "spectral";
@@ -76,16 +87,62 @@ calc_feat = true;
 assignUnitClusterIdx(rec_group,method,calc_feat);
 
 %%
-dr_method = "UMAP";
+dr_method = "tSNE";
 dr_level = "Recording";
 n_dims = 2; %Number of output dimensions
 grouping_var = []; %Has to correspond to a MEArecording metadata field
 unit_features = "all";
-network_features = [];
+network_features = "all";
 useClustered = false;
 rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features, network_features, useClustered);
 
+% %%
+% for i = 1:length(rec_group.Units)
+%    rec_group.Units(i).ActivityFeatures.Properties.VariableNames = ["ISI","VarISI","CVISI","PACF","RFreq","RMag","RFit","SC_" + GetAllFeatureNames];
+% end
+% 
+% for i = 1:length(rec_group.Recordings)
+%     rec_group.Recordings(i).UnitFeatures = rec_group.Recordings(i).aggregateSingleCellFeatures(rec_group.Recordings(i).Units);
+% end
+
 %%
-grouping_var = ["Treatment","Mutation"];
+grouping_var = ["Mutation"];
 figure("Color","w");
 [cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var,50);
+
+%%
+rec_group.plot_dimensionality_reduction(rec_group.DimensionalityReduction.Recording.UMAP.Reduction, cluster_idx,group_labels_comb)
+
+%%
+dr_method = "tSNE";
+dr_level = "Culture";
+n_dims = 2; %Number of output dimensions
+grouping_var = []; %Has to correspond to a MEArecording metadata field
+unit_features = "all";
+network_features = "all";
+useClustered = false;
+cluster_age = [21,28,35];
+rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features, network_features, useClustered, cluster_age);
+
+%%
+grouping_var = ["Mutation","Concentration"];
+figure("Color","w");
+[cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var,50);
+
+
+%% Check for correlations with unit number
+object_group = [rec_group.Recordings];
+input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+N_units = arrayfun(@(x) length(object_group(x).Units),1:length(object_group));
+figure("Color","w");
+for i = 1:size(input_table,2)
+%     mdl = fitlm(N_units,input_table(:,i).Variables);
+    nexttile
+%     plot(mdl)
+    scatter(N_units,input_table(:,i).Variables,10,cluster_idx,'filled')
+    title(input_table.Properties.VariableNames(i))
+    if i ==1
+        ylim([0 0.5])
+        cb = colorbar; cb.TickLabels = group_labels_comb;
+    end
+end

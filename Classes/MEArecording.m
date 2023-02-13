@@ -2,7 +2,7 @@ classdef MEArecording < handle
     
     %%%%%%%TODO%%%%%%%
     % Implement GraphFeatures
-    % Implement clustered UnitFeatures
+    %
     %%%%%%%%%%%%%%%%%%
     
     properties
@@ -46,18 +46,17 @@ classdef MEArecording < handle
                 error("No metadata provided, cannot continue");
             elseif ~isfield(metadata,"InputPath")
                 error("Metadata does not provide InputPath, cannot continue");
-            elseif isfield(metadata,"LookupPath") && isfile(metadata.LookupPath)
+            elseif isfield(metadata,"LookupPath") && ~isempty(metadata.LookupPath) && isfile(metadata.LookupPath)
                 obj.Metadata = obj.retrieveMetadata(metadata);
             else
                 obj.Metadata = metadata;
                 disp("Imported metadata")
             end
             
-            if isfield(metadata,"RecordingDate") && ~isempty(metadata.RecordingDate) && isfield(metadata,"PlatingDate") && ~isempty(metadata.PlatingDate)
-               obj.Metadata.DIV = day(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(obj.Metadata.PlatingDate,"InputFormat","yyMMdd"));
+            if isfield(obj.Metadata,"RecordingDate") && ~isempty(obj.Metadata.RecordingDate) && isfield(obj.Metadata,"PlatingDate") && ~isempty(obj.Metadata.PlatingDate)
+               obj.Metadata.DIV = day(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(num2str(obj.Metadata.PlatingDate),"InputFormat","yyMMdd"));
             end
         end
-        
         
         function parseRecordingInfo(obj)
             obj.RecordingInfo.ElectrodeCoordinates = obj.getElectrodeCoordinates();
@@ -92,7 +91,7 @@ classdef MEArecording < handle
         
         function template_matrix = getTemplateMatrix(obj)
             template_matrix = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
-            template_matrix = template_matrix(obj.Spikes.hasSpikes,:,:);
+%             template_matrix = template_matrix(obj.Spikes.hasSpikes,:,:);
         end
         
         function duration = getRecordingDuration(obj)
@@ -136,21 +135,20 @@ classdef MEArecording < handle
                 obj.getRegularity();
             end
             
+            if obj.Parameters.Analyses.Catch22
+                obj.NetworkFeatures.Catch22 = obj.run_catch_22();
+            end
+            
             if obj.Parameters.Analyses.Bursts
                 obj.getBurstStatistics();
             end
             
-            if obj.Parameters.Analyses.Connectivity.CCG
-                obj.inferConnectivityCCG();
-            end
-            
-            if obj.Parameters.Analyses.Connectivity.DDC
-                obj.inferConnectivityDDC();
-            end
+            obj.inferConnectivity(obj.Parameters.Analyses.Connectivity);
         end
        
         function [max_amplitudes, reference_electrode, norm_wf_matrix] = generateWaveformMatrix(obj)
             template_matrix = obj.getTemplateMatrix();
+            template_matrix = template_matrix(:,sum(template_matrix,[1,3],'omitnan')~=0,:); %Remove all zero paddings
             [max_amplitudes, max_idx] = min(template_matrix,[],[2,3],'linear');
             max_amplitudes = abs(max_amplitudes * obj.Parameters.QC.LSB);
             [~,~,reference_electrode] = ind2sub(size(template_matrix),max_idx);
@@ -159,20 +157,30 @@ classdef MEArecording < handle
             norm_wf_matrix = peak_wf_matrix./max(abs(peak_wf_matrix));
         end
         
-        function [firing_rates, unit_spike_times] = calculateFiringRates(obj)
+        function [firing_rates, unit_spike_times] = calculateFiringRates(obj, N_units)
             [spike_times, spike_units] = obj.getSpikeTimes();
-            G = findgroups(spike_units); % To prevent error from unit_ids without corresponding spikes
-            unit_spike_times = splitapply(@(x) {x}, spike_times, G);
+            unit_spike_times = arrayfun(@(x) spike_times(spike_units == x), 1:N_units,'un',0);
             firing_rates = cellfun(@length, unit_spike_times)/obj.RecordingInfo.Duration;
         end
         
         function good_units = performUnitQC(obj, max_amplitudes, firing_rates, unit_spike_times, norm_wf_matrix)
+            bad_power = checkPower(obj, norm_wf_matrix);
             bad_amplitude = checkAmplitude(obj, max_amplitudes);
             bad_firing_rate = checkFiringRate(obj,firing_rates);
             bad_rpv = checkRefractoryPeriodViolations(obj, unit_spike_times);
             [is_axonal, is_noisy] = checkWaveform(obj, norm_wf_matrix);
-            good_units = ~(bad_amplitude | bad_firing_rate | bad_rpv | is_axonal | is_noisy);
+            good_units = ~(bad_power | bad_amplitude | bad_firing_rate | bad_rpv | is_axonal | is_noisy);
             fprintf('Found %i/%i good units\n',sum(good_units),length(good_units))
+        end
+        
+        function bad_power = checkPower(obj, norm_wf_matrix)
+            
+            n = size(norm_wf_matrix,1);
+            y = fft(norm_wf_matrix);
+            power = abs(y).^2/n;
+            max_p = max(power)';
+            bad_power = max_p > 1.5;obj.Parameters.QC.PowerCutoff;
+            fprintf('Found %i units with bad power\n',sum(bad_power))
         end
         
         function bad_amplitude = checkAmplitude(obj, max_amplitudes)
@@ -230,7 +238,7 @@ classdef MEArecording < handle
         
         function waveform_features = inferWaveformFeatures(obj,max_amplitudes, norm_wf_matrix)
             interpolation_factor = 10;
-            ms_conversion = (obj.RecordingInfo.SamplingRate / 1000) * interpolation_factor;
+            ms_conversion = 10 * interpolation_factor; %Need to find a way to automate that, maybe 10/ms is standard for Ph?(obj.RecordingInfo.SamplingRate / 1000) * interpolation_factor;
             x = 1:size(norm_wf_matrix,1);
             xq = 1:(1/interpolation_factor):size(norm_wf_matrix,1);
             interp_wf_matrix = double(interp1(x,norm_wf_matrix,xq,'pchip'));
@@ -252,6 +260,7 @@ classdef MEArecording < handle
                 unit_features = struct();
                 zc = [1 unit_zero_crossings{u}' length(xq)];
                 [~,zc_pre_trough] = max(zc(zc<unit_trough_idx(u))); %Find zero crossing towards the trough
+                zc_pre_trough = max([zc_pre_trough 2]);
                 unit_features.AUC_peak_1 = trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough)));
                 unit_features.AUC_trough = abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1))));
                 unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2)));
@@ -259,11 +268,11 @@ classdef MEArecording < handle
                 %calculations
                 rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_idx(u),u);
                 padded_rise = [ones(100,1)*rise_cutout(1); rise_cutout; ones(100,1)*rise_cutout(end)];
-                unit_features.Rise = slewrate(padded_rise);
+                unit_features.Rise = mean(slewrate(padded_rise,interpolation_factor));
                 decay_cutout = interp_wf_matrix(peak_2_idx(u):end,u);
                 decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout)));
                 padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
-                unit_features.Decay = mean(slewrate(padded_decay,10));
+                unit_features.Decay = mean(slewrate(padded_decay,interpolation_factor));
                 unit_features.Asymmetry = asymmetry(u);
                 unit_features.T2Pdelay = t2pdelay(u);
                 unit_features.T2Pratio = t2pratio(u);
@@ -287,11 +296,11 @@ classdef MEArecording < handle
                 waveform_table = vertcat(unit_array.WaveformFeatures);
                 
                 if ~isempty(obj.Parameters.Outlier.Method)
-                    act_means = mean(rmoutliers(activity_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
-                    wf_means = mean(rmoutliers(waveform_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),"omitnan");
+                    act_means = mean(rmoutliers(activity_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),1,"omitnan");
+                    wf_means = mean(rmoutliers(waveform_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),1,"omitnan");
                 else
-                    act_means = mean(activity_table.Variables,"omitnan");
-                    wf_means = mean(waveform_table.Variables,"omitnan");
+                    act_means = mean(activity_table.Variables,1,"omitnan");
+                    wf_means = mean(waveform_table.Variables,1,"omitnan");
                 end
                 aggregated_struct.ActivityFeatures = array2table(act_means,"VariableNames",activity_table.Properties.VariableNames);
                 aggregated_struct.WaveformFeatures = array2table(wf_means,"VariableNames",waveform_table.Properties.VariableNames);
@@ -402,24 +411,26 @@ classdef MEArecording < handle
     
     methods (Static)
         
-        function ParentPath = getParentPath()
+        function ParentPath = getParentPath() %% Does not work when parallelized (e.g. parfor)
             ParentPath = fileparts(fileparts(which('MEArecording')));
         end
         
         function metadata_struct = retrieveMetadata(metadata)
             arguments
                 metadata struct
+                % Needs to contain indices for the path part that represents (in that order) 
+                % metadata.PathPartIndex = [recording_date, plate_id, well_id]
             end
             
+            metadata_struct = metadata;
             path_parts = strsplit(metadata.InputPath,"/");
-            recording_date = path_parts(end-3);
+            recording_date = path_parts(metadata.PathPartIndex(1));
             metadata_struct.RecordingDate = recording_date;
-            plate_id = path_parts(end-2);
-            well_id = char(path_parts(end-1));
+            plate_id = path_parts(metadata.PathPartIndex(2));
+            well_id = char(path_parts(metadata.PathPartIndex(3)));
             well_id = well_id(end);
             chip_id = plate_id + "_" + well_id;
             metadata_struct.ChipID = chip_id;
-            metadata_struct.InputPath = metadata.InputPath;
             info_table = readtable(metadata.LookupPath,"ReadVariableNames",true);
             for ids = 1:size(info_table,1)
                 chip_ids = strsplit(info_table.Chip_IDs{ids},",");
@@ -444,12 +455,12 @@ classdef MEArecording < handle
             defaultParams.Analyses.SingleCell = true;
             defaultParams.Analyses.Regularity = true;
             defaultParams.Analyses.Bursts = true;
-            defaultParams.Analyses.Connectivity.CCG = false;
-            defaultParams.Analyses.Connectivity.DDC = true;
+            defaultParams.Analyses.Connectivity = ["DDC"]; %"CCG","STTC" also implemented // can take several methods
+            defaultParams.Analyses.Catch22 = true;
             
             % Parameters for outlier detection 
             defaultParams.Outlier.Method = "median"; %Method as defined by Matlab's rmoutliers() function // set to [] to skip outlier detection
-            defaultParams.Outlier.ThresholdFactor = 3; %Corresponding threshold
+            defaultParams.Outlier.ThresholdFactor = 5; %Corresponding threshold
             
             % Parameters for the unit quality control (QC)
             defaultParams.QC.LSB = 6.2; %Factor by which to multiply voltage data
@@ -459,14 +470,19 @@ classdef MEArecording < handle
             defaultParams.QC.Axon = 0.8; %Ratio (positive amplitude)/ (maximum amplitude) to be considered axonal
             defaultParams.QC.Noise = 14; % # of sign changes for the waveform derivative ("up-and-down" waveform)
             defaultParams.QC.NoiseCutout = [-1 1]; % [ms] before and after peak to be considered for noise detection
-            defaultParams.QC.N_Units = 5; % Minimum number of units that need to pass the QC to continue with the analysis
+            defaultParams.QC.PowerCutoff = 1.3; % Maximum allowed power of the fourier transform of the reference waveform (excludes oscillating noise units)
+            defaultParams.QC.N_Units = 10; % Minimum number of units that need to pass the QC to continue with the analysis
+            defaultParams.QC.GoodUnits = []; % Units to keep if some previous analyses already determined good units IDs (e.g. manual curation, KS good units)
+                                             % Skips the actual QC if not empty
             
             % Parameters for the burst detection
-            defaultParams.Bursts.N = 0.9; %0.0015; %Number of spikes in bursts (if < 1 used as a percentage of the mean network firing rate)
-            defaultParams.Bursts.N_min = 65; %Minimum value for N if used as a ratio (N < 1)
-            defaultParams.Bursts.ISI_N = 1.5; %Relates to minimum burst length [s]
-            defaultParams.Bursts.Merge_t = 2; % Maximum ratio of IBI/BD to merge bursts to prevent oversplitting
-            defaultParams.Bursts.Binning = 0.1;
+%             defaultParams.Bursts.N = 0.9; %0.0015; %Number of spikes in bursts (if < 1 used as a percentage of the mean network firing rate)
+%             defaultParams.Bursts.N_min = 90; %Minimum value for N if used as a ratio (N < 1) 65
+            defaultParams.Bursts.Skewness_TH = 2;   % Relates to the skewness of the binned (binsize = ISI_N) network activity distribution // below that threshold, N_units is used as N
+                                                    % Above the skewness is used as the outlier detection ThresholdFactor
+            defaultParams.Bursts.ISI_N = 1; %Relates to minimum burst length [s]
+            defaultParams.Bursts.Merge_t = 2; % Maximum ratio of IBI/ISI_N to merge bursts to prevent oversplitting
+            defaultParams.Bursts.Binning = 0.1; %in [s] 0.1 = 100ms
             
             % Parameters for the burst detection
             defaultParams.Regularity.Binning = 0.1; %Binning to compute regularity features
@@ -482,20 +498,38 @@ classdef MEArecording < handle
             defaultParams.DDC.BinSize = .001; %1ms
             defaultParams.DDC.Threshold = 0; %ReLU treshold
             
+            % Parameters for STTC calculation
+            defaultParams.STTC
+            
+            % Parameters for catch 22 calculation
+            defaultParams.Catch22.BinSize = .1; %100ms
+            
         end
+        
     end
     
     methods 
         
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       %Analyses
+       % Analyses
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
        function unit_array = generateUnits(obj)
-           [firing_rates, unit_spike_times] = obj.calculateFiringRates();
            [max_amplitudes, reference_electrode, norm_wf_matrix] = obj.generateWaveformMatrix();
+           [firing_rates, unit_spike_times] = obj.calculateFiringRates(length(max_amplitudes));
            
-           good_units = performUnitQC(obj, max_amplitudes, firing_rates, unit_spike_times, norm_wf_matrix);
+           
+           if isempty(obj.Parameters.QC.GoodUnits)
+               good_units = performUnitQC(obj, max_amplitudes, firing_rates', unit_spike_times', norm_wf_matrix);
+               obj.Parameters.QC.GoodUnits = good_units;
+           else
+               good_units = obj.Parameters.QC.GoodUnits;
+               if length(good_units) ~= length(firing_rates)
+                   error("Good unit IDs do not match. Did you use the correct ones?")
+               end
+               fprintf('Kept the %i good units provided\n', sum(good_units))
+           end
+           
            if sum(good_units) >= obj.Parameters.QC.N_Units
                good_amplitudes = max_amplitudes(good_units);
                good_unit_spike_times = unit_spike_times(good_units);
@@ -505,12 +539,28 @@ classdef MEArecording < handle
                for u = 1:length(waveform_features)
                    unit_array(u) = Unit(obj, good_wf_matrix(:,u), reference_electrode(u), good_unit_spike_times{u}, waveform_features{u});
                end
+               no_act_idx = arrayfun(@(x) isempty(x.ActivityFeatures),unit_array);
+               act_table = vertcat(unit_array.ActivityFeatures);
+               empty_table = array2table(zeros(1,size(act_table,2)),'VariableNames',act_table.Properties.VariableNames);
+               [unit_array(no_act_idx).ActivityFeatures] = deal(empty_table);
                obj.Units = unit_array;
                obj.updateSpikeTimes();
            else
                warning("Not enough good units found")
            end
        end
+       
+       function catch_22_table = run_catch_22(obj, spike_train, bin_size)
+            arguments
+                obj MEArecording
+                spike_train (1,:) double = obj.Spikes.Times % in seconds
+                bin_size (1,1) double = obj.Parameters.Catch22.BinSize
+            end
+            n_bins = round(max(spike_train) / bin_size);
+            binned = histcounts(spike_train,n_bins);
+            [featureValues, featureNames] = catch22_all(binned');
+            catch_22_table = array2table(featureValues','VariableNames',featureNames);
+        end
        
        function getRegularity(obj)
            binned_network_activity = histcounts(obj.Spikes.Times,'BinLimits',[0 obj.RecordingInfo.Duration],'BinWidth',obj.Parameters.Regularity.Binning);
@@ -551,72 +601,115 @@ classdef MEArecording < handle
        end
        
        function Burst = detectBursts(obj)
-           if obj.Parameters.Bursts.N < 1
-               N = ceil((length(obj.Spikes.Times) / obj.RecordingInfo.Duration) * obj.Parameters.Bursts.N);
+           %            if obj.Parameters.Bursts.N < 1
+           %                N = ceil((length(obj.Spikes.Times) / obj.RecordingInfo.Duration) * obj.Parameters.Bursts.N);
+           %            else
+           %                N = obj.Parameters.Bursts.N;
+           %            end
+           
+           %            N = max([obj.Parameters.Bursts.N_min N]); %Minimum of 65 spikes per burst // empirical minimum
+           ISI_N = obj.Parameters.Bursts.ISI_N;%(N > obj.Parameters.Bursts.N_min) * 0.5 + 1; %Reduce ISI_N if N = 65
+           N_units = length(unique(obj.Spikes.Units));
+           binned = histcounts(obj.Spikes.Times,0:ISI_N:obj.RecordingInfo.Duration);
+           
+           skew = skewness(binned);
+           if skew > obj.Parameters.Bursts.Skewness_TH
+               th = min([skew 3]);
+               right_outliers = binned(isoutlier(binned,'mean','ThresholdFactor',th) & binned > mean(binned));
+               N = min(right_outliers);
            else
-               N = obj.Parameters.Bursts.N;
+               N = N_units;
            end
            
-           N = max([obj.Parameters.Bursts.N_min N]); %Minimum of 65 spikes per burst // empirical minimum
-           %             ISI_N = (N > 65) * 0.5 + 1; %Reduce ISI_N if N = 65
-           ISI_N = obj.Parameters.Bursts.ISI_N;
            IBI_merge = obj.Parameters.Bursts.Merge_t * ISI_N;
            Burst = detectBurstsISIN(obj, N, ISI_N);
            N_bursts = length(Burst.T_start);
            
-%            Merge bursts with too short IBIs (< IBI_merge)
-           short_burst_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1)> IBI_merge);
-           Burst.T_start = Burst.T_start([1 short_burst_idx+1]);
-           Burst.T_end = Burst.T_end([short_burst_idx length(Burst.T_end)]);
-           fprintf('Merged %i bursts\n', N_bursts - length(Burst.T_start))
+           if N_bursts > 1
+               %            Merge bursts with too short IBIs (< IBI_merge)
+               short_burst_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1)> IBI_merge);
+               Burst.T_start = Burst.T_start([1 short_burst_idx+1]);
+               Burst.T_end = Burst.T_end([short_burst_idx length(Burst.T_end)]);
+               fprintf('Merged %i bursts\n', N_bursts - length(Burst.T_start))
+           end
            obj.Bursts = Burst;
+%            obj.PlotBurstCheck(); title("Skew = " + num2str(skew) + "/  N = " + num2str(N) + "/  Units = " + num2str(N_units))
        end
        
        function getBurstStatistics(obj)
-          if isempty(obj.Bursts)
-              detectBursts(obj);
+           if isempty(obj.Bursts) %Burst detection was not performed
+               detectBursts(obj);
+           end
+           if length(obj.Bursts.T_start) < 2 %No bursts were detected
+               Burst.MeanInterBurstInterval = 0;
+               Burst.MeanBurstDuration = 0;
+               Burst.MeanRiseTime = 0;
+               Burst.MeanFallTime = 0;
+               Burst.MeanRiseVelocity = 0;
+               Burst.MeanDecayVelocity = 0;
+               Burst.VarianceBurstDuration = 0;
+               Burst.VarianceInterBurstInterval = 0;
+               Burst.IntraBurstFiringRate = 0;
+               Burst.InterBurstFiringRate = 0;
+           else
+               IBIs = obj.Bursts.T_start(2:end) - obj.Bursts.T_end(1:end-1);
+               BDs = obj.Bursts.T_end - obj.Bursts.T_start;
+               
+               [RiseTime, FallTime, RiseRate, FallRate] = deal(nan(1,length(BDs)));
+               Fs = round(1/obj.Parameters.Bursts.Binning);
+               inburst_spikes = 0;
+               for iburst = 1:length(BDs)
+                   burst_activity = obj.Spikes.Times(obj.Spikes.Times <= obj.Bursts.T_end(iburst) & obj.Spikes.Times >= obj.Bursts.T_start(iburst));
+                   binned_activity = histcounts(burst_activity,'BinWidth',obj.Parameters.Bursts.Binning);
+                   [max_binned, imax_binned] = max(binned_activity);
+                   norm_activity = binned_activity/max_binned;
+                   pre_lower_level = min(norm_activity(1:imax_binned));
+                   post_lower_level = min(norm_activity(imax_binned:end));
+                   % Using mean to account for the rare case where rise/fall is split
+                   RiseTime(iburst) = mean(risetime([ones(1,Fs)*pre_lower_level norm_activity(1:imax_binned) ones(1,Fs)],Fs));
+                   FallTime(iburst) = mean(falltime([ones(1,Fs) norm_activity(imax_binned:end) ones(1,Fs)*post_lower_level],Fs));
+                   RiseRate(iburst) = 0.8/RiseTime(iburst);
+                   FallRate(iburst) = 0.8/FallTime(iburst);
+                   inburst_spikes = inburst_spikes + length(burst_activity);
+               end
+               
+               cellfun_input = {IBIs, BDs, RiseTime, FallTime, RiseRate, FallRate};
+               
+               % Perform outlier removal if method is specified
+               if ~isempty(obj.Parameters.Outlier.Method)
+                   cellfun_input = cellfun(@(x) rmoutliers(x,obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),...
+                       cellfun_input,'un',0);
+               end
+               feature_means = cellfun(@mean, cellfun_input,'un',0);
+               
+               [Burst.MeanInterBurstInterval,...
+                   Burst.MeanBurstDuration,...
+                   Burst.MeanRiseTime,...
+                   Burst.MeanFallTime,...
+                   Burst.MeanRiseVelocity,...
+                   Burst.MeanDecayVelocity] = feature_means{:};
+               Burst.VarianceBurstDuration = var(BDs);
+               Burst.VarianceInterBurstInterval = var(IBIs);
+               Burst.IntraBurstFiringRate = inburst_spikes/obj.RecordingInfo.Duration;
+               Burst.InterBurstFiringRate = (length(obj.Spikes.Times) - inburst_spikes)/obj.RecordingInfo.Duration;
+           end
+           obj.NetworkFeatures.Burst = struct2table(Burst);
+       end
+       
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       % Connectivity functions
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       
+       function inferConnectivity(obj, alg)
+          arguments
+             obj MEArecording
+             alg (1,:) string %CCG (English et al.), DDC ( et al.), STTC (Cutts et al.) // can also be several 
           end
           
-          IBIs = obj.Bursts.T_start(2:end) - obj.Bursts.T_end(1:end-1);
-          BDs = obj.Bursts.T_end - obj.Bursts.T_start;
-          
-          [RiseTime, FallTime, RiseRate, FallRate] = deal(nan(1,length(BDs)));
-          Fs = round(1/obj.Parameters.Bursts.Binning);
-          inburst_spikes = 0;
-          for iburst = 1:length(BDs)
-              burst_activity = obj.Spikes.Times(obj.Spikes.Times <= obj.Bursts.T_end(iburst) & obj.Spikes.Times >= obj.Bursts.T_start(iburst));
-              binned_activity = histcounts(burst_activity,'BinWidth',obj.Parameters.Bursts.Binning);
-              [max_binned, imax_binned] = max(binned_activity);
-              norm_activity = binned_activity/max_binned;
-              pre_lower_level = min(norm_activity(1:imax_binned));
-              post_lower_level = min(norm_activity(imax_binned:end));
-              % Using mean to account for the rare case where rise/fall is split
-              RiseTime(iburst) = mean(risetime([ones(1,Fs)*pre_lower_level norm_activity(1:imax_binned) ones(1,Fs)],Fs)); 
-              FallTime(iburst) = mean(falltime([ones(1,Fs) norm_activity(imax_binned:end) ones(1,Fs)*post_lower_level],Fs));
-              RiseRate(iburst) = 0.8/RiseTime(iburst);
-              FallRate(iburst) = 0.8/FallTime(iburst);
-              inburst_spikes = inburst_spikes + length(burst_activity);
+          for a = 1:length(alg)
+             fh = str2func("inferConnectivity" + alg(a));
+             fh(obj);
           end
-          
-          cellfun_input = {IBIs, BDs, RiseTime, FallTime, RiseRate, FallRate};
-          
-          % Perform outlier removal if method is specified
-          if ~isempty(obj.Parameters.Outlier.Method)
-              cellfun_input = cellfun(@(x) rmoutliers(x,obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),...
-                  cellfun_input,'un',0);
-          end
-          feature_means = cellfun(@mean, cellfun_input,'un',0);
-          [Burst.MeanInterBurstInterval,...
-              Burst.MeanBurstDuration,...
-              Burst.MeanRiseTime,...
-              Burst.MeanFallTime,...
-              Burst.MeanRiseVelocity,...
-              Burst.MeanDecayVelocity] = feature_means{:};
-          Burst.VarianceBurstDuration = var(BDs);
-          Burst.VarianceInterBurstInterval = var(IBIs);
-          Burst.IntraBurstFiringRate = inburst_spikes/obj.RecordingInfo.Duration;
-          Burst.InterBurstFiringRate = (length(obj.Spikes.Times) - inburst_spikes)/obj.RecordingInfo.Duration;
-          obj.NetworkFeatures. Burst = struct2table(Burst);
        end
        
        function [ccg,t] = calculateCCGs(obj)
@@ -763,7 +856,7 @@ classdef MEArecording < handle
            V_obs = zeros(obj.RecordingInfo.Duration * round(1/obj.Parameters.DDC.BinSize),length(obj.Units));
            spiketimes_ms = round(obj.Spikes.Times * 1000);
            V_obs(sub2ind(size(V_obs), spiketimes_ms, obj.Spikes.Units)) = 1;
-           V_obs = smoothdata(V_obs,'gaussian',3);
+%            V_obs = smoothdata(V_obs,'gaussian',3);
            [~,N] = size(V_obs);
            % 	Cov = cov(V_obs);
            % 	precision = inv(Cov);
@@ -777,6 +870,14 @@ classdef MEArecording < handle
            dCov = tmp(1:N,N+1:end);
            obj.Connectivity.DDC = dCov * inv(B);
        end
+       
+       function inferConnectivitySTTC(obj)
+           
+       end
+       
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       % Feature value retrieval
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
        function merged_table = concatenateClusteredFeatures(obj,cluster_id, feature_group)
            arguments
@@ -868,6 +969,10 @@ classdef MEArecording < handle
                obj MEArecording
                unit_features string = ["ReferenceWaveform","ActivityFeatures"] %Alternatively WaveformFeatures
            end
+           if unit_features == "all"
+               unit_features = ["ActivityFeatures","WaveformFeatures"];
+           end
+           
            unit_array = [obj.Units];
            feature_tables = {};
            for f = 1:length(unit_features)
@@ -884,7 +989,7 @@ classdef MEArecording < handle
        end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       %Plots
+       % Plots
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
        function PlotNetworkScatter(obj)
@@ -904,13 +1009,15 @@ classdef MEArecording < handle
        end
        
        function PlotBurstCheck(obj)
-           figure('Color','w');
-           histogram(obj.Spikes.Times,'BinWidth',obj.Parameters.Bursts.Binning,'DisplayStyle','stairs')
-           if ~isempty(obj.Bursts)
+%            binned = histcounts(obj.Spikes.Times,0:1:ceil(obj.RecordingInfo.Duration));
+           figure('Color','w','Position',[100 500 1500 500]);
+           histogram(obj.Spikes.Times,'BinWidth',obj.Parameters.Bursts.Binning,'DisplayStyle','stairs')%obj.Parameters.Bursts.Binning
+%            plot((1:ceil(obj.RecordingInfo.Duration))-0.5,binned)
+           if ~isempty(obj.Bursts.T_start)
                hold on
                xline(obj.Bursts.T_start,'g--','LineWidth',1,'Label','Start','LabelHorizontalAlignment','center')
                xline(obj.Bursts.T_end,'r--','LineWidth',1,'Label','End','LabelHorizontalAlignment','center')
-           else
+           elseif isempty(obj.Bursts)
                warning('No burst data found. Run obj.detectBursts() first')
            end
            box off
