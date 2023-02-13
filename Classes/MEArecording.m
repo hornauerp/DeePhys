@@ -407,6 +407,34 @@ classdef MEArecording < handle
                 MaxBurstNumber,run_time,diff(obj.Spikes.Times([1 end]))/60);
         end
         
+        function empirical_sttc = empiricalSTTCmatrix(obj)
+            empirical_sttc = nan(length(obj.Units));
+            for i = 1:length(obj.Units)
+                N1v = length(obj.Units(i).SpikeTimes);
+                for j = 1:length(obj.Units)
+                    if i ~= j
+                        N2v = length(obj.Units(j).SpikeTimes);
+                        empirical_sttc(i,j) = sttc(N1v, N2v, obj.Parameters.STTC.MaxLag, [0 obj.RecordingInfo.Duration], obj.Units(i).SpikeTimes, obj.Units(j).SpikeTimes);
+                    end
+                end
+            end
+            empirical_sttc(1:length(empirical_sttc)+1:end)=0;
+        end
+        
+        function surrogate_sttc = surrogateSTTCmatrix(obj)
+            spks_data = convert2asd2(obj.Spikes.Times, obj.Spikes.Units, obj.RecordingInfo.SamplingRate);
+            spks_rand = randomizeasdf2(spks_data, obj.Parameters.STTC.SurrogateMethod);
+            surrogate_sttc = nan(spks_data.nchannels);
+            for i = 1:spks_data.nchannels
+                spike_times_1 = double(spks_rand.raster{i})/obj.RecordingInfo.SamplingRate;
+                N1v = length(spike_times_1);
+                for j = 1:spks_data.nchannels
+                    spike_times_2 = double(spks_rand.raster{j})/obj.RecordingInfo.SamplingRate;
+                    N2v = length(spike_times_2);
+                    surrogate_sttc(i,j) = sttc(N1v, N2v, obj.Parameters.STTC.MaxLag, [0 obj.RecordingInfo.Duration], spike_times_1, spike_times_2);
+                end
+            end
+        end
     end
     
     methods (Static)
@@ -495,14 +523,17 @@ classdef MEArecording < handle
             defaultParams.CCG.Alpha = 0.001; %Threshold for significance testing
             
             % Parameters for DDC calculation
-            defaultParams.DDC.BinSize = .001; %1ms
+            defaultParams.DDC.BinSize = .001; %in seconds //1ms
             defaultParams.DDC.Threshold = 0; %ReLU treshold
             
             % Parameters for STTC calculation
-            defaultParams.STTC
+            defaultParams.STTC.MaxLag = .05; %in seconds
+            defaultParams.STTC.SurrogateMethod = 'jitter';
+            defaultParams.STTC.N_Surrogates = 100;
+            defaultParams.STTC.Percentile = 95;
             
             % Parameters for catch 22 calculation
-            defaultParams.Catch22.BinSize = .1; %100ms
+            defaultParams.Catch22.BinSize = .1;%in seconds //100ms
             
         end
         
@@ -835,10 +866,10 @@ classdef MEArecording < handle
            for i = 1:size(sig_con_inh,1)
                con_mat(sig_con_inh(i,1),sig_con_inh(i,2)) = -1;
            end
-           obj.Connectivity.CCGResults.ExcitatoryConnection = sig_con;
-           obj.Connectivity.CCGResults.InhibitoryConnection = sig_con_inh;
-           obj.Connectivity.CCGResults.ConnectivityMatrix = con_mat;
-           obj.Connectivity.CCGResults.CCGs = ccgR;
+           obj.Connectivity.CCG.ExcitatoryConnection = sig_con;
+           obj.Connectivity.CCG.InhibitoryConnection = sig_con_inh;
+           obj.Connectivity.CCG.bd = con_mat;
+           obj.Connectivity.CCG.CCGs = ccgR;
        end
        
        function inferConnectivityDDC(obj)%[Cov,precision,B,dCov]
@@ -868,11 +899,19 @@ classdef MEArecording < handle
            dV = [mean(dV);dV;mean(dV)]; % substitute the first and last row with mean
            tmp = cov([dV V_obs]);
            dCov = tmp(1:N,N+1:end);
-           obj.Connectivity.DDC = dCov * inv(B);
+           obj.Connectivity.DDC.wu = dCov * inv(B);
        end
        
        function inferConnectivitySTTC(obj)
-           
+           empirical_sttc = obj.empiricalSTTCmatrix();
+           surrogate_mat= nan([size(empirical_sttc), obj.Parameters.STTC.N_Surrogates]);
+           for i = 1:obj.Parameters.STTC.N_Surrogates
+               surrogate_mat(:,:,i) = obj.surrogateSTTCmatrix();
+           end
+           STTC.threshold = prctile(surrogate_mat,obj.Parameters.STTC.Percentile,3);
+           STTC.wu = empirical_sttc;
+           STTC.bu = STTC.wu > STTC.threshold;
+           obj.Connectivity.STTC = STTC;
        end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -1050,9 +1089,21 @@ classdef MEArecording < handle
            xticklabels([-x_max 0 x_max])
        end
        
-       function indsort = communityPlot(con_mat,flag)
+       function indsort = communityPlot(obj,method,matrix,flag)
+           arguments
+               obj MEArecording
+               method string %"DDC","STTC","CCG"
+               matrix string = "wu" %"wu" or "bu"
+               flag logical = 1
+           end
            %flag indicates if squares are drawnaround communities
            % M     = community_louvain(con_mat,0.0001,[],'negative_asym');
+           if ~isfield(obj.Connectivity.(method), matrix)
+               warning("No results available, running inference...")
+               obj.inferConnectivity(method);
+               disp("Inference done")
+           end
+           con_mat = obj.Connectivity.(method).(matrix);
            M = modularity_dir(con_mat,100);
            [X,Y,indsort] = grid_communities(M);
            imagesc(con_mat(indsort,indsort))
