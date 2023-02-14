@@ -422,7 +422,7 @@ classdef MEArecording < handle
         end
         
         function surrogate_sttc = surrogateSTTCmatrix(obj)
-            spks_data = convert2asd2(obj.Spikes.Times, obj.Spikes.Units, obj.RecordingInfo.SamplingRate);
+            spks_data = convert2asdf2(obj.Spikes.Times, obj.Spikes.Units, obj.RecordingInfo.SamplingRate);
             spks_rand = randomizeasdf2(spks_data, obj.Parameters.STTC.SurrogateMethod);
             surrogate_sttc = nan(spks_data.nchannels);
             for i = 1:spks_data.nchannels
@@ -915,6 +915,27 @@ classdef MEArecording < handle
        end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       % Graph features
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+       
+       function inferGraphFeatures(obj, alg)
+          arguments
+             obj MEArecording
+             alg (1,:) string = "all" %Connectivity inference algorithms to compute graphs for
+          end
+          
+          if alg == "all" %Compute features for all available inferred graphs
+              alg = string(fields(obj.Connectivity));
+              assert(~isempty(alg),"No connectivity inference results found")
+          end
+          
+          for a = 1:length(alg)
+             assert(isfield(obj.Connectivity,alg(a)),"No connectivity inference results found")
+             
+          end
+       end
+       
+       %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        % Feature value retrieval
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
@@ -1089,7 +1110,7 @@ classdef MEArecording < handle
            xticklabels([-x_max 0 x_max])
        end
        
-       function indsort = communityPlot(obj,method,matrix,flag)
+       function PlotCommunity(obj,method,matrix,flag)
            arguments
                obj MEArecording
                method string %"DDC","STTC","CCG"
