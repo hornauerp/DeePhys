@@ -1,8 +1,7 @@
 classdef MEArecording < handle
     
     %%%%%%%TODO%%%%%%%
-    % Implement GraphFeatures
-    %
+    % 
     %%%%%%%%%%%%%%%%%%
     
     properties
@@ -33,6 +32,7 @@ classdef MEArecording < handle
                 mearec.parseRecordingInfo();
                 mearec.parseParameters(parameters);
                 mearec.performAnalyses();
+                mearec.saveObject();
             end
         end
                 
@@ -144,6 +144,22 @@ classdef MEArecording < handle
             end
             
             obj.inferConnectivity(obj.Parameters.Analyses.Connectivity);
+        end
+        
+        function saveObject(obj)
+            if obj.Parameters.Save.Flag
+                if isempty(obj.Parameters.Save.Path)
+                    save_path = fullfile(obj.Metadata.InputPath, 'MEArecording.mat');
+                else
+                    save_path = fullfile(obj.Parameters.Save.Path, 'MEArecording.mat');
+                end
+                
+                if exist(save_path,'file') && ~obj.Parameters.Save.Overwrite
+                    return
+                else
+                    save(save_path, "obj")
+                end
+            end
         end
        
         function [max_amplitudes, reference_electrode, norm_wf_matrix] = generateWaveformMatrix(obj)
@@ -534,6 +550,11 @@ classdef MEArecording < handle
             
             % Parameters for catch 22 calculation
             defaultParams.Catch22.BinSize = .1;%in seconds //100ms
+            
+            % Parameters for saving
+            defaultParams.Save.Flag = false; %Flag if file should be save after analyses
+            defaultParams.Save.Path = []; %Save path, if empty it uses the sorting path
+            defaultParams.Save.Overwrite = false; %Flag if an existing file should be overwritten
             
         end
         

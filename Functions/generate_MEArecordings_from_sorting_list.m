@@ -10,7 +10,7 @@ end
 
 rec_array = {};
 if parallel
-    parfor (iPath = 1:length(sorting_path_list),12)
+    parfor (iPath = 1:length(sorting_path_list),24)
         metadata = struct();
         metadata.LookupPath = lookup_path;
         metadata.InputPath = sorting_path_list(iPath);
@@ -19,7 +19,8 @@ if parallel
         if exist(temp_file,"file")
             spk_temp = readNPY(temp_file);
             if length(unique(spk_temp)) > min_N_units
-                rec_array{iPath} = MEArecording(metadata, params);
+                rec = MEArecording(metadata, params);
+                rec_array{iPath} = rec;
             end
         end
     end
