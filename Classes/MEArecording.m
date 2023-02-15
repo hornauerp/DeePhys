@@ -408,32 +408,32 @@ classdef MEArecording < handle
         end
         
         function empirical_sttc = empiricalSTTCmatrix(obj)
-            empirical_sttc = nan(length(obj.Units));
-            for i = 1:length(obj.Units)
+            empirical_sttc = zeros(length(obj.Units));
+            for i = 1:length(obj.Units)-1
                 N1v = length(obj.Units(i).SpikeTimes);
-                for j = 1:length(obj.Units)
-                    if i ~= j
+                for j = (i+1):length(obj.Units)
                         N2v = length(obj.Units(j).SpikeTimes);
                         empirical_sttc(i,j) = sttc(N1v, N2v, obj.Parameters.STTC.MaxLag, [0 obj.RecordingInfo.Duration], obj.Units(i).SpikeTimes, obj.Units(j).SpikeTimes);
-                    end
+                    
                 end
             end
-            empirical_sttc(1:length(empirical_sttc)+1:end)=0;
+            empirical_sttc = empirical_sttc+triu(empirical_sttc,-1).'; %Make matrix symmetric
         end
         
         function surrogate_sttc = surrogateSTTCmatrix(obj)
             spks_data = convert2asdf2(obj.Spikes.Times, obj.Spikes.Units, obj.RecordingInfo.SamplingRate);
             spks_rand = randomizeasdf2(spks_data, obj.Parameters.STTC.SurrogateMethod);
-            surrogate_sttc = nan(spks_data.nchannels);
-            for i = 1:spks_data.nchannels
+            surrogate_sttc = zeros(spks_data.nchannels);
+            for i = 1:(spks_data.nchannels - 1)
                 spike_times_1 = double(spks_rand.raster{i})/obj.RecordingInfo.SamplingRate;
                 N1v = length(spike_times_1);
-                for j = 1:spks_data.nchannels
+                for j = (i + 1):spks_data.nchannels
                     spike_times_2 = double(spks_rand.raster{j})/obj.RecordingInfo.SamplingRate;
                     N2v = length(spike_times_2);
                     surrogate_sttc(i,j) = sttc(N1v, N2v, obj.Parameters.STTC.MaxLag, [0 obj.RecordingInfo.Duration], spike_times_1, spike_times_2);
                 end
             end
+            surrogate_sttc = surrogate_sttc+triu(surrogate_sttc,-1).'; %Make matrix symmetric
         end
     end
     
@@ -921,17 +921,68 @@ classdef MEArecording < handle
        function inferGraphFeatures(obj, alg)
           arguments
              obj MEArecording
-             alg (1,:) string = "all" %Connectivity inference algorithms to compute graphs for
+             alg (1,:) string = [] %Connectivity inference algorithms to compute graphs for
           end
           
-          if alg == "all" %Compute features for all available inferred graphs
+          if isempty(alg) %Compute features for all available inferred graphs
               alg = string(fields(obj.Connectivity));
               assert(~isempty(alg),"No connectivity inference results found")
           end
           
+          full_nw_table = table();
+          full_unit_table = table();
           for a = 1:length(alg)
              assert(isfield(obj.Connectivity,alg(a)),"No connectivity inference results found")
+             if isfield(obj.Connectivity.(alg(a)),"bd") %Binary directed graphs
+                 con_mat = obj.Connectivity.(alg(a)).bd;
+                 density = density_dir(con_mat);
+                 clustering_coef = clustering_coef_bd(con_mat);
+                 assortativity = assortativity_bin(con_mat,1);
+                 rich_club = rich_club_bd(con_mat,5);
+                 nw_feat = ["Density","Assortativity","RichClub" + (1:5)];
+                 nw_val = [density, assortativity, rich_club];
+                 
+             elseif isfield(obj.Connectivity.(alg(a)),"bu") %Binary undirected graphs
+                 con_mat = obj.Connectivity.(alg(a)).bu;
+                 density = density_und(con_mat);
+                 XY = obj.RecordingInfo.ElectrodeCoordinates([obj.Units.ReferenceElectrode],:);
+                 n = 1000;
+                 tol = 1e-6;
+                 [N,E] = rentian_scaling_2d(con_mat,XY,n,tol);
+                 rm_idx = N == 0 | E == 0;
+                 N(rm_idx) = []; E(rm_idx) = [];
+                 [b,~] = robustfit(log10(N),log10(E));
+                 rents_exponent = b(2,1);
+                 clustering_coef = clustering_coef_bu(con_mat);
+                 assortativity = assortativity_bin(con_mat,0);
+                 rich_club = rich_club_bu(con_mat,5);
+                 nw_feat = ["Density","RentExponent","Assortativity","RichClub" + (1:5)];
+                 nw_val = [density, rents_exponent, assortativity, rich_club];
+                 
+             else 
+                 disp("No binary connectivity matrix available")
+             end
              
+             global_efficiency = efficiency_bin(con_mat);
+             local_efficiency = efficiency_bin(con_mat,1);
+             [s,S] = motif3struct_bin(con_mat);
+             [f,F] = motif3funct_bin(con_mat);
+             eigen_centrality = eigenvector_centrality_und(double(con_mat));
+             betweenness = betweenness_bin(con_mat);
+             nw_feat = [nw_feat, "GlobalEfficiency", "StructuralMotif" + (1:13), "FunctionalMotif" + (1:13)] + "_" + alg(a);
+             nw_val = [nw_val, global_efficiency, s', f'];
+             nw_val(isnan(nw_val) | isinf(nw_val)) = 0;
+             nw_table = array2table(nw_val,"VariableNames",nw_feat);
+             unit_feat = ["ClusteringCoefficient","LocalEfficiency","EigenCentrality","Betweenness","UnitStructuralMotif" + (1:13), "UnitFunctionalMotif" + (1:13)] + "_" + alg(a);;
+             unit_val = [clustering_coef, local_efficiency, eigen_centrality, betweenness', S', F'];
+             unit_val(isnan(unit_val) | isinf(unit_val)) = 0;
+             unit_table = array2table(unit_val,"VariableNames",unit_feat);
+             full_nw_table = [full_nw_table nw_table];
+             full_unit_table = [full_unit_table unit_table];
+          end
+          obj.GraphFeatures = full_nw_table;
+          for u = 1:size(full_unit_table,1)
+              obj.Units(u).GraphFeatures = full_unit_table(u,:);
           end
        end
        

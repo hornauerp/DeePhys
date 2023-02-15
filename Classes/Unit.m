@@ -7,6 +7,7 @@ classdef Unit < handle
         WaveformFeatures
         ActivityFeatures
         RegularityFeatures
+        GraphFeatures
         Catch22
     end
 

@@ -1,8 +1,7 @@
 classdef RecordingGroup < handle
     
     %%%%%%%TODO%%%%%%%
-    % Classification
-    % Clustering waveform vs waveform features
+    % 
     %%%%%%%%%%%%%%%%%%
     
     properties
