@@ -41,40 +41,40 @@ rec_array = [rec_array{:}];
 %% Remove MEArecordings without units 
 min_N_units = 20;
 N_units = arrayfun(@(x) length(rec_array(x).Units),1:length(rec_array));
-rec_array_filtered = rec_array(N_units > min_N_units);
+rec_array_filtered = rec_array(N_units >= min_N_units);
 fprintf("Kept %i out of %i units\n", length(rec_array_filtered),length(rec_array))
 
 %%
-rg_params.Selection.Inclusion = {{'Source','Taylor'},{'Mutation','WT'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
-%
-rg_params.Selection.Exclusion = {}; %Cell array of cell arrays with fieldname + value
+rg_params.Selection.Inclusion = {}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+%{'Source','Taylor'},{'Mutation','WT'}
+rg_params.Selection.Exclusion = {{'DIV',7,12,14}}; %Cell array of cell arrays with fieldname + value
 rec_group = RecordingGroup(rec_array_filtered, rg_params);
 
 %%
-dr_level = "Unit"; %Unit or Recording
-dr_method = "UMAP";
+dr_level = "Unit"; %"Unit" or "Recording"
+dr_method = "UMAP"; %"UMAP", "tSNE", "PCA"
 n_dims = 2; %Number of output dimensions
-unit_features = ["ReferenceWaveform","ActivityFeatures"];%"ReferenceWaveform",
-network_features = "all"; %Only relevant for level = Recording 
+unit_features = ["ReferenceWaveform","ActivityFeatures","RegularityFeatures","Catch22"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
+network_features = ["Regularity","Burst"];%"all"; %Only relevant for level = Recording 
 useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
 normalization_var = []; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
-grouping_var = [];%"Timepoint"; %Only relevant when the recording was concatenated and units can be tracked (e.g. Timepoint or DIV)
+grouping_var = []; %Only relevant when the recording was concatenated and units can be tracked (e.g. "Timepoint" or "DIV")
 grouping_values = nan; %Values corresponding to grouping_var (use nan if you want to use all available values)
-normalization = "baseline"; %"baseline" (divided by first data point) or "scaled" [0 1]
+normalization = []; %"baseline" (divided by first data point) or "scaled" [0 1]
 tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
 rec_group.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, useClustered,...
                     normalization_var, grouping_var, grouping_values, normalization, tolerance);
 
 %%
 clust_method = "spectral";
-rec_group.clusterByFeatures(dr_method,dr_level,clust_method);
+rec_group.clusterByFeatures(dr_method,dr_level,clust_method,6);
 
 %%
 % figure("Color","w");
 rec_group.plot_cluster_waveforms(clust_method);
 
 %%
-grouping_var = ["Mutation"];
+grouping_var = ["Source","Mutation"];
 figure("Color","w");
 [cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var);
 
@@ -96,15 +96,6 @@ network_features = "all";
 useClustered = false;
 rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features, network_features, useClustered);
 
-% %%
-% for i = 1:length(rec_group.Units)
-%    rec_group.Units(i).ActivityFeatures.Properties.VariableNames = ["ISI","VarISI","CVISI","PACF","RFreq","RMag","RFit","SC_" + GetAllFeatureNames];
-% end
-% 
-% for i = 1:length(rec_group.Recordings)
-%     rec_group.Recordings(i).UnitFeatures = rec_group.Recordings(i).aggregateSingleCellFeatures(rec_group.Recordings(i).Units);
-% end
-
 %%
 grouping_var = ["Mutation"];
 figure("Color","w");
@@ -125,7 +116,7 @@ cluster_age = [21,28,35];
 rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features, network_features, useClustered, cluster_age);
 
 %%
-grouping_var = ["Mutation","Concentration"];
+grouping_var = ["DIV"];
 figure("Color","w");
 [cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var,50);
 

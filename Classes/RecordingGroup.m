@@ -229,6 +229,20 @@ classdef RecordingGroup < handle
                test_idx = cv.test(k);
            end
        end
+       
+       function [new_group_idx,new_group_labels] = poolMetadataValues(group_idx, group_labels, classification_val)
+           arguments
+               group_idx double %Original group idx, corresponding to group_labels
+               group_labels string
+               classification_val string %Value(s) that are to be pooled (against) -> classification_val vs rest
+           end
+           clf_group_idx = find(ismember(group_labels, classification_val));
+           new_group_idx = (group_idx == clf_group_idx) * 1;
+           new_group_labels(1) = join(group_labels(clf_group_idx));
+           clf_group_idx = find(~ismember(group_labels, classification_val));
+           new_group_idx(new_group_idx == 0) = 2;
+           new_group_labels(2) = join(group_labels(clf_group_idx));
+       end
     end
     
     methods 
@@ -242,7 +256,7 @@ classdef RecordingGroup < handle
                 tolerance {isnumeric} = 1 %deviation from the actual age that will still be considered valid (e.g. age = 7 and tolerance = 1 considers DIVs 6-8)
                 network_features string = "all"
                 unit_features string = "all"
-                normalization = "baseline" % "baseline" (divided by first timepoint) or "scaled (scaled between 0 and 1)
+                normalization string = "baseline" % "baseline" (divided by first timepoint) or "scaled (scaled between 0 and 1)
                 useClustered logical = false
             end
             
@@ -268,9 +282,9 @@ classdef RecordingGroup < handle
                 value = [culture_metadata.(metadata_field)];
                 if length(value) >= length(values)
                     value_dev = abs(value - values');
-                    value_count = sum(value_dev<=tolerance);
+                    value_count = sum(value_dev<=tolerance,1);
                     value = value(value_count==1);
-                    if sum(value_count == 1) == length(values) % Need to find a way to handle two recordings falling within the tolerance window
+                    if sum(value_count==1) == length(values) % Need to find a way to handle two recordings falling within the tolerance window
                         sel_rec = rg.Cultures{iC}(value_count == 1);
                         culture_array = [culture_array {sel_rec}];
                         for iR = 1:length(sel_rec)
@@ -312,6 +326,7 @@ classdef RecordingGroup < handle
                    continue
                end
             end
+%             clean_culture_tables = ~cellfun(@isempty, culture_table_array);
             feature_table = vertcat(culture_table_array{:});
             keep_idx = ~isnan(std(feature_table.Variables,'omitnan')); %Remove variables with 0 variance
             feature_table = feature_table(:,keep_idx);
@@ -347,24 +362,16 @@ classdef RecordingGroup < handle
             
             [iG,G] = findgroups(metadata);
             for g = unique(iG)
-                iBatch_train = (iG == g) & train_idx;
-                batch_train_data = feat_mat(iBatch_train,:);
-                batch_mean = mean(batch_train_data);
-                batch_std = std(batch_train_data);
-                feat_mat(iBatch_train,:) = (batch_train_data - batch_mean) ./ batch_std;
-                if any(test_idx)
-                    iBatch_test = iG == g & test_idx;
-                    batch_test_data = feat_mat(iBatch_test,:);
-                    feat_mat(iBatch_test,:) = (batch_test_data - batch_mean) ./ batch_std;
-                end
+                iBatch_train = (iG == g);% & train_idx;
+                [feat_mat(iBatch_train,:), batch_mean, batch_sd] = normalize(feat_mat(iBatch_train,:));
+%                 if any(test_idx)
+%                     iBatch_test = iG == g & test_idx;
+%                     feat_mat(iBatch_test,:) = normalize(feat_mat(iBatch_test,:),'center',batch_mean,'scale',batch_sd);
+%                 end
             end
             if length(G) > 1 %Only normalize again if more than 1 group exists
-                train_data = feat_mat(train_idx,:);
-                train_mean = mean(train_data);
-                train_std = std(train_data);
-                norm_train_data = (train_data - train_mean) ./ train_std;
-                test_data = feat_mat(test_idx,:);
-                norm_test_data = (test_data - train_mean) ./ train_std;
+                [norm_train_data, train_mean, train_sd] = normalize(feat_mat(train_idx,:));
+                norm_test_data = normalize(feat_mat(test_idx,:),'center',train_mean,'scale',train_sd);
             else
                 norm_train_data = feat_mat(train_idx,:);
                 norm_test_data = feat_mat(test_idx,:);
@@ -382,25 +389,27 @@ classdef RecordingGroup < handle
             end
             
             input_mat = input_table.Variables;
-            input_mat(isnan(input_mat)) = 0;%Handle rare case where NaN appears
+            input_mat(isnan(input_mat)) = 0; %Handle rare case where NaN appears
             if isempty(normalization_var)
-                mean_train = mean(input_mat(train_idx,:));
-                sd_train = std(input_mat(train_idx,:));
-                norm_train = (input_mat(train_idx,:) - mean_train)./sd_train;
-                norm_train(:,any(isnan(norm_train))) = [];
+                [norm_train, mean_train, sd_train] = normalize(input_mat(train_idx,:));
+                nan_idx = any(isnan(norm_train));
+                norm_train(:,nan_idx) = [];
                 norm_train = norm_train./max(abs(norm_train)); %Scale data
                 if sum(test_idx) > 0
-                    norm_test = (input_mat(test_idx,:) - mean_train)/sd_train;
+                    norm_test = normalize(input_mat(test_idx,:),'center',mean_train,'scale',sd_train);
+                    norm_test(:,nan_idx) = [];
                     norm_test = norm_test./max(abs(norm_train));
                 else
                     norm_test = [];
                 end
             else
                 [norm_train, norm_test] = normalizeByGroup(rg, input_mat, object_group, normalization_var, train_idx, test_idx); %Normalize
-                norm_train(:,any(isnan(norm_train))) = [];
+                nan_idx = any(isnan(norm_train)) | any(isnan(norm_test),1);
+                norm_train(:,nan_idx) = [];
+                
                 norm_train = norm_train./max(abs(norm_train)); %Scale data
                 if sum(test_idx) > 0
-                    norm_test(:,any(isnan(norm_test))) = [];%Remove peak NaNs
+                    norm_test(:,nan_idx) = [];%Remove peak NaNs
                     norm_test = norm_test./max(abs(norm_train)); %Scale data
                 else
                     norm_test = [];
@@ -450,8 +459,6 @@ classdef RecordingGroup < handle
             end
             
             norm_data = prepareInputMatrix(rg, input_table, object_group, normalization_var);
-            %             norm_data = norm_data(:,10:40);
-%             norm_data = input_table.Variables;
             
             switch method
                 case "UMAP"
@@ -473,7 +480,7 @@ classdef RecordingGroup < handle
             rg.DimensionalityReduction.(level).(method).UnitFeatures = unit_features;
             rg.DimensionalityReduction.(level).(method).NetworkFeatures = network_features;
             rg.DimensionalityReduction.(level).ObjectGroup = object_group;
-            rg.plot_dimensionality_reduction(reduction);
+%             rg.plot_dimensionality_reduction(reduction);
         end
         
         function result = predictAge(rg, level, alg, stratification_var, stratification_values, network_features, unit_features, useClustered, normalization_var, N_hyper, K_fold)
@@ -575,13 +582,14 @@ classdef RecordingGroup < handle
             
         end
         
-        function result = classifyByFeatures(rg, level, alg, classification_var, network_features, unit_features, useClustered,... 
+        function result = classifyByFeatureGroups(rg, level, alg, classification_var, classification_val, network_features, unit_features, useClustered,... 
                                     grouping_var, grouping_values, normalization, normalization_var, N_hyper, K_fold, tolerance)
             arguments
                 rg RecordingGroup
                 level string = "Recording" %Unit or Recording
                 alg string = "rf" %rf, svm, 
                 classification_var string = "Mutation" %Metadata field that determines y_test/y_train
+                classification_val string = [] %Values corresponding to classification_var that is being classified for(e.g. "LNA")
                 network_features string = "all"
                 unit_features string = "all"
                 useClustered logical = false
@@ -600,6 +608,14 @@ classdef RecordingGroup < handle
                 [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
             end
             [group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+            
+            if ~isempty(classification_val) %New division / pool conditions
+                [group_idx,group_labels_comb] = poolMetadataValues(group_idx, group_labels_comb, classification_val);
+            end
+            
+            if K_fold == -1 %set kfold to LOOCV
+                K_fold = length(group_idx);
+            end
             cv = cvpartition(group_idx,'KFold',K_fold);
             
             if isempty(grouping_var)
@@ -607,6 +623,9 @@ classdef RecordingGroup < handle
                     input_table = object_group.getUnitFeatures(unit_features);
                     object_group = [rg.Units];
                     [Y, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+                    if ~isempty(classification_val) %New division / pool conditions
+                        [Y,group_labels_comb] = poolMetadataValues(clf_group_idx, group_labels_comb, classification_val);
+                    end
                 elseif level == "Recording"
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
                     Y = group_idx;
@@ -622,27 +641,78 @@ classdef RecordingGroup < handle
                     Y = group_idx;
                 end
             end
-            
-            
+                      
             
             for k = 1:K_fold
-                [Y_train, Y_test, train_idx, test_idx] = cv_split(Y, cv, k);
+                [Y_train, Y_test, train_idx, test_idx] = rg.cv_split(Y, cv, k);
                 
                 [X_train, X_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
+
+%                 feat_mat = input_table.Variables;
+%                 feat_mat(isnan(feat_mat)) = 0;
+%                 feat_mat = feat_mat ./ max(abs(feat_mat));
+%                 norm_mat = normalize(feat_mat);
+%                 X_train = norm_mat(train_idx,:);
+%                 X_test = norm_mat(test_idx,:);
                 
-                [clf,train_acc] = rg.create_classifier(X_train,Y_train,alg,N_hyper);
+                [clf,train_acc] = rg.create_classifier(X_train, Y_train, alg, N_hyper);
                 [Y_pred,scores] = predict(clf, X_test);
-                predImp = clf.oobPermutedPredictorImportance();
+                %                 predImp = clf.oobPermutedPredictorImportance();
+                predImp = [];
                 
                 result(k).Mdl = clf;
                 result(k).Y_pred = Y_pred;
                 result(k).Y_test = Y_test;
                 result(k).scores = scores;
+                result(k).objects = object_group(test_idx);
                 result(k).train_acc = train_acc;
                 result(k).predImp = predImp;
                 result(k).GroupLabels = group_labels_comb;
             end
             
+        end
+        
+        function result = applyClassifier(rg, level, alg, classification_var, classification_val, test_var, test_val, network_features, unit_features, useClustered,... 
+                                    grouping_var, grouping_values, normalization, normalization_var, N_hyper, tolerance)
+           arguments
+               rg RecordingGroup
+               level string = "Recording" %Unit or Recording
+               alg string = "rf" %rf, svm,
+               classification_var string = "Mutation" %Metadata field that determines y_test/y_train
+               classification_val string = [] %Values corresponding to classification_var that are pooled (against) (e.g. "LNA" would classify all others vs LNA)
+               test_var string = "Treatment"
+               test_val string = "LNA"
+               network_features string = "all"
+               unit_features string = "all"
+               useClustered logical = false
+               grouping_var string = [] %Metadata field that groups recordings to cultures
+               grouping_values = nan %Selected values corresponding to grouping_var
+               normalization = [] %Normalization within grouped units/recordings, "baseline" (divided by first datapoint) or "scaled" [0 1]
+               normalization_var string = "PlatingDate" % normalization by each value of normalization_var
+               N_hyper (1,1) double = 0 %If >0 do hyperparameter optimization
+               tolerance double = 1
+           end
+           
+           if isempty(grouping_var) %Get group indices for stratification
+                object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
+            else
+                [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+            end
+            [group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+            if ~isempty(classification_val)
+                [group_idx,group_labels_comb] = rg.poolMetadataValues(group_idx, group_labels_comb, classification_val);
+            end
+            
+            [test_group_idx, test_group_labels] = combineMetadataIndices(rg, object_group, test_var);
+            if ~isempty(test_val)
+                [test_group_idx,test_group_labels] = rg.poolMetadataValues(test_group_idx, test_group_labels, test_val);
+            end
+        end
+        
+        function regressionByFeatures(rg)
+           arguments
+               rg RecordingGroup
+           end
         end
         
         function [iMetadata, metadata_groups] = returnMetadataArray(rg, metadata_object, metadata_name)
@@ -1133,7 +1203,7 @@ classdef RecordingGroup < handle
                 xticks([])
                 yticks([])
             end
-            arrayfun(@(x) set(x,'CLim',[0 max(value_array,[],'all')]),ax)
+%             arrayfun(@(x) set(x,'CLim',[0 max(value_array,[],'all')]),ax)
         end
         
         function plot_cluster_shifts(rg, value_array, group_labels_comb)

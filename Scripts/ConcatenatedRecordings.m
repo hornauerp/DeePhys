@@ -100,7 +100,7 @@ figure("Color","w");
 rg.plot_dimensionality_reduction(rg.DimensionalityReduction.Unit.UMAP.Reduction, cluster_idx,group_labels_comb)
 
 %%
-n_bins = 50;
+n_bins = 100;
 value_array = rg.plot_cluster_densities(dr_level,dr_method,grouping_var,n_bins);
 
 %%

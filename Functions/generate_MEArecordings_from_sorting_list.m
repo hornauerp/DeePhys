@@ -11,31 +11,53 @@ end
 rec_array = {};
 if parallel
     parfor (iPath = 1:length(sorting_path_list),24)
-        metadata = struct();
-        metadata.LookupPath = lookup_path;
-        metadata.InputPath = sorting_path_list(iPath);
-        metadata.PathPartIndex = path_part_idx;
-        temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
-        if exist(temp_file,"file")
-            spk_temp = readNPY(temp_file);
-            if length(unique(spk_temp)) > min_N_units
-                rec = MEArecording(metadata, params);
-                rec_array{iPath} = rec;
+        save_file = fullfile(sorting_path_list(iPath),'MEArecording.mat');
+        if ~exist(save_file,'file')
+            metadata = struct();
+            metadata.LookupPath = lookup_path;
+            metadata.InputPath = sorting_path_list(iPath);
+            metadata.PathPartIndex = path_part_idx;
+            temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
+            if exist(temp_file,"file")
+                spk_temp = readNPY(temp_file);
+                if length(unique(spk_temp)) > min_N_units
+                    rec = MEArecording(metadata, params);
+                    rec_array{iPath} = rec;
+                else
+                    disp("Not enough units for: " + sorting_path_list(iPath))
+                end
+            else
+                disp("No sorting file found for: " + sorting_path_list(iPath))
             end
+            disp("Finished recording " + num2str(iPath))
+        else
+            rec_array{iPath} = load(save_file,"obj");
+            disp("Loading existing object")
         end
     end
 else
     for iPath = 1:length(sorting_path_list)
-        metadata = struct();
-        metadata.LookupPath = lookup_path;
-        metadata.InputPath = sorting_path_list(iPath);
-        metadata.PathPartIndex = path_part_idx;
-        temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
-        if exist(temp_file,"file")
-            spk_temp = readNPY(temp_file);
-            if length(unique(spk_temp)) > min_N_units
-                rec_array{iPath} = MEArecording(metadata, params);
+        save_file = fullfile(sorting_path_list(iPath),'MEArecording.mat');
+        if ~exist(save_file,'file')
+            metadata = struct();
+            metadata.LookupPath = lookup_path;
+            metadata.InputPath = sorting_path_list(iPath);
+            metadata.PathPartIndex = path_part_idx;
+            temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
+            if exist(temp_file,"file")
+                spk_temp = readNPY(temp_file);
+                if length(unique(spk_temp)) > min_N_units
+                    rec_array{iPath} = MEArecording(metadata, params);
+                else
+                    disp("Not enough units for: " + sorting_path_list(iPath))
+                end
+            else
+                disp("No sorting file found for: " + sorting_path_list(iPath))
             end
+            disp("Finished recording " + num2str(iPath))
+        else
+            rec_array{iPath} = load(save_file,"obj");
+            disp("Loading existing object")
         end
     end
 end

@@ -20,11 +20,16 @@ params.Analyses.Catch22         = 1;
 params.Analyses.Bursts          = 1;
 params.Analyses.Connectivity    = ["STTC","CCG"];
 params.Outlier.Method           = []; %No outlier removal
+params.Save.Flag                = 1; %Save individual MEArecordings to prevent data loss if the execution is interrupted
 
 lookup_path = "/home/phornauer/Git/DeePhys/Data/cellline_lookup.xlsx";
-path_part_idx = [11,12,13];
+path_part_idx = [11,12,13]; %[recording_date, plate_id, well_id]
 min_N_units = params.QC.N_Units;
 parallel = false;
+if parallel
+    parpool(6);
+end
 
 %% Run full loop
-rec_array = generate_MEArecordings_from_sorting_list(path_list, lookup_path, path_part_idx, min_N_units, params, parallel);
+rec_array = generate_MEArecordings_from_sorting_list(sorting_path_list, lookup_path, path_part_idx, min_N_units, params, parallel);
+save("/home/phornauer/Git/DeePhys/Data/MEArecordings_revision.mat", "rec_array")

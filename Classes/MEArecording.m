@@ -15,11 +15,14 @@ classdef MEArecording < handle
         UnitFeatures
         ClusteredFeatures
         Connectivity
-        GraphFeatures
         NumUnitClusters % Number of unit clusters
     end
     
     methods (Hidden)
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % Object generation
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%        
+        
         function mearec = MEArecording(metadata, parameters)
             arguments
                 metadata (1,1) struct = struct() %Metadata to be parsed // metadata.InputPath is required
@@ -144,6 +147,9 @@ classdef MEArecording < handle
             end
             
             obj.inferConnectivity(obj.Parameters.Analyses.Connectivity);
+            if ~isempty(fields(obj.Connectivity))
+                obj.inferGraphFeatures();
+            end
         end
         
         function saveObject(obj)
@@ -161,7 +167,11 @@ classdef MEArecording < handle
                 end
             end
         end
-       
+        
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % Quality control
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
         function [max_amplitudes, reference_electrode, norm_wf_matrix] = generateWaveformMatrix(obj)
             template_matrix = obj.getTemplateMatrix();
             template_matrix = template_matrix(:,sum(template_matrix,[1,3],'omitnan')~=0,:); %Remove all zero paddings
@@ -239,8 +249,8 @@ classdef MEArecording < handle
             
             if ~isempty(obj.Parameters.QC.Noise) && ~isnan(obj.Parameters.QC.Noise)
                 [~,peak_amp_idx] = min(norm_wf_matrix);
-                cutout_idx = round(median(peak_amp_idx)) + obj.Parameters.QC.NoiseCutout(1) * obj.RecordingInfo.SamplingRate/1000:...
-                    round(median(peak_amp_idx)) + obj.Parameters.QC.NoiseCutout(2) * obj.RecordingInfo.SamplingRate/1000;
+                cutout_idx = round(median(peak_amp_idx)) + obj.Parameters.QC.NoiseCutout(1) * 10:...
+                    round(median(peak_amp_idx)) + obj.Parameters.QC.NoiseCutout(2) * 10;
                 bad_peak = peak_amp_idx < cutout_idx(1) | peak_amp_idx > cutout_idx(end);
                 noise_indicator = sum(abs(diff(diff(norm_wf_matrix(cutout_idx,:))>0)))'; %Check for non-monotomies in waveform shapes as noise indicators
                 
@@ -251,6 +261,10 @@ classdef MEArecording < handle
             end
             fprintf('Identified %i units as noise\n',sum(is_noisy))
         end
+        
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % Analyses
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         
         function waveform_features = inferWaveformFeatures(obj,max_amplitudes, norm_wf_matrix)
             interpolation_factor = 10;
@@ -279,7 +293,11 @@ classdef MEArecording < handle
                 zc_pre_trough = max([zc_pre_trough 2]);
                 unit_features.AUC_peak_1 = trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough)));
                 unit_features.AUC_trough = abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1))));
-                unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2)));
+                if length(zc(zc_pre_trough:end)) > 3 %Ensure that there is another zero crossing at the end
+                    unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2)));
+                else %Otherwise we integrate until the end of the waveform
+                    unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):size(interp_wf_matrix,1)));
+                end
                 %We pad the signal with min/max values to ensure reliable slewrate
                 %calculations
                 rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_idx(u),u);
@@ -302,27 +320,27 @@ classdef MEArecording < handle
             end
         end
         
-        function aggregated_struct = aggregateSingleCellFeatures(obj, unit_array)
+        function aggregated_struct = aggregateSingleCellFeatures(obj, unit_array, features)
             arguments
                 obj MEArecording
                 unit_array Unit = [obj.Units]
+                features string = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22"];%,"GraphFeatures"]
             end
-            if length(unit_array) > 1
-                activity_table = vertcat(unit_array.ActivityFeatures);
-                waveform_table = vertcat(unit_array.WaveformFeatures);
-                
-                if ~isempty(obj.Parameters.Outlier.Method)
-                    act_means = mean(rmoutliers(activity_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),1,"omitnan");
-                    wf_means = mean(rmoutliers(waveform_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),1,"omitnan");
+            
+            for f = 1:length(features)
+                if length(unit_array) > 1
+                    feature_table = vertcat(unit_array.(features(f)));
+                    %
+                    if ~isempty(obj.Parameters.Outlier.Method)
+                        feature_means = mean(rmoutliers(feature_table.Variables, obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),1,"omitnan");
+                    else
+                        feature_means = mean(feature_table.Variables,1,"omitnan");
+                    end
+                    
+                    aggregated_struct.(features(f)) = array2table(feature_means,"VariableNames",feature_table.Properties.VariableNames);
                 else
-                    act_means = mean(activity_table.Variables,1,"omitnan");
-                    wf_means = mean(waveform_table.Variables,1,"omitnan");
+                    aggregated_struct.(features(f)) = unit_array.(features(f));
                 end
-                aggregated_struct.ActivityFeatures = array2table(act_means,"VariableNames",activity_table.Properties.VariableNames);
-                aggregated_struct.WaveformFeatures = array2table(wf_means,"VariableNames",waveform_table.Properties.VariableNames);
-            else
-                aggregated_struct.ActivityFeatures = unit_array.ActivityFeatures;
-                aggregated_struct.WaveformFeatures = unit_array.WaveformFeatures;
             end
         end
         
@@ -499,7 +517,7 @@ classdef MEArecording < handle
             defaultParams.Analyses.SingleCell = true;
             defaultParams.Analyses.Regularity = true;
             defaultParams.Analyses.Bursts = true;
-            defaultParams.Analyses.Connectivity = ["DDC"]; %"CCG","STTC" also implemented // can take several methods
+            defaultParams.Analyses.Connectivity = ["DDC"]; %"CCG","STTC" also implemented // can take several methods as input
             defaultParams.Analyses.Catch22 = true;
             
             % Parameters for outlier detection 
@@ -959,9 +977,9 @@ classdef MEArecording < handle
                  density = density_dir(con_mat);
                  clustering_coef = clustering_coef_bd(con_mat);
                  assortativity = assortativity_bin(con_mat,1);
-                 rich_club = rich_club_bd(con_mat,5);
-                 nw_feat = ["Density","Assortativity","RichClub" + (1:5)];
-                 nw_val = [density, assortativity, rich_club];
+%                  rich_club = rich_club_bd(con_mat,5);
+                 nw_feat = ["Density","Assortativity"];%,"RichClub" + (1:5)];
+                 nw_val = [density, assortativity];%, rich_club];
                  
              elseif isfield(obj.Connectivity.(alg(a)),"bu") %Binary undirected graphs
                  con_mat = obj.Connectivity.(alg(a)).bu;
@@ -972,13 +990,17 @@ classdef MEArecording < handle
                  [N,E] = rentian_scaling_2d(con_mat,XY,n,tol);
                  rm_idx = N == 0 | E == 0;
                  N(rm_idx) = []; E(rm_idx) = [];
-                 [b,~] = robustfit(log10(N),log10(E));
-                 rents_exponent = b(2,1);
+                 try
+                     [b,~] = robustfit(log10(N),log10(E));
+                     rents_exponent = b(2,1);
+                 catch
+                     rents_exponent = 0;
+                 end
                  clustering_coef = clustering_coef_bu(con_mat);
                  assortativity = assortativity_bin(con_mat,0);
-                 rich_club = rich_club_bu(con_mat,5);
-                 nw_feat = ["Density","RentExponent","Assortativity","RichClub" + (1:5)];
-                 nw_val = [density, rents_exponent, assortativity, rich_club];
+%                  rich_club = rich_club_bu(con_mat,5);
+                 nw_feat = ["Density","RentExponent","Assortativity"];%,"RichClub" + (1:5)];
+                 nw_val = [density, rents_exponent, assortativity];%, rich_club];
                  
              else 
                  disp("No binary connectivity matrix available")
@@ -987,21 +1009,25 @@ classdef MEArecording < handle
              global_efficiency = efficiency_bin(con_mat);
              local_efficiency = efficiency_bin(con_mat,1);
              [s,S] = motif3struct_bin(con_mat);
+             s = s./nchoosek(length(con_mat),3); %Normalize
+             S = S./(nchoosek(length(con_mat),3) - nchoosek(length(con_mat) - 1,3)); %Normalize
              [f,F] = motif3funct_bin(con_mat);
+             f = f./nchoosek(length(con_mat),3); %Normalize
+             F = F./(nchoosek(length(con_mat),3) - nchoosek(length(con_mat) - 1,3)); %Normalize
              eigen_centrality = eigenvector_centrality_und(double(con_mat));
              betweenness = betweenness_bin(con_mat);
              nw_feat = [nw_feat, "GlobalEfficiency", "StructuralMotif" + (1:13), "FunctionalMotif" + (1:13)] + "_" + alg(a);
              nw_val = [nw_val, global_efficiency, s', f'];
              nw_val(isnan(nw_val) | isinf(nw_val)) = 0;
              nw_table = array2table(nw_val,"VariableNames",nw_feat);
-             unit_feat = ["ClusteringCoefficient","LocalEfficiency","EigenCentrality","Betweenness","UnitStructuralMotif" + (1:13), "UnitFunctionalMotif" + (1:13)] + "_" + alg(a);;
+             unit_feat = ["ClusteringCoefficient","LocalEfficiency","EigenCentrality","Betweenness","UnitStructuralMotif" + (1:13), "UnitFunctionalMotif" + (1:13)] + "_" + alg(a);
              unit_val = [clustering_coef, local_efficiency, eigen_centrality, betweenness', S', F'];
              unit_val(isnan(unit_val) | isinf(unit_val)) = 0;
              unit_table = array2table(unit_val,"VariableNames",unit_feat);
              full_nw_table = [full_nw_table nw_table];
              full_unit_table = [full_unit_table unit_table];
           end
-          obj.GraphFeatures = full_nw_table;
+          obj.NetworkFeatures.GraphFeatures = full_nw_table;
           for u = 1:size(full_unit_table,1)
               obj.Units(u).GraphFeatures = full_unit_table(u,:);
           end
@@ -1082,6 +1108,9 @@ classdef MEArecording < handle
                        feat_idx = 1:length(fnames);
                    else
                        feat_idx = find(contains(fnames, unit_features));
+                       if length(feat_idx) ~= length(unit_features)
+                           warning('Could not find all requested unit features. Check the spelling.')
+                       end
                    end
                    unit_cell = squeeze(struct2cell([obj.UnitFeatures]));
                    unit_cell = reshape(unit_cell,[],length(obj)); %Ensure correct orientation of cell array
@@ -1102,7 +1131,7 @@ classdef MEArecording < handle
                unit_features string = ["ReferenceWaveform","ActivityFeatures"] %Alternatively WaveformFeatures
            end
            if unit_features == "all"
-               unit_features = ["ActivityFeatures","WaveformFeatures"];
+               unit_features = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22","GraphFeatures"];
            end
            
            unit_array = [obj.Units];
