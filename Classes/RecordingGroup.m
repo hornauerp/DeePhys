@@ -241,8 +241,9 @@ classdef RecordingGroup < handle
            new_group_labels(1) = join(group_labels(clf_group_idx));
            clf_group_idx = find(~ismember(group_labels, classification_val));
            new_group_idx(new_group_idx == 0) = 2;
-           new_group_labels(2) = join(group_labels(clf_group_idx));
+           new_group_labels(2) = join(group_labels(clf_group_idx),'/');
        end
+       
     end
     
     methods 
@@ -471,7 +472,7 @@ classdef RecordingGroup < handle
                     [coeff,reduction,latent] = pca(norm_data);
                     
                 case "tSNE"
-                    reduction = tsne(norm_data,'Algorithm','exact','Exaggeration',10,'Perplexity',30);
+                    reduction = tsne(norm_data,'Algorithm','exact');%,'Exaggeration',10,'Perplexity',30);
             end
             reduction = reduction(:,1:n_dims);
             
@@ -508,6 +509,9 @@ classdef RecordingGroup < handle
             if isempty(stratification_values)
                 stratification_var = [stratification_var "DIV"];
                 [rec_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, stratification_var);
+                if K_fold == -1 %set kfold to LOOCV
+                    K_fold = length(rec_group_idx);
+                end
                 cv = cvpartition(rec_group_idx,'KFold',K_fold);
                 t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
                 
@@ -539,12 +543,14 @@ classdef RecordingGroup < handle
                     
                     clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t);
                     Y_pred = predict(clf, X_test);
-                    predImp = clf.oobPermutedPredictorImportance;
+                    %                     predImp = clf.oobPermutedPredictorImportance;
+                    predImp = [];
                     
                     result(k).Mdl = clf;
                     result(k).Y_pred = Y_pred;
-                    result(k).Y_test = Y_test;
+                    result(k).Y_test = Y_test';
                     result(k).mse_train = resubLoss(clf);
+                    result(k).objects = object_group(test_idx);
                     result(k).predImp = predImp;
                     result(k).GroupLabels = group_labels_comb;
                 end
@@ -672,6 +678,31 @@ classdef RecordingGroup < handle
             
         end
         
+        function assessClassifer(rg, clf_result)
+            arguments
+               rg RecordingGroup
+               clf_result struct
+            end
+            y_pred = vertcat(clf_result.Y_pred);
+            y_test = vertcat(clf_result.Y_test);
+            scores = vertcat(clf_result.scores);
+            clf_objects = horzcat(clf_result.objects);
+            clf_recordings = cellfun(@(x) x(1),clf_objects);
+            metadata = [clf_recordings.Metadata];
+            treatment_idx = [metadata.Treatment] == "LNA";
+            
+            misclassified = clf_objects(y_pred ~= y_test);
+            idx = sub2ind(size(scores), 1:size(scores,1),y_test');
+            scores_treatment = scores(idx(~treatment_idx));
+            
+            accuracy = sum(y_pred == y_test)/length(y_pred);
+            train_acc = mean([clf_result.train_acc]);
+            
+            avg_score_true 
+            fprintf('Training accuracy was %.2f\n',mean([clf_result.train_acc]))
+            fprintf('Test accuracy was %.2f\n',accuracy)
+            fprintf('Average score was %.2f\n',mean(scores(idx)))
+        end
         function result = applyClassifier(rg, level, alg, classification_var, classification_val, test_var, test_val, network_features, unit_features, useClustered,... 
                                     grouping_var, grouping_values, normalization, normalization_var, N_hyper, tolerance)
            arguments
@@ -693,20 +724,75 @@ classdef RecordingGroup < handle
                tolerance double = 1
            end
            
-           if isempty(grouping_var) %Get group indices for stratification
-                object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
-            else
-                [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
-            end
-            [group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+           if isempty(grouping_var)
+               if level == "Unit"
+                   object_group = [rg.Units];
+                   input_table = object_group.getUnitFeatures(unit_features);
+               elseif level == "Recording"
+                   object_group = [rg.Recordings];
+                   input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+               else
+                   error('Unknown level')
+               end
+           else
+               [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+               if level == "Unit"
+                   object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);
+                   object_group = [object_group{:}];
+               elseif level == "Recording"
+                   [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+               else
+                   error('Unknown level')
+               end
+           end
+            
+           % Split by classification variable
+            [Y, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
             if ~isempty(classification_val)
-                [group_idx,group_labels_comb] = rg.poolMetadataValues(group_idx, group_labels_comb, classification_val);
+                [Y,group_labels_comb] = rg.poolMetadataValues(Y, group_labels_comb, classification_val);
             end
             
+            % Identify training and test set
             [test_group_idx, test_group_labels] = combineMetadataIndices(rg, object_group, test_var);
-            if ~isempty(test_val)
-                [test_group_idx,test_group_labels] = rg.poolMetadataValues(test_group_idx, test_group_labels, test_val);
+            [test_group_idx,test_group_labels] = rg.poolMetadataValues(test_group_idx, test_group_labels, test_val);
+            
+            test_idx = test_group_idx == 1;
+            train_idx = ~test_idx;
+            Y_train = Y(train_idx);
+            Y_test = Y(test_idx);
+            
+            [X_train, X_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
+            [clf,train_acc] = rg.create_classifier(X_train, Y_train, alg, N_hyper);
+            [Y_pred,scores] = predict(clf, X_test);
+            result.Mdl = clf;
+            result.Y_pred = Y_pred;
+            result.Y_test = Y_test;
+            result.scores = scores;
+            result.objects = object_group(test_idx);
+            result.train_acc = train_acc;
+            result.GroupLabels = group_labels_comb;
+        end
+        
+        function accuracy_mat = assessAppliedClassifier(rg, result, assessment_var, assessment_val)
+            arguments
+                rg RecordingGroup
+                result struct %Result of applyClassifier function
+                assessment_var string %Metadata variable (e.g. "Treatment")
+                assessment_val string %Value corresponding to metadata variable (e.g. "LNA")
             end
+            
+            [Y_assess, group_labels_comb] = rg.combineMetadataIndices(result.objects, assessment_var);
+            [Y_assess,group_labels_comb] = rg.poolMetadataValues(Y_assess, group_labels_comb, assessment_val);
+            
+            accuracy_mat = nan(length(result.GroupLabels),length(group_labels_comb));
+            for t = 1:length(result.GroupLabels)
+                for a = 1:length(group_labels_comb)
+                    comp_idx = (Y_assess == a) & (result.Y_test == t);
+                    accuracy_mat(t,a) = sum(result.Y_test(comp_idx) == result.Y_pred(comp_idx)) ./ sum(comp_idx);
+                end
+            end
+            figure('Color','w');
+            heatmap(accuracy_mat,'ColorLimits',[0 1],'XDisplayLabels',group_labels_comb,'YDisplayLabels',result.GroupLabels)
         end
         
         function regressionByFeatures(rg)

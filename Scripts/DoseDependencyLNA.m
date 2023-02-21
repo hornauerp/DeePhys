@@ -12,25 +12,25 @@ rec_array = recording_array_from_single_files(sorting_path_list);
 rg_params.Selection.Inclusion = {{'Source','FCDI'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
 %,{'Mutation','WT'}
 rg_params.Selection.Exclusion = {{'DIV',7,12,14},{'Treatment',"ASO"},{'Mutation',"LRRK2"}}; %Cell array of cell arrays with fieldname + value
-lna_group = RecordingGroup(rec_array_filtered, rg_params);
+lna_group = RecordingGroup(rec_array, rg_params);
 
 %% Check unsupervised 
 dr_level = "Recording"; %"Unit" or "Recording"
 dr_method = "UMAP"; %"UMAP", "tSNE", "PCA"
 n_dims = 2; %Number of output dimensions
 unit_features = ["WaveformFeatures","ActivityFeatures","RegularityFeatures","Catch22"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
-network_features = ["all"];%"all"; %Only relevant for level = Recording ["Regularity","Burst","Catch22","GraphFeatures"]
+network_features = ["Regularity","Burst","Catch22"];%"all"; %Only relevant for level = Recording ["Regularity","Burst","Catch22","GraphFeatures"]
 useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
 normalization_var = []; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
-grouping_var = []; %Only relevant when the recording was concatenated and units can be tracked (e.g. "Timepoint" or "DIV")
-grouping_values = nan; %Values corresponding to grouping_var (use nan if you want to use all available values)
+grouping_var = "DIV"; %Only relevant when the recording was concatenated and units can be tracked (e.g. "Timepoint" or "DIV")
+grouping_values = [14:7:35]; %Values corresponding to grouping_var (use nan if you want to use all available values)
 normalization = []; %"baseline" (divided by first data point) or "scaled" [0 1]
 tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
 lna_group.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, useClustered,...
                     normalization_var, grouping_var, grouping_values, normalization, tolerance);
                 
 %% Check for LNA clusters
-grouping_var = ["Treatment"];
+grouping_var = ["Mutation","Treatment"];
 figure("Color","w");
 [cluster_idx, group_labels_comb] = lna_group.plot_true_clusters(dr_level, dr_method, grouping_var);
 
