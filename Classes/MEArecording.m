@@ -448,14 +448,20 @@ classdef MEArecording < handle
                 for j = (i+1):length(obj.Units)
                         N2v = length(obj.Units(j).SpikeTimes);
                         empirical_sttc(i,j) = sttc(N1v, N2v, obj.Parameters.STTC.MaxLag, [0 obj.RecordingInfo.Duration], obj.Units(i).SpikeTimes, obj.Units(j).SpikeTimes);
-                    
                 end
             end
             empirical_sttc = empirical_sttc+triu(empirical_sttc,-1).'; %Make matrix symmetric
         end
         
         function surrogate_sttc = surrogateSTTCmatrix(obj)
+            silent_units = find(arrayfun(@(x) isempty(x.SpikeTimes), obj.Units));
             spks_data = convert2asdf2(obj.Spikes.Times, obj.Spikes.Units, obj.RecordingInfo.SamplingRate);
+            
+            for su = silent_units %Add empty units in case of concatenated recordings
+                spks_data.raster = [spks_data.raster(1:su-1); cell(1,1); spks_data.raster(su:end)];
+            end
+            spks_data.nchannels = length(spks_data.raster);
+            
             spks_rand = randomizeasdf2(spks_data, obj.Parameters.STTC.SurrogateMethod);
             surrogate_sttc = zeros(spks_data.nchannels);
             for i = 1:(spks_data.nchannels - 1)
@@ -793,15 +799,17 @@ classdef MEArecording < handle
        
        function inferConnectivityCCG(obj)
            [ccgR1,tR] = obj.calculateCCGs();
+           if size(ccgR1,2) < length(obj.Units) %Pad if the last unit(s) have no spikes
+               padded_ccg = zeros(size(ccgR1,1),length(obj.Units),length(obj.Units));
+               padded_ccg(:,1:size(ccgR1,2),1:size(ccgR1,2)) = ccgR1;
+               ccgR1 = padded_ccg;
+           end
            binSize = obj.Parameters.CCG.BinSize; %.5ms
            conv_w = obj.Parameters.CCG.Conv_w;  % 10ms window
            alpha = obj.Parameters.CCG.Alpha; %high frequency cut off, must be .001 for causal p-value matrix
 %            Fs = 1/obj.RecordingInfo.SamplingRate;
            
            nCel=size(ccgR1,2);
-           
-           % Create CCGs (including autoCG) for all cells
-%            [ccgR1,tR] = CCG(sorted_spk_vec,sorted_spk_idx,'binSize',binSize,'duration',duration,'Fs',Fs);
            
            ccgR = nan(size(ccgR1,1),nCel,nCel);
            ccgR(:,1:size(ccgR1,2),1:size(ccgR1,2)) = ccgR1;
@@ -905,6 +913,9 @@ classdef MEArecording < handle
            for i = 1:size(sig_con_inh,1)
                con_mat(sig_con_inh(i,1),sig_con_inh(i,2)) = -1;
            end
+           
+           silent_units = find(arrayfun(@(x) isempty(x.SpikeTimes),obj.Units));
+           
            obj.Connectivity.CCG.ExcitatoryConnection = sig_con;
            obj.Connectivity.CCG.InhibitoryConnection = sig_con_inh;
            obj.Connectivity.CCG.bd = con_mat;
@@ -1109,7 +1120,7 @@ classdef MEArecording < handle
                    else
                        feat_idx = find(contains(fnames, unit_features));
                        if length(feat_idx) ~= length(unit_features)
-                           warning('Could not find all requested unit features. Check the spelling.')
+                           error(join('Could not find: ' + unit_features(~contains(unit_features,fnames))))
                        end
                    end
                    unit_cell = squeeze(struct2cell([obj.UnitFeatures]));

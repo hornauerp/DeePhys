@@ -11,21 +11,21 @@ rm_con = true; %Remove connectivity data
 rec_array = recording_array_from_single_files(sorting_path_list, rm_con);
 
 %% Filter recordings for relevant LNA dataset
-rg_params.Selection.Inclusion = {{'Source','FCDI'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Inclusion = {{'Source','Taylor'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
 %,{'Mutation','WT'}
 rg_params.Selection.Exclusion = {{'DIV',12},{'Treatment',"ASO"},{'Mutation',"LRRK2"}};%,{'ChipID',"4135_0","4043_0"}}; %Cell array of cell arrays with fieldname + value
 batch123group = RecordingGroup(rec_array, rg_params);
 
 %% Check unsupervised 
-dr_level = "Recording"; %"Unit" or "Recording"
+dr_level = "Unit"; %"Unit" or "Recording"
 dr_method = "UMAP"; %"UMAP", "tSNE", "PCA"
 n_dims = 2; %Number of output dimensions
-unit_features = ["ActivityFeatures","RegularityFeatures"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
-network_features = ["Regularity","Burst"];%["Regularity","Burst","Catch22"];%"all"; %Only relevant for level = Recording ["Regularity","Burst","Catch22","GraphFeatures"]
+unit_features = ["ActivityFeatures","RegularityFeatures","Catch22"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
+network_features = ["Regularity","Burst","Catch22","GraphFeatures"];%["Regularity","Burst","Catch22"];%"all"; %Only relevant for level = Recording ["Regularity","Burst","Catch22","GraphFeatures"]
 useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
 normalization_var = [];%["PlatingDate"]; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
-grouping_var = "DIV"; %Only relevant when the recording was concatenated and units can be tracked (e.g. "Timepoint" or "DIV")
-grouping_values = [14:7:28]; %Values corresponding to grouping_var (use nan if you want to use all available values)
+grouping_var = [];%"DIV"; %Only relevant when the recording was concatenated and units can be tracked (e.g. "Timepoint" or "DIV")
+grouping_values = [21:7:35]; %Values corresponding to grouping_var (use nan if you want to use all available values)
 normalization = []; %"baseline" (divided by first data point) or "scaled" [0 1]
 tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
 batch123group.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, useClustered,...

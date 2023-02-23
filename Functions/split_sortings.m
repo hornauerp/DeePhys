@@ -47,7 +47,7 @@ if ~all(arrayfun(@(x) exist(x,'file'),fullfile(output_path_list, "spike_template
         
     end
 else
-    disp("Output files already exist")
+    disp("Skipped splitting, output files already exist")
 end
 end
 

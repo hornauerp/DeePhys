@@ -54,7 +54,7 @@ rec_group = RecordingGroup(rec_array_filtered, rg_params);
 dr_level = "Unit"; %"Unit" or "Recording"
 dr_method = "UMAP"; %"UMAP", "tSNE", "PCA"
 n_dims = 2; %Number of output dimensions
-unit_features = ["ReferenceWaveform","ActivityFeatures","RegularityFeatures","Catch22"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
+unit_features = ["ReferenceWaveform"];%,"ActivityFeatures","RegularityFeatures","Catch22"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
 network_features = ["Regularity","Burst"];%"all"; %Only relevant for level = Recording 
 useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
 normalization_var = []; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
@@ -67,7 +67,7 @@ rec_group.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, netwo
 
 %%
 clust_method = "spectral";
-rec_group.clusterByFeatures(dr_method,dr_level,clust_method,6);
+rec_group.clusterByFeatures(dr_method,dr_level,clust_method);
 
 %%
 % figure("Color","w");
@@ -86,18 +86,23 @@ method = "spectral";
 calc_feat = true;
 assignUnitClusterIdx(rec_group,method,calc_feat);
 
-%%
-dr_method = "tSNE";
-dr_level = "Recording";
+%% Check unsupervised recordings
+dr_level = "Recording"; %"Unit" or "Recording"
+dr_method = "UMAP"; %"UMAP", "tSNE", "PCA"
 n_dims = 2; %Number of output dimensions
-grouping_var = []; %Has to correspond to a MEArecording metadata field
-unit_features = "all";
-network_features = "all";
-useClustered = false;
-rec_group.reduceDimensionality(dr_level, dr_method, n_dims, grouping_var, unit_features, network_features, useClustered);
+unit_features = [];["ActivityFeatures","RegularityFeatures","WaveformFeatures"];%"ReferenceWaveform","WaveformFeatures","ActivityFeatures","RegularityFeatures","GraphFeatures","Catch22"
+network_features = ["all"];%["Burst","Regularity","GraphFeatures"]; %Only relevant for level = Recording ["Regularity","Burst","Catch22","GraphFeatures"]
+useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
+normalization_var = [];%"RecordingDate"; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
+grouping_var = [];%Only relevant when the recording was concatenated and units can be tracked (e.g. "Timepoint" or "DIV")
+grouping_values = []; %Values corresponding to grouping_var (use nan if you want to use all available values)
+normalization = []; %"baseline" (divided by first data point) or "scaled" [0 1]
+tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
+rec_group.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, useClustered,...
+                    normalization_var, grouping_var, grouping_values, normalization, tolerance);
 
 %%
-grouping_var = ["Mutation"];
+grouping_var = ["EI_Ratio"];
 figure("Color","w");
 [cluster_idx, group_labels_comb] = rec_group.plot_true_clusters(dr_level, dr_method, grouping_var,50);
 

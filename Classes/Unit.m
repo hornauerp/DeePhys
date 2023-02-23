@@ -31,7 +31,7 @@ classdef Unit < handle
             if length(unit.SpikeTimes) > 2
                 isi = diff(unit.SpikeTimes);
                 act_feat.MeanInterSpikeInterval = mean(isi);
-                act_feat.VarianceInterSpikeInterval = std(isi);
+                act_feat.VarianceInterSpikeInterval = var(isi);
                 act_feat.CVInterSpikeInterval = std(isi)/mean(isi);
                 pacf = parcorr(isi,1);
                 act_feat.PartialAutocorrelation = pacf(2);

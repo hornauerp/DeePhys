@@ -237,8 +237,8 @@ classdef RecordingGroup < handle
                classification_val string %Value(s) that are to be pooled (against) -> classification_val vs rest
            end
            clf_group_idx = find(ismember(group_labels, classification_val));
-           new_group_idx = (group_idx == clf_group_idx) * 1;
-           new_group_labels(1) = join(group_labels(clf_group_idx));
+           new_group_idx = ismember(group_idx,clf_group_idx) * 1;%(group_idx == clf_group_idx) * 1;
+           new_group_labels(1) = join(group_labels(clf_group_idx),'/');
            clf_group_idx = find(~ismember(group_labels, classification_val));
            new_group_idx(new_group_idx == 0) = 2;
            new_group_labels(2) = join(group_labels(clf_group_idx),'/');
@@ -296,7 +296,7 @@ classdef RecordingGroup < handle
                             else 
                                 error('Unknown level, select either "Unit" or "Recording"')
                             end
-                            iR_table.Properties.VariableNames = iR_table.Properties.VariableNames + "_" + string(value(iR));
+                            iR_table.Properties.VariableNames = iR_table.Properties.VariableNames + "_" + string(values(iR));
                             rec_table_array{iR} = iR_table;
                         end
                         if normalization == "baseline"
@@ -327,10 +327,10 @@ classdef RecordingGroup < handle
                    continue
                end
             end
-%             clean_culture_tables = ~cellfun(@isempty, culture_table_array);
-            feature_table = vertcat(culture_table_array{:});
-            keep_idx = ~isnan(std(feature_table.Variables,'omitnan')); %Remove variables with 0 variance
-            feature_table = feature_table(:,keep_idx);
+            clean_culture_tables = ~cellfun(@isempty, culture_table_array);
+            feature_table = vertcat(culture_table_array{clean_culture_tables});
+%             keep_idx = ~isnan(std(feature_table.Variables,'omitnan')); %Remove variables with 0 variance
+%             feature_table = feature_table(:,keep_idx);
         end
         
         function [norm_train_data, norm_test_data] = normalizeByGroup(rg, feat_mat, object_group, grouping_var, train_idx, test_idx)
@@ -579,9 +579,18 @@ classdef RecordingGroup < handle
                 Y_train = true_age(train_idx);
                 Y_test = true_age(test_idx);
                 t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
-                clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t);
+                clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset('UseParallel',true));
                 Y_pred = predict(clf,X_test);
-                predImp = clf.oobPermutedPredictorImportance;
+                %                     predImp = clf.oobPermutedPredictorImportance;
+                predImp = [];
+                
+                result(k).Mdl = clf;
+                result(k).Y_pred = Y_pred;
+                result(k).Y_test = Y_test';
+                result(k).mse_train = resubLoss(clf);
+                result(k).objects = object_group(test_idx);
+                result(k).predImp = predImp;
+                result(k).GroupLabels = group_labels_comb;
                 
             end
             
@@ -613,10 +622,10 @@ classdef RecordingGroup < handle
             else
                 [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
             end
-            [group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var);
+            [group_idx, group_labels_comb] = rg.combineMetadataIndices(object_group, classification_var);
             
             if ~isempty(classification_val) %New division / pool conditions
-                [group_idx,group_labels_comb] = poolMetadataValues(group_idx, group_labels_comb, classification_val);
+                [group_idx,group_labels_comb] = rg.poolMetadataValues(group_idx, group_labels_comb, classification_val);
             end
             
             if K_fold == -1 %set kfold to LOOCV
@@ -678,7 +687,7 @@ classdef RecordingGroup < handle
             
         end
         
-        function assessClassifer(rg, clf_result)
+        function [train_acc, test_acc, avg_score] = assessClassifier(rg, clf_result)
             arguments
                rg RecordingGroup
                clf_result struct
@@ -695,15 +704,16 @@ classdef RecordingGroup < handle
             idx = sub2ind(size(scores), 1:size(scores,1),y_test');
             scores_treatment = scores(idx(~treatment_idx));
             
-            accuracy = sum(y_pred == y_test)/length(y_pred);
+            test_acc = sum(y_pred == y_test)/length(y_pred);
             train_acc = mean([clf_result.train_acc]);
+            avg_score = mean(scores(idx));
             
-            avg_score_true 
-            fprintf('Training accuracy was %.2f\n',mean([clf_result.train_acc]))
-            fprintf('Test accuracy was %.2f\n',accuracy)
-            fprintf('Average score was %.2f\n',mean(scores(idx)))
+            fprintf('Training accuracy was %.2f\n', train_acc)
+            fprintf('Test accuracy was %.2f\n', test_acc)
+            fprintf('Average score was %.2f\n', avg_score)
         end
-        function result = applyClassifier(rg, level, alg, classification_var, classification_val, test_var, test_val, network_features, unit_features, useClustered,... 
+        
+        function result = applyClassifier(rg, level, alg, classification_var, classification_val, test_var, test_val, network_features, unit_features, useClustered,...
                                     grouping_var, grouping_values, normalization, normalization_var, N_hyper, tolerance)
            arguments
                rg RecordingGroup
@@ -795,10 +805,126 @@ classdef RecordingGroup < handle
             heatmap(accuracy_mat,'ColorLimits',[0 1],'XDisplayLabels',group_labels_comb,'YDisplayLabels',result.GroupLabels)
         end
         
-        function regressionByFeatures(rg)
-           arguments
-               rg RecordingGroup
-           end
+        function result = regressionByFeatures(rg, level, regression_var, stratification_var, stratification_values, grouping_var, grouping_values, ...
+                network_features, unit_features, useClustered, normalization_var, normalization, tolerance, N_hyper, K_fold)
+            arguments
+                rg RecordingGroup
+                level string = "Recording" %Unit or Recording
+                regression_var string = "Concentration" %Metadata variable that will be regressed for
+                stratification_var = "Mutation" %Specify the variable by which to split training and test dataset (e.g. train on wildtype, test on mutation)
+                stratification_values = [] %Corresponding to stratification_var, if a value is specified then this will be used as training data
+                grouping_var = "DIV"
+                grouping_values = nan
+                network_features string = "all"
+                unit_features string = "all"
+                useClustered logical = false
+                normalization_var string = "PlatingDate"
+                normalization string = []
+                tolerance double = 1
+                N_hyper (1,1) double = 0 %If >0 do hyperparameter optimization
+                K_fold (1,1) double = 5 % number of K-fold CV
+            end
+            
+            if any(arrayfun(@(x) ~isfield(rg.Recordings(x).Metadata,regression_var),1:length(rg.Recordings)))
+                error('Regression data missing')
+            end
+            
+            [~, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+            [rec_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, stratification_var);
+            
+            if isempty(stratification_values)
+                stratification_var = [stratification_var regression_var];
+                [rec_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, stratification_var);
+                if K_fold == -1 %set kfold to LOOCV
+                    K_fold = length(rec_group_idx);
+                end
+                cv = cvpartition(rec_group_idx,'KFold',K_fold);
+                t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
+                
+                for k = 1:K_fold
+                    if level == "Unit"
+                        error('Not yet implemented')
+%                         train_table = object_group(cv.training(k)).getUnitFeatures(unit_features);
+%                         test_table = object_group(cv.test(k)).getUnitFeatures(unit_features);
+%                         train_idx = logical([ones(1, size(train_table,1)) zeros(1, size(test_table,1))]);
+%                         test_idx = ~train_idx;
+%                         input_group = [object_group(cv.training(k)).Units, object_group(cv.test(k)).Units];
+%                         input_table = [train_table;test_table];
+%                         unit_recordings = [object_group.MEArecording];
+%                         metadata = [unit_recordings.Metadata];
+%                         true_value = [metadata.(regression_var)];
+%                         Y_train = true_value(train_idx);
+%                         Y_test = true_value(test_idx);
+                    else
+                        %                         input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                        [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+                        train_idx = cv.training(k);
+                        test_idx = cv.test(k);
+                        [reg_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, regression_var);
+                        true_value = group_labels_comb(reg_group_idx);
+                        if isstring(true_value)
+                           true_value = str2double(true_value); 
+                        end
+                        input_group = object_group;
+                        Y_train = true_value(train_idx);
+                        Y_test = true_value(test_idx);
+                    end
+                    
+                    [X_train, X_test] = prepareInputMatrix(rg, input_table, input_group, normalization_var, train_idx, test_idx);
+                    
+                    clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset('UseParallel',true));
+                    Y_pred = predict(clf, X_test);
+                    %                     predImp = clf.oobPermutedPredictorImportance;
+                    predImp = [];
+                    
+                    result(k).Mdl = clf;
+                    result(k).Y_pred = Y_pred;
+                    result(k).Y_test = Y_test;
+                    result(k).mse_train = resubLoss(clf);
+                    result(k).objects = object_group(test_idx);
+                    result(k).predImp = predImp;
+                    result(k).GroupLabels = group_labels_comb;
+                end
+            else
+                error('Not yet implemented')
+                train_group = find(group_labels_comb == stratification_values);
+                
+                if level == "Unit"
+                    input_table = object_group.getUnitFeatures(unit_features);
+                    object_group = [object_group.Units];
+                    [unit_group_idx, ~] = combineMetadataIndices(rg, object_group, stratification_var);
+                    train_idx = unit_group_idx == train_group;
+                    test_idx = unit_group_idx ~= train_group;
+                    unit_recordings = [object_group.MEArecording];
+                    metadata = [unit_recordings.Metadata];
+                    true_value = [metadata.(regression_var)];
+                    
+                elseif level == "Recording"
+                    input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                    train_idx = rec_group_idx == train_group;
+                    test_idx = rec_group_idx ~= train_group;
+                    metadata = [object_group.Metadata];
+                    true_value = [metadata.(regression_var)];
+                    
+                end
+                [X_train, X_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
+                Y_train = true_value(train_idx);
+                Y_test = true_value(test_idx);
+                t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
+                clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset('UseParallel',true));
+                Y_pred = predict(clf,X_test);
+                %                     predImp = clf.oobPermutedPredictorImportance;
+                predImp = [];
+                
+                result(k).Mdl = clf;
+                result(k).Y_pred = Y_pred;
+                result(k).Y_test = Y_test;
+                result(k).mse_train = resubLoss(clf);
+                result(k).objects = object_group(test_idx);
+                result(k).predImp = predImp;
+                result(k).GroupLabels = group_labels_comb;
+                
+            end
         end
         
         function [iMetadata, metadata_groups] = returnMetadataArray(rg, metadata_object, metadata_name)
@@ -934,7 +1060,7 @@ classdef RecordingGroup < handle
            end
            cluster_idx = rg.Clustering.Unit.(method).Index;
            cluster_idx = num2cell(cluster_idx); %Prepare to use deal to assign cluster ids
-           [rg.DimensionalityReduction.Units.ClusterID] = deal(cluster_idx{:});
+           [rg.DimensionalityReduction.Unit.ObjectGroup.ClusterID] = deal(cluster_idx{:});
            
            if calc_feat
                N_clust = num2cell(ones(size(rg.Recordings))*max([cluster_idx{:}]));
@@ -1164,7 +1290,7 @@ classdef RecordingGroup < handle
             end
         end
         
-        function plot_cluster_waveforms(rg,method)
+        function colors = plot_cluster_waveforms(rg,method)
             arguments
                 rg RecordingGroup
                 method string = "kmeans"
@@ -1197,31 +1323,33 @@ classdef RecordingGroup < handle
                 plot(time_vector,horzcat(avg_wf{c}),"LineWidth",2,'Color',[0 0 0 0.5])
                 box off; axis tight; xlabel("Time [ms]"); ylim([-1 1])
             end
+            colors = vertcat(p.Color);
         end
         
-        function plot_feature_trajectories(rg, metadata_field, timepoints, feature_group, normalization, feature_name, grouping_var, useClustered, tolerance)
+        function plot_feature_trajectories(rg, level, grouping_var, grouping_values, network_features, unit_features, normalization, feature_names, comp_var, useClustered, tolerance)
             arguments
                 rg RecordingGroup
-                metadata_field string
-                timepoints (1,:) {isnumeric}
-                feature_group string
+                level string
+                grouping_var string
+                grouping_values (1,:) {isnumeric}
+                network_features string
+                unit_features string
                 normalization string = "scaled" %"baseline" or "scaled"
-                feature_name string = []
-                grouping_var = "Mutation"
+                feature_names string = []
+                comp_var = "Mutation"
                 useClustered logical = false
                 tolerance = 1
             end
-            switch feature_group
-                case "UnitFeatures"
-                    unit_features = "all";
-                    network_features = [];
-                case "NetworkFeatures"
-                    unit_features = [];
-                    network_features = "all";
+            [feature_table, culture_array] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+            if ~isempty(feature_names)
+                sel_idx = startsWith(feature_table.Properties.VariableNames, feature_names);
+                if isempty(sel_idx)
+                    error("Could not find " + feature_names)
+                end
+                feature_table = feature_table(:,sel_idx);
             end
-            [feature_table, culture_array] = aggregateCultureFeatureTables(rg, level, metadata_field, timepoints, tolerance, network_features, unit_features, normalization, useClustered);
-            [group_idx, group_labels_comb] = combineMetadataIndices(rg, culture_array, grouping_var);
-            N_features = size(feature_table,2)/numel(timepoints);
+            [group_idx, group_labels_comb] = combineMetadataIndices(rg, culture_array, comp_var);
+            N_features = size(feature_table,2)/numel(grouping_values);
             N_groups = length(group_labels_comb);
             jitter = linspace(-1,1,N_groups);
             c = othercolor('RdBu4',N_groups);
@@ -1235,7 +1363,7 @@ classdef RecordingGroup < handle
                 feature_name = [feature_parts{1:end-1}];
                 feature_matrix = feature_table(:,f:N_features:end).Variables;
                 for g = 1:N_groups
-                    x = timepoints + jitter(g);
+                    x = grouping_values + jitter(g);
                     xx = linspace(min(x),max(x),100);
                     data_mat = feature_matrix(group_idx==g,:);
                     y = mean(data_mat,1,'omitnan');
@@ -1243,7 +1371,7 @@ classdef RecordingGroup < handle
                     y_err = std(data_mat,[],1,'omitnan');
                     plot(xx,yy,'Color',c(g,:),'HandleVisibility','off')
                     hold on
-                    errorbar(timepoints+jitter(g),y,y_err,...
+                    errorbar(grouping_values+jitter(g),y,y_err,...
                         'LineWidth',1,'Color',c(g,:),'CapSize',0,'LineStyle','none','Marker','o','MarkerSize',2,...
                         'MarkerFaceColor',c(g,:));
                     set(gca,'FontSize',fontsz)
@@ -1251,11 +1379,65 @@ classdef RecordingGroup < handle
                     set(marg,'Margin',3)
                 end
                 title(feature_name)
-                xlabel(metadata_field)
+                xlabel(grouping_var)
                 box off
             end
             l = legend(group_labels_comb,'Box','off');
 %             l.Position = [0.02 0.8 0.1 0.1];
+        end
+        
+        function plot_feature_heatmap(rg, level, grouping_var, grouping_values, network_features, unit_features, normalization, comp_var, comp_val, useClustered, tolerance, color_lim)
+           arguments
+                rg RecordingGroup
+                level string
+                grouping_var string
+                grouping_values (1,:) {isnumeric}
+                network_features string
+                unit_features string
+                normalization string = "scaled" %"baseline" or "scaled"
+                comp_var = "Mutation"
+                comp_val string = []
+                useClustered logical = false
+                tolerance = 1
+                color_lim double = 3 %Maximum value to cap colormap
+           end
+           
+           [feature_table, culture_array] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+           
+           [group_idx, group_labels_comb] = combineMetadataIndices(rg, culture_array, comp_var);
+           if ~isempty(comp_val)
+               [group_idx, group_labels_comb] = rg.poolMetadataValues(group_idx, group_labels_comb, comp_val);
+           end
+           feature_names = [];
+           feat_mat = feature_table.Variables;
+           feat_mat(isinf(feat_mat)) = nan;
+           norm_mat = normalize(feat_mat,'range',[0 1]);
+           means = arrayfun(@(x) mean(norm_mat(group_idx == x,:),'omitnan'),1:length(unique(group_idx)),'un',0);
+           color_vector = log(means{1}./means{2});
+           color_mat = reshape(color_vector,[],length(grouping_values));
+           for f = 1:length(feature_table.Properties.VariableNames)
+               feature_parts = strsplit(feature_table.Properties.VariableNames{f},"_");
+               feature_names = [feature_names string([feature_parts{1:end-1}])];
+           end
+           
+           figure('Color','w');
+           imagesc(color_mat)
+           cm = othercolor('RdBu9',100);
+           colormap(cm([1:45,55:end],:)) %Make smaller differences more visible
+           clim = [log(1/color_lim) log(color_lim)];
+           set(gca,'CLim',clim) %Set color limits to 1/3 and 3 
+           xticks(1:size(color_mat,2))
+           xticklabels(grouping_values)
+           xlabel(grouping_var)
+           yticks(1:size(color_mat,1))
+           yticklabels(feature_names)
+           cb = colorbar;
+           cb.Location = 'northoutside';
+           cb.Title.String = group_labels_comb(1) + "/" + group_labels_comb(2);
+           cb.Title.FontWeight = 'bold';
+           cb.Ticks = [clim(1) 0 clim(end)];
+           cb.TickLabels = [sprintf("<%.1f",1/color_lim) + color_lim, "1", ">" + color_lim];
+           set(gca,'FontSize',7)
         end
         
         function [value_array, group_labels_comb] = plot_cluster_densities(rg, level, method, grouping_var, n_bins)
@@ -1305,7 +1487,7 @@ classdef RecordingGroup < handle
             comp_array = zeros(size(value_array));
             
             for i = 1:size(clust_comp,2)
-                comp_data = value_array(:,:,clust_comp(2,i)) - value_array(:,:,clust_comp(1,i));
+                comp_data = normalize(value_array(:,:,clust_comp(2,i)),'range',[0 1]) - normalize(value_array(:,:,clust_comp(1,i)),'range',[0 1]);
                 comp_array(:,:,i) = comp_data./N_data;
                 ax(i) = nexttile;
                 imagesc(comp_array(:,:,i))
@@ -1313,7 +1495,7 @@ classdef RecordingGroup < handle
                 xticks([])
                 yticks([])
             end
-            max_change = max(abs(comp_array),[],'all')/5;
+            max_change = max(abs(comp_array),[],'all');
             cmap = othercolor('RdBu9',100);
             colormap(cmap)
             arrayfun(@(x) set(x,'CLim',[-max_change max_change]),ax)

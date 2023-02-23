@@ -9,14 +9,19 @@ fprintf("Generated %i sorting paths\n",length(sorting_path_list))
 %% Set parameters values
 emptyRec = MEArecording();
 params = emptyRec.returnDefaultParams();
-params.QC.Amplitude = [];
-params.QC.FiringRate = [0.01 100];
-params.QC.Axon = 0.9;
-params.QC.Noise = 8;
-params.Analyses.Bursts = 0;
-params.Analyses.Connectivity.DDC = 0;
-params.Analyses.Catch22 = 1;
-params.Outlier.Method = []; %No outlier removal
+params.QC.Amplitude             = [];
+params.QC.FiringRate            = [0.01 100];
+params.QC.Axon                  = 0.8;
+params.QC.Noise                 = 8;
+params.QC.N_Units               = 20;
+params.Analyses.SingleCell      = 1;
+params.Analyses.Regularity      = 1;
+params.Analyses.Catch22         = 1;
+params.Analyses.Bursts          = 1;
+params.Analyses.Connectivity    = ["STTC","CCG"];
+params.Outlier.Method           = []; %No outlier removal
+params.Save.Flag                = 1; %Save individual MEArecordings to prevent data loss if the execution is interrupted
+params.Save.Overwrite           = 1; %Overwrite previous analysis if you changed parameters
 
 split_times = [0 10; 25 35; 50 60]; %Cutouts of the recording
 output_folder = "min_" + split_times(:,1); %Name folders according to the minute the cutout starts
@@ -28,19 +33,23 @@ rec_array = {};
 
 parfor iPath = 1:length(sorting_path_list)
     sorting_path = sorting_path_list(iPath);
-    
-    if startsWith(sorting_path, "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/230118/Quinpirole/M05867/")
+    spk_t = readNPY(fullfile(sorting_path,'spike_times.npy'));
+    if round(max(spk_t)/600000) == 45
         split_times = [0 10; 10 20; 35 45];
-    else
+    elseif round(max(spk_t)/600000) == 60
         split_times = [0 10; 25 35; 50 60]; %Cutouts of the recording
+    else
+        split_times = [];
+        warning("Unknown recording length for" + sorting_path)
+        continue
     end
     output_folder = "min_" + split_times(:,1); %Name folders according to the minute the cutout starts
     output_path_list = split_sortings(sorting_path, split_times, output_folder);
     
-    for iSplit = numel(output_path_list):-1:1
+    for iSplit = 1:numel(output_path_list)
         
         split_params = params;
-        if iSplit == 3 %Perform QC on first part, keep the same units for the rest
+        if iSplit == 1 %Perform QC on first part, keep the same units for the rest
             split_params.QC.GoodUnits = [];
         else
             split_params.QC.GoodUnits = mearec.Parameters.QC.GoodUnits; %Currently only supported in boolean/logic indexing
@@ -54,15 +63,20 @@ parfor iPath = 1:length(sorting_path_list)
         metadata.Timepoint = 25*(iSplit - 1);%split_times(iSplit,1);
         metadata.AcuteTreatment = "Quinpirole";
         temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
-        if exist(temp_file,"file")
-            spk_temp = readNPY(temp_file);
-            if length(unique(spk_temp)) > min_N_units
-                mearec = MEArecording(metadata, split_params);
-                rec_array = [rec_array mearec];
-            else
-                break
+        if exist(fullfile(metadata.InputPath,"MEArecording.mat"),"file")
+            loaded_obj = load(fullfile(metadata.InputPath,"MEArecording.mat"));
+            mearec = loaded_obj.obj;
+        else
+            if exist(temp_file,"file")
+                spk_temp = readNPY(temp_file);
+                if length(unique(spk_temp)) > min_N_units
+                    mearec = MEArecording(metadata, split_params);
+                else
+                    break
+                end
             end
         end
+        rec_array = [rec_array mearec];
     end
 end
 
@@ -76,7 +90,7 @@ dr_level = "Unit"; %Unit or Recording
 dr_method = "UMAP";
 n_dims = 2; %Number of output dimensions
 unit_features = ["ReferenceWaveform","ActivityFeatures"];%"ReferenceWaveform",
-network_features = "all"; %Only relevant for level = Recording 
+network_features = "all"; %Only relevant for level = Recording
 useClustered = false; %Only usable when clustering and assignClusterIdx was run beforehand
 normalization_var = []; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
 grouping_var = "Timepoint"; %Only relevant when the recording was concatenated and units can be tracked (e.g. Timepoint or DIV)
@@ -84,7 +98,7 @@ grouping_values = nan; %Values corresponding to grouping_var (use nan if you wan
 normalization = "baseline"; %"baseline" (divided by first data point) or "scaled" [0 1]
 tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
 rg.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, useClustered,...
-                    normalization_var, grouping_var, grouping_values, normalization, tolerance);
+    normalization_var, grouping_var, grouping_values, normalization, tolerance);
 
 %%
 clust_method = "kmeans";
