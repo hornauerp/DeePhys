@@ -11,7 +11,7 @@ rec_array = recording_array_from_single_files(sorting_path_list);
 %% Filter recordings for relevant LNA dataset
 rg_params.Selection.Inclusion = {{'Source','FCDI'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
 %,{'Mutation','WT'}
-rg_params.Selection.Exclusion = {{'DIV',7,12,14},{'Treatment',"ASO"},{'Mutation',"LRRK2"}}; %Cell array of cell arrays with fieldname + value
+rg_params.Selection.Exclusion = {{'Treatment',"ASO"},{'Mutation',"LRRK2"}}; %Cell array of cell arrays with fieldname + value
 lna_group = RecordingGroup(rec_array, rg_params);
 
 %% Check unsupervised 

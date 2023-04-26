@@ -615,10 +615,24 @@ classdef MEArecording < handle
                for u = 1:length(waveform_features)
                    unit_array(u) = Unit(obj, good_wf_matrix(:,u), reference_electrode(u), good_unit_spike_times{u}, waveform_features{u});
                end
-               no_act_idx = arrayfun(@(x) isempty(x.ActivityFeatures),unit_array);
+               no_act_idx = arrayfun(@(x) isempty(x.ActivityFeatures),unit_array); 
+               %If activity features were not computed due to not enough activity, we fill them to prevent issues when tracking units
                act_table = vertcat(unit_array.ActivityFeatures);
-               empty_table = array2table(zeros(1,size(act_table,2)),'VariableNames',act_table.Properties.VariableNames);
-               [unit_array(no_act_idx).ActivityFeatures] = deal(empty_table);
+               empty_act_table = array2table(zeros(1,size(act_table,2)),'VariableNames',act_table.Properties.VariableNames);
+               [unit_array(no_act_idx).ActivityFeatures] = deal(empty_act_table);
+               if obj.Parameters.Analyses.Regularity
+                   no_reg_idx = arrayfun(@(x) isempty(x.RegularityFeatures),unit_array); 
+                   reg_table = vertcat(unit_array.RegularityFeatures);
+                   empty_reg_table = array2table(zeros(1,size(reg_table,2)),'VariableNames',reg_table.Properties.VariableNames);
+                   [unit_array(no_reg_idx).RegularityFeatures] = deal(empty_reg_table);
+               end
+               if obj.Parameters.Analyses.Catch22
+                   no_c22_idx = arrayfun(@(x) isempty(x.Catch22),unit_array);
+                   c22_table = vertcat(unit_array.Catch22);
+                   empty_c22_table = array2table(zeros(1,size(c22_table,2)),'VariableNames',c22_table.Properties.VariableNames);
+                   [unit_array(no_c22_idx).Catch22] = deal(empty_c22_table);
+               end
+               
                obj.Units = unit_array;
                obj.updateSpikeTimes();
            else
@@ -632,7 +646,7 @@ classdef MEArecording < handle
                 spike_train (1,:) double = obj.Spikes.Times % in seconds
                 bin_size (1,1) double = obj.Parameters.Catch22.BinSize
             end
-            n_bins = round(max(spike_train) / bin_size);
+            n_bins = round(obj.RecordingInfo.Duration / bin_size);
             binned = histcounts(spike_train,n_bins);
             [featureValues, featureNames] = catch22_all(binned');
             catch_22_table = array2table(featureValues','VariableNames',featureNames);
@@ -1164,13 +1178,23 @@ classdef MEArecording < handle
        % Plots
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
-       function PlotNetworkScatter(obj)
-          figure('Color','w');
-          plot(obj.Spikes.Times,obj.Spikes.Units,'k.')
-          xlabel('Time [s]')
-          ylabel('Unit ID')
-          axis tight
-          box off
+       function PlotNetworkScatter(obj, time_cutout, color)
+           arguments
+               obj MEArecording
+               time_cutout (1,2) double = [0 180]
+               color = 'k'
+           end
+           %           figure('Color','w');
+           spikes = obj.Spikes.Times(obj.Spikes.Times > time_cutout(1) & obj.Spikes.Times < time_cutout(2));
+           units = obj.Spikes.Units(obj.Spikes.Times > time_cutout(1) & obj.Spikes.Times < time_cutout(2));
+           plot(spikes, units, '.','Color',color,'MarkerSize', 0.1)
+           xlabel('Time [s]')
+           ylabel('Unit ID')
+           xticks(linspace(time_cutout(1),time_cutout(2),5))
+%            xticklabels(unique([xt time_cutout]))
+           axis tight
+           box off
+           xlim(time_cutout)
        end
        
        function PlotNetworkScatterHistogram(obj)
@@ -1246,6 +1270,40 @@ classdef MEArecording < handle
            end
            cm = othercolor('RdBu5',3);
            colormap(flipud(cm))
+       end
+       
+       function data = PlotUnitClusterActivity(obj, time_cutout)
+           ids = [obj.Units.ClusterID];
+           clust_sz = histcounts(ids);
+           N_clust = max(ids);
+           clust_act = {};
+           clust_ids = {};
+           color_array = [];
+           ytick_vals = [];
+           for i = 1:N_clust
+               id = length(clust_act) + 1;
+               act = {obj.Units(ids == i).SpikeTimes};
+               ytick_vals(i) = length(clust_act) + round(length(act)/2);
+               clust_ids = [clust_ids arrayfun(@(x) ones(size(act{x}))* (x + length(clust_act)),1:length(act),'un',0)];
+               clust_act = [clust_act act];
+               color_array = [color_array ones(1,length(vertcat(act{:}))) * i];
+           end
+           spk_t = vertcat(clust_act{:});
+           spk_id = vertcat(clust_ids{:});
+           figure('Color','w'); 
+           scatter(spk_t,spk_id,2,color_array,'filled')
+           hold on
+           yline(cumsum(clust_sz),'k-')
+           xlim([time_cutout])
+           yticks(ytick_vals)
+           yticklabels(1:length(ytick_vals))
+           ylim([0 sum(clust_sz)])
+           colormap(othercolor('Mdarkrainbow',6))
+           data.spk_t = spk_t;
+           data.spk_id = spk_id;
+           data.color_array = color_array;
+           data.clust_sz = clust_sz;
+           data.ytick_vals = ytick_vals;
        end
     end
 end

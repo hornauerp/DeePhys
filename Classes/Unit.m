@@ -43,6 +43,7 @@ classdef Unit < handle
                     catch_22_table = unit.MEArecording.run_catch_22(unit.SpikeTimes);
                     catch_22_table.Properties.VariableNames = "SC_" + string(catch_22_table.Properties.VariableNames);
                     unit.Catch22 = catch_22_table;
+                    
                 end
             end
         end

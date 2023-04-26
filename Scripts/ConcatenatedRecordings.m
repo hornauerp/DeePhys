@@ -2,7 +2,7 @@ addpath(genpath("/home/phornauer/Git/DeePhys"))
 
 %% Generate sorting_path_list automatically
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
-path_logic = {'23011*','Quinpirole','M*','w*'}; %Each cell corresponds to one subdirectory
+path_logic = {'230123','How_*','M*','w*','sorted'}; %Each cell corresponds to one subdirectory
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
 fprintf("Generated %i sorting paths\n",length(sorting_path_list))
 
@@ -23,7 +23,7 @@ params.Outlier.Method           = []; %No outlier removal
 params.Save.Flag                = 1; %Save individual MEArecordings to prevent data loss if the execution is interrupted
 params.Save.Overwrite           = 1; %Overwrite previous analysis if you changed parameters
 
-split_times = [0 10; 25 35; 50 60]; %Cutouts of the recording
+split_times = [0 10; 25 35; 50 60]; %Cutouts of the recording 
 output_folder = "min_" + split_times(:,1); %Name folders according to the minute the cutout starts
 
 min_N_units = 20; %Minimum number of units
@@ -33,40 +33,38 @@ rec_array = {};
 
 parfor iPath = 1:length(sorting_path_list)
     sorting_path = sorting_path_list(iPath);
-    spk_t = readNPY(fullfile(sorting_path,'spike_times.npy'));
-    if round(max(spk_t)/600000) == 45
-        split_times = [0 10; 10 20; 35 45];
-    elseif round(max(spk_t)/600000) == 60
-        split_times = [0 10; 25 35; 50 60]; %Cutouts of the recording
-    else
-        split_times = [];
-        warning("Unknown recording length for" + sorting_path)
-        continue
-    end
-    output_folder = "min_" + split_times(:,1); %Name folders according to the minute the cutout starts
-    output_path_list = split_sortings(sorting_path, split_times, output_folder);
-    
-    for iSplit = 1:numel(output_path_list)
+    spkt_file = fullfile(sorting_path,'spike_times.npy');
+    if exist(spkt_file,'file')
+        spk_t = readNPY(spkt_file);
+%         if round(max(spk_t)/600000) == 45
+%             split_times = [0 10; 10 20; 35 45];
+%         elseif round(max(spk_t)/600000) == 60
+%             split_times = [0 10; 25 35; 50 60]; %Cutouts of the recording
+%         else
+%             split_times = [];
+%             warning("Unknown recording length for" + sorting_path)
+%             continue
+%         end
+        output_folder = "min_" + split_times(:,1); %Name folders according to the minute the cutout starts
+        output_path_list = split_sortings(sorting_path, split_times, output_folder);
         
-        split_params = params;
-        if iSplit == 1 %Perform QC on first part, keep the same units for the rest
-            split_params.QC.GoodUnits = [];
-        else
-            split_params.QC.GoodUnits = mearec.Parameters.QC.GoodUnits; %Currently only supported in boolean/logic indexing
-        end
-        
-        metadata = struct();
-        metadata.LookupPath = "/home/phornauer/Git/DeePhys/Data/cellline_lookup.xlsx";
-        metadata.InputPath = output_path_list(iSplit);
-        
-        metadata.PathPartIndex = [10,12,13]; %[RecordingDate, PlateID, WellID]
-        metadata.Timepoint = 25*(iSplit - 1);%split_times(iSplit,1);
-        metadata.AcuteTreatment = "Quinpirole";
-        temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
-        if exist(fullfile(metadata.InputPath,"MEArecording.mat"),"file")
-            loaded_obj = load(fullfile(metadata.InputPath,"MEArecording.mat"));
-            mearec = loaded_obj.obj;
-        else
+        for iSplit = 1:numel(output_path_list)
+            
+            split_params = params;
+            if iSplit == 1 %Perform QC on first part, keep the same units for the rest
+                split_params.QC.GoodUnits = [];
+            else
+                split_params.QC.GoodUnits = mearec.Parameters.QC.GoodUnits; %Currently only supported in boolean/logic indexing
+            end
+            
+            metadata = struct();
+            metadata.LookupPath = "/home/phornauer/Git/DeePhys/Data/cellline_lookup.xlsx";
+            metadata.InputPath = output_path_list(iSplit);
+            
+            metadata.PathPartIndex = [10,12,13]; %[RecordingDate, PlateID, WellID]
+            metadata.Timepoint = 25*(iSplit - 1);%split_times(iSplit,1);
+            metadata.AcuteTreatment = "Quinpirole";
+            temp_file = fullfile(metadata.InputPath,"spike_templates.npy");
             if exist(temp_file,"file")
                 spk_temp = readNPY(temp_file);
                 if length(unique(spk_temp)) > min_N_units
@@ -75,8 +73,10 @@ parfor iPath = 1:length(sorting_path_list)
                     break
                 end
             end
+            rec_array = [rec_array mearec];
         end
-        rec_array = [rec_array mearec];
+    else
+        continue
     end
 end
 

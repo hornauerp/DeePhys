@@ -1,10 +1,11 @@
 addpath(genpath("/home/phornauer/Git/DeePhys"))
 %% Generate sorting_path_list 
-root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
+% root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
+root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/mpriouret/iNeurons/";
 % path_logic = {'SCR*','*','*','w*'}; %Each cell corresponds to one subdirectory
 % path_logic = {'DeePhysS*','*','*','w*'};
-path_logic = {'M*','w*'};
-% path_logic = {'230203','*','*','w*'};
+% path_logic = {'M*','w*'};
+path_logic = {'230302','Amplitude','*','w*','sorted'};
 
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
 fprintf("Generated %i sorting paths\n",length(sorting_path_list))
@@ -26,7 +27,7 @@ params.Outlier.Method           = []; %No outlier removal
 params.Save.Flag                = 1; %Save individual MEArecordings to prevent data loss if the execution is interrupted
 
 lookup_path = "/home/phornauer/Data/iNeurons/iNeurons_lookup.xlsx";
-path_part_idx = [11,12,13]; %[recording_date, plate_id, well_id]
+path_part_idx = [11,13,14]; %[recording_date, plate_id, well_id]
 min_N_units = params.QC.N_Units;
 parallel = true;
 if parallel
@@ -35,4 +36,4 @@ end
 
 %% Run full loop
 rec_array = generate_MEArecordings_from_sorting_list(sorting_path_list, lookup_path, path_part_idx, min_N_units, params, parallel);
-save("/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/mpriouret/iNeurons/230221/rec_array.mat", "rec_array")
+save("/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/mpriouret/iNeurons/230302/amplitude_based.mat", "rec_array")

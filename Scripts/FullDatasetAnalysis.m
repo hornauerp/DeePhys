@@ -2,9 +2,9 @@ addpath(genpath("/home/phornauer/Git/DeePhys"))
 
 %% Generate sorting_path_list 
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
-path_logic = {'SCR*','*','*','w*'}; %Each cell corresponds to one subdirectory
+path_logic = {'SCR*','*','*','w*','sorted'}; %Each cell corresponds to one subdirectory
 sorting_path_list_new = generate_sorting_path_list(root_path, path_logic);
-path_logic = {'DeePhysS*','*','*','w*'};
+path_logic = {'DeePhysS*','*','*','w*','sorted'};
 sorting_path_list_old = generate_sorting_path_list(root_path, path_logic);
 sorting_path_list = [sorting_path_list_new sorting_path_list_old];
 fprintf("Generated %i sorting paths\n",length(sorting_path_list))
@@ -19,7 +19,7 @@ rec_array_filtered = full_rec_array(N_units >= min_N_units);
 fprintf("Kept %i out of %i units\n", length(rec_array_filtered),length(full_rec_array))
 
 %% Filter recordings for relevant LNA dataset
-rg_params.Selection.Inclusion = {}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Inclusion = {{'Source','Taylor'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
 %,{'Mutation','WT'} 
 rg_params.Selection.Exclusion = {{'DIV',12},{'Treatment',"ASO"},{'Mutation',"LRRK2","GBA"}}; %Cell array of cell arrays with fieldname + value
 full_rg = RecordingGroup(full_rec_array, rg_params);
@@ -141,13 +141,13 @@ stratification_values = []; %Corresponding to stratification_var, if a value is 
 grouping_var = "DIV";
 grouping_values = [21:7:35];
 network_features = ["Regularity","Burst", "Catch22"];
-unit_features = ["ActivityFeatures","RegularityFeatures","WaveformFeatures"]; 
+unit_features = [];%["ActivityFeatures","RegularityFeatures","WaveformFeatures"];
 useClustered = false;
 normalization_var = [];
 normalization = [];
 tolerance = 1;
-N_hyper (1,1) = 0; %If >0 do hyperparameter optimization
-K_fold (1,1) = -1; % number of K-fold CV
+N_hyper = 0; %If >0 do hyperparameter optimization
+K_fold = 5; % number of K-fold CV
 lna_result = full_rg.regressionByFeatures(level, regression_var, stratification_var, stratification_values, grouping_var, grouping_values, ...
     network_features, unit_features, useClustered, normalization_var, normalization, tolerance, N_hyper, K_fold);
 y_pred = vertcat(lna_result.Y_pred);
@@ -155,4 +155,6 @@ y_test = vertcat(lna_result.Y_test);
 reg_objects = [lna_result.objects];
 [mut_idx, mut_labels] = full_rg.returnMetadataArray(reg_objects,"Mutation");
 
-figure; boxchart(y_test/10,y_pred,'BoxWidth',1)
+full_rg.plot_regression_results(regression_var);
+
+%%

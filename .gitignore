@@ -1,3 +1,4 @@
 *.asv
 *.mexa64
-*.mat
+*.nfs*
+*.npy

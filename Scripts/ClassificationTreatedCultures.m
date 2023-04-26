@@ -2,7 +2,7 @@ addpath(genpath("/home/phornauer/Git/DeePhys"))
 
 %% Generate sorting_path_list 
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
-path_logic = {'DeePhysS*','*','*','w*'};
+path_logic = {'DeePhysS*','*','*','w*','sorted'};
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
 fprintf("Generated %i sorting paths\n",length(sorting_path_list))
 
@@ -11,7 +11,7 @@ rm_con = true; %Remove connectivity data
 rec_array = recording_array_from_single_files(sorting_path_list, rm_con);
 
 %% Filter recordings for relevant LNA dataset
-rg_params.Selection.Inclusion = {{'Source','Taylor'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Inclusion = {}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
 %,{'Mutation','WT'}
 rg_params.Selection.Exclusion = {{'DIV',12},{'Treatment',"ASO"},{'Mutation',"LRRK2"}};%,{'ChipID',"4135_0","4043_0"}}; %Cell array of cell arrays with fieldname + value
 batch123group = RecordingGroup(rec_array, rg_params);

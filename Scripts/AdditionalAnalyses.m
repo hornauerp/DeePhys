@@ -1,3 +1,4 @@
+%% If you have to load the files first
 failed_list = [];
 parfor iRec = 1:length(sorting_path_list)
     mearec = fullfile(sorting_path_list(iRec), "MEArecording.mat");
@@ -17,14 +18,22 @@ parfor iRec = 1:length(sorting_path_list)
     end
 end
 
-%%
+%% If you already have them in your workspace
 parfor iRec = 1:length(rec_array)
-    rec_array(iRec).Parameters.Outlier.Method = "median";
-    rec_array(iRec).Parameters.Outlier.ThresholdFactor = 4;
-    rec_array(iRec).UnitFeatures = rec_array(iRec).aggregateSingleCellFeatures(rec_array(iRec).Units);
-    rec_array(iRec).getBurstStatistics();
+%     if ~isfield(rec_array(iRec).NetworkFeatures,'GraphFeatures') || isempty(rec_array(iRec).NetworkFeatures.GraphFeatures)
+        rec_array(iRec).generateUnits();
+        rec_array(iRec).saveObject();
+%     end
 end
 
+
+%%
+
+for r = 1:length(rec_array)
+   metadata = rec_array(r).Metadata;
+   metadata.PathPartIndex = [11,13,14];
+   rec_array(r).parseMetadata(metadata);
+end
 %%
 iMissing = arrayfun(@(x) isempty(x.Catch22),rec_group.Units);
 %%
