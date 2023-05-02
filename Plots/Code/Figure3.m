@@ -69,7 +69,25 @@ load(fullfile(save_path,'single_cell_clustering.mat'))
 load(fullfile(save_path,'network_clustering.mat'))
 load(fullfile(save_path,'comb_clustering.mat'))
 
-load(fullfile(save_path, 'feature_group_heatmap.mat'))
+load(fullfile(save_path, 'feature_group_heatmap.mat'))%% Age regression
+level = "Recording"; %Unit or Recording
+alg = "rf"; %rf, svm, cnb, knn
+stratification_var = "Mutation"; %Specify the variable by which to split training and test dataset 
+stratification_values = []; %Corresponding to stratification_var, if a value is specified then this will be used as training data (e.g. train on untreated, test on treated)
+pooling_vals = {};
+network_features = ["all"];
+unit_features = ["all"];
+useClustered = false;
+normalization_var = "PlatingDate";
+N_hyper = 0; %If >0 do hyperparameter optimization
+K_fold = -1; % number of K-fold CV
+
+%% Age regression WT
+rg_params.Selection.Inclusion = {{'Mutation','WT'}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Exclusion = {{'DIV',12},{'PlatingDate',200121}};%,{'ChipID',"4135_0","4043_0"}}; %Cell array of cell arrays with fieldname + value
+wt_rg = RecordingGroup(rec_array, rg_params);
+
+wt_age_result = wt_rg.predictAge(level, alg, stratification_var, stratification_values, pooling_vals, network_features, unit_features, useClustered, normalization_var, N_hyper, K_fold);
 
 load(fullfile(save_path, 'base_age_prediction.mat'))
 
