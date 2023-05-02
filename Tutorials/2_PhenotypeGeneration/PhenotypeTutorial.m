@@ -150,3 +150,9 @@ rg_params.Selection.Exclusion = {{'DIV',12},{'PlatingDate',200121}};%,{'ChipID',
 wt_rg = RecordingGroup(rec_array, rg_params);
 
 wt_age_result = wt_rg.predictAge(level, alg, stratification_var, stratification_values, pooling_vals, network_features, unit_features, useClustered, normalization_var, N_hyper, K_fold);
+
+%% Age regression plot
+regression_var = "DIV";
+color_var = "Mutation";
+color_order = [];
+wt_rg.plot_regression_results(regression_var, color_var, color_order)
