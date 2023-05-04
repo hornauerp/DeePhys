@@ -59,7 +59,7 @@ plot_vars = ["Mutation","Treatment"]; %Color coding variables, (almost) any meta
 figure('Color','w');
 [sc_true_idx, sc_group_labels_comb] = lna.plot_true_clusters(dr_level, dr_method, plot_vars);
 
-%% Train on first two batches and test the third batch, assess treatment effect
+%% Train on first two batches and test the third batch
 clf_level = "Recording"; %Unit or Recording
 clf_alg = "rf"; %"rf", "svm", "cnb"
 clf_classification_var = "Mutation"; %Metadata field that determines y_test/y_train
@@ -78,6 +78,41 @@ clf_tolerance = 1;
 result = lna.applyClassifier(clf_level, clf_alg, clf_classification_var, clf_classification_val, clf_test_var, clf_test_val, clf_network_features,...
     clf_unit_features, clf_useClustered, clf_grouping_var, clf_grouping_values, clf_normalization, clf_normalization_var, clf_N_hyper, clf_tolerance);
 
-assessment_var = "Treatment";
-assessment_val = "LNA";
-accuracy_mat = lna.assessAppliedClassifier(result, assessment_var, assessment_val);
+%% Assess performance on unknown batch
+% Now we can check if 1. the performance of the clasifier on the control cultures of the
+% unknown batch is good and only then can we 2. assess the effect of the
+% treatment. 
+assessment_var = "Treatment"; %Metadata field that contains the different conditions
+pooling_vals = {{"LNA"},{"ntLNA","Untreated"}}; %Conditions that should be compared; if empty, then all individual conditions will be compared
+accuracy_mat = lna.assessAppliedClassifier(result, assessment_var, pooling_vals);
+% This returns a N_celllines x N_treatments matrix (length of pooling vals) containing the accuracy
+% values of the corresponding cellline x treatment combination
+
+%% Finally, we can check if the age prediction is affected
+% This might give insight about developmental alterations due to the
+% treatment
+% Here, we only compare WT cultures
+rg_params.Selection.Inclusion = {{'Mutation',"WT"}}; %Cell array of cell arrays with fieldname + value // empty defaults to including all recordings
+rg_params.Selection.Exclusion = {{'DIV', 34}};%,{'ChipID',"4135_0","4043_0"}}; %Cell array of cell arrays with fieldname + value
+wt = RecordingGroup(rec_array, rg_params);
+
+%% Age prediction WT 
+level = "Recording"; %Unit or Recording
+alg = "rf"; %rf, svm, cnb, knn
+stratification_var = "Treatment"; %Specify the variable by which to split training and test dataset 
+stratification_values = "Untreated"; %Corresponding to stratification_var, if a value is specified then this will be used as training data (e.g. train on untreated, test on treated)
+pooling_vals = [];
+network_features = ["Regularity","Burst","Catch22"];
+unit_features = ["ActivityFeatures","RegularityFeatures","WaveformFeatures","Catch22"];
+useClustered = false;
+normalization_var = "PlatingDate";
+N_hyper = 0; %If >0 do hyperparameter optimization
+K_fold = 5; % number of K-fold CV
+
+wt_age_result = wt.predictAge(level, alg, stratification_var, stratification_values, pooling_vals, network_features, unit_features, useClustered, normalization_var, N_hyper, K_fold);
+
+%% Age regression plot
+regression_var = "DIV"; %Metadata field containing the regressed variable
+color_var = "Mutation";
+color_order = [];
+wt.plot_regression_results(regression_var, color_var, color_order)
