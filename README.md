@@ -23,11 +23,15 @@ The package is ready-to-use right after cloning.
 ## Usage
 Code requires spikesorted data in the [phy format](https://github.com/cortex-lab/phy). For help with spikesorting check out the [Spikeinterface package](https://spikeinterface.readthedocs.io/en/latest/). 
 
-Different parts of the analysis are subdevided into different analysis scripts:
+The analysis pipeline is subdivided into the following modules (links to the tutorials):
+- [Feature Extraction](/Tutorials/1_FeatureExtraction)
+- [Phenotype Generation](/Tutorials/2_PhenotypeGeneration)
+- [Treatment Evaluation](/Tutorials/3_TreatmentEvaluation)
+- [Single Cell Analysis](/Tutorials/4_SingleCellEvaluation)
 
 
 ## Citation
-This package was published in "*DeePhys*, a machine learning-driven platform for electrophysiological phenotype screening" and additionally contains code to replicate the figures used in the publication.
+The *DeePhys* package was first published on [bioRxiv](https://www.biorxiv.org/content/10.1101/2022.03.31.486582v1), but was since heavily updated and is no longer compatible to the [prior version](https://github.com/hornauerp/EphysDopa).
 
 ## Disclaimer
 This package uses several packages/toolboxes:
