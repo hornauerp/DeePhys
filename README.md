@@ -18,7 +18,7 @@ Created with [BioRender](BioRender.com)
 Currently *DeePhys* is only available on MATLAB, so a recent MATLAB installation (>2019b) is required. We plan on expanding *DeePhys* to Python in the near future.
 
 ## Installation
-The package is ready-to-use right after cloning. 
+The package is ready-to-use right after cloning. As the download via git-lfs is heavily limited, please download the spike sorted data for the tutorial [here](https://zenodo.org/records/10635138) and replace the folder SortingExamples with the unzipped version from there. Preprocessed data can be downloaded [here](https://zenodo.org/records/7876371).
 
 ## Usage
 Code requires spikesorted data in the [phy format](https://github.com/cortex-lab/phy). For help with spikesorting check out the [Spikeinterface package](https://spikeinterface.readthedocs.io/en/latest/). 
