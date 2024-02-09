@@ -57,7 +57,7 @@ classdef MEArecording < handle
             end
             
             if isfield(obj.Metadata,"RecordingDate") && ~isempty(obj.Metadata.RecordingDate) && isfield(obj.Metadata,"PlatingDate") && ~isempty(obj.Metadata.PlatingDate)
-               obj.Metadata.DIV = day(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(num2str(obj.Metadata.PlatingDate),"InputFormat","yyMMdd"));
+               obj.Metadata.DIV = days(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(num2str(obj.Metadata.PlatingDate),"InputFormat","yyMMdd"));
             end
         end
         

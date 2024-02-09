@@ -47,6 +47,8 @@ N_cores                         = 6;                %Parallelize feature extract
 if N_cores > 1
     parallel = true;
     parpool(N_cores);
+else 
+    parallel = false;
 end
 
 %% Run full loop
