@@ -48,6 +48,9 @@ params.Analyses.SingleCell      = 1;
 params.Analyses.Regularity      = 1;
 params.Analyses.Catch22         = 1;
 params.Analyses.Bursts          = 0; %For this tutorial we dont perform burst detection, as the cultures did not display network-wide synchronization
+% As the automated burst detection tries to find optimal parameters for the
+% burst detection even if none are present, performing burst analyses
+% without bursts being present MIGHT result in errors, so be careful!
 params.Analyses.Connectivity    = ["STTC","CCG"]; % Takes a LONG time if you have a lot of units
 params.Outlier.Method           = []; %No outlier removal
 params.Save.Flag                = 1; %Save individual MEArecordings to prevent data loss if the execution is interrupted
@@ -79,7 +82,7 @@ path_parts = strsplit("/home/phornauer/iNeurons_dataset/network/240610/T002513/N
 % However, I would strongly recommend to store your data in a way that
 % allows for this approach to work (also for a general ease of use).
 
-metadata.PathPartIndex = [%insert indices you chose above%]; %[recording_date, plate_id, well_id]
+metadata.PathPartIndex = [];%insert indices you chose above [recording_date, plate_id, well_id]
 metadata.min_N_units = params.QC.N_Units; %Minimum number of spike-sorted units to perform feature extraction
 parallel = true; %Perform feature extraction in parallel, HIGHLY RECOMMENDED IF YOUR SERVER/MACHINE HAS ENOUGH RAM
 
@@ -91,3 +94,11 @@ parallel = true; %Perform feature extraction in parallel, HIGHLY RECOMMENDED IF 
 % to find out where things went wrong.
 
 failed_sortings = generate_MEArecordings_from_sorting_list(sorting_path_list, metadata, params, parallel);
+
+%% (Hopfully) Optional: Find source of failed feature extractions
+check_failed_analysis(sorting_path_list, metadata, params);
+
+% This is just a convenience functions that iterates through all failed
+% sortings to narrow down the source of the error.
+% Play around with inserting breakpoints in the MEArecording code and
+% hopefully you'll figure out the reason. 
