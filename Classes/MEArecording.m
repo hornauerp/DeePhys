@@ -56,11 +56,15 @@ classdef MEArecording < handle
                 error("No metadata provided, cannot continue");
             elseif ~isfield(metadata,"InputPath")
                 error("Metadata does not provide InputPath, cannot continue");
-            elseif isfield(metadata,"LookupPath") && ~isempty(metadata.LookupPath) && isfile(metadata.LookupPath)
+            elseif isfield(metadata,"LookupPath") && ~isempty(metadata.LookupPath)
+                if ~isfile(metadata.LookupPath)
+                    error("LookUpPath does not link to a valid file path")
+                end
                 obj.Metadata = obj.retrieveMetadata(metadata);
+                disp('Import metadata from file')
             else
                 obj.Metadata = metadata;
-                disp("Imported metadata")
+                warning("Used metadata provided, no import")
             end
             
             if isfield(obj.Metadata,"RecordingDate") && ~isempty(obj.Metadata.RecordingDate) && isfield(obj.Metadata,"PlatingDate") && ~isempty(obj.Metadata.PlatingDate)
@@ -153,9 +157,11 @@ classdef MEArecording < handle
                 obj.getBurstStatistics();
             end
             
-            obj.inferConnectivity(obj.Parameters.Analyses.Connectivity);
-            if ~isempty(fields(obj.Connectivity))
-                obj.inferGraphFeatures();
+            if ~isempty(obj.Parameters.Analyses.Connectivity)
+                obj.inferConnectivity(obj.Parameters.Analyses.Connectivity);
+                if ~isempty(fields(obj.Connectivity))
+                    obj.inferGraphFeatures();
+                end
             end
         end
         
@@ -508,24 +514,33 @@ classdef MEArecording < handle
             path_parts = strsplit(metadata.InputPath,"/");
             if ~isfield(metadata_struct,'RecordingDate')
                 recording_date = path_parts(metadata.PathPartIndex(1));
+                assert(~isnan(str2double(recording_date)),'Wrong PathPartIndex(1) / RecordingDate') %Check if recording date is a number
                 metadata_struct.RecordingDate = recording_date;
             end
             
             if ~isfield(metadata_struct,'PlateID')
                 plate_id = path_parts(metadata.PathPartIndex(2));
+                plate_number = char(plate_id); 
+                plate_number = plate_number(end-2:end);
+                assert(~isnan(str2double(plate_number)),'Wrong PathPartIndex(2) / PlateID') %Check if recording date is a number
             else
                 plate_id = metadata.PlateID;
             end
             
             well_id = char(path_parts(metadata.PathPartIndex(3)));
             well_id = well_id(end-1:end);
+            assert(~isnan(str2double(well_id)),'Wrong PathPartIndex(3) / WellID')
             chip_id = plate_id + "_" + well_id;
+            metadata_struct.PlateID = plate_id;
+            metadata_struct.WellID = well_id;
             metadata_struct.ChipID = chip_id;
+
             info_table = readtable(metadata.LookupPath,"ReadVariableNames",true);
             for ids = 1:size(info_table,1)
-                chip_ids = strsplit(info_table.Chip_IDs{ids},",");
+                chip_ids = strtrim(string(strsplit(info_table.Chip_IDs{ids},",")));
                 if contains(chip_id,chip_ids)
-                    metadata_vars = string(info_table.Properties.VariableNames(1:end-1)); %Exclude Chip_IDs
+                    metadata_vars = string(info_table.Properties.VariableNames); 
+                    metadata_vars = metadata_vars(~contains(metadata_vars,"Chip_IDs"));%Exclude Chip_IDs
                     for m = metadata_vars
                         try
                             metadata_struct.(m) = string(info_table.(m){ids});
@@ -545,7 +560,7 @@ classdef MEArecording < handle
             defaultParams.Analyses.SingleCell = true;
             defaultParams.Analyses.Regularity = true;
             defaultParams.Analyses.Bursts = true;
-            defaultParams.Analyses.Connectivity = ["DDC"]; %"CCG","STTC" also implemented // can take several methods as input
+            defaultParams.Analyses.Connectivity = ["CCG","STTC"]; %"CCG","STTC", "DDC" are implemented // can take several methods as input
             defaultParams.Analyses.Catch22 = true;
             
             % Parameters for outlier detection 
@@ -554,8 +569,8 @@ classdef MEArecording < handle
             
             % Parameters for the unit quality control (QC)
             defaultParams.QC.LSB = 6.2; %Factor by which to multiply voltage data
-            defaultParams.QC.Amplitude = [20 300]; %[Minimum Maximum] amplitude
-            defaultParams.QC.FiringRate = [0.1 10]; %[Minimum Maximum] firing rate
+            defaultParams.QC.Amplitude = [20 1000]; %[Minimum Maximum] amplitude
+            defaultParams.QC.FiringRate = [0.01 10]; %[Minimum Maximum] firing rate
             defaultParams.QC.RPV = 0.02; %Refractory period violation ratio
             defaultParams.QC.Axon = 0.8; %Ratio (positive amplitude)/ (maximum amplitude) to be considered axonal
             defaultParams.QC.Noise = 14; % # of sign changes for the waveform derivative ("up-and-down" waveform)
@@ -566,12 +581,7 @@ classdef MEArecording < handle
                                              % Skips the actual QC if not empty
             
             % Parameters for the burst detection
-%             defaultParams.Bursts.N = 0.9; %0.0015; %Number of spikes in bursts (if < 1 used as a percentage of the mean network firing rate)
-%             defaultParams.Bursts.N_min = 90; %Minimum value for N if used as a ratio (N < 1) 65
-            defaultParams.Bursts.Skewness_TH = 2;   % Relates to the skewness of the binned (binsize = ISI_N) network activity distribution // below that threshold, N_units is used as N
-                                                    % Above the skewness is used as the outlier detection ThresholdFactor
-            defaultParams.Bursts.ISI_N = 1; %Relates to minimum burst length [s]
-            defaultParams.Bursts.Merge_t = 2; % Maximum ratio of IBI/ISI_N to merge bursts to prevent oversplitting
+            defaultParams.Bursts.MergeFactor = 0.5; %Bursts with an IBI of MergeFactor * best_ISI_N will be merged
             defaultParams.Bursts.Binning = 0.1; %in [s] 0.1 = 100ms
             
             % Parameters for the burst detection
@@ -794,20 +804,29 @@ classdef MEArecording < handle
                obj MEArecording
                plot_idx = false
            end
-           [N, ISIn_ms, dunns_coeffs] = obj.inferISINparameters("plot_idx",plot_idx);
+           [N, ISIn_ms, dunns_coeffs] = obj.inferISINparameters(); %"plot_idx",plot_idx
            ISI_N = ISIn_ms/1000;
            dunns_coeffs(ISI_N<0.01) = 0;
            [max_vals, max_idx] = maxk(dunns_coeffs,3);
-           vals = sum(max_vals> max_vals(1)*0.9); %Check all Ns within 10% of the best N value
-           candidate_idx = max_idx(1:vals);
-           padded_N = [3 N N(end) + (N(end)-N(end-1))]; %Padding
-           candidate_Ns = [];%arrayfun(@(x) (padded_N(x-1)+1):(padded_N(x+1)-1),candidate_idx+1,'un',0); candidate_Ns = [candidate_Ns{:}];
-           if ~isempty(candidate_Ns)
-               [refined_N, refined_ISIn_ms, refined_dunns_coeffs] = obj.inferISINparameters(N=candidate_Ns);
-               [sorted,sort_idx] = sort(refined_dunns_coeffs,'descend');
-               refined_vals = sum(sorted> sorted(1)*0.9);
-               best_N = max(refined_N(sort_idx(1:refined_vals))); %If we have several good candidates, we take the higher N to be more conservative
-               best_ISI_N = refined_ISIn_ms(refined_N == best_N)/1000;
+
+           if ~isempty(max_vals)
+               vals = sum(max_vals> max_vals(1)*0.9); %Check all Ns within 10% of the best N value
+               candidate_idx = max_idx(1:vals);
+           else
+               candidate_idx = [];
+           end
+           % padded_N = [3 N N(end) + (N(end)-N(end-1))]; %Padding
+           % candidate_Ns = [];%arrayfun(@(x) (padded_N(x-1)+1):(padded_N(x+1)-1),candidate_idx+1,'un',0); candidate_Ns = [candidate_Ns{:}];
+           % if ~isempty(candidate_Ns)
+           %     [refined_N, refined_ISIn_ms, refined_dunns_coeffs] = obj.inferISINparameters(N=candidate_Ns);
+           %     [sorted,sort_idx] = sort(refined_dunns_coeffs,'descend');
+           %     refined_vals = sum(sorted> sorted(1)*0.9);
+           %     best_N = max(refined_N(sort_idx(1:refined_vals))); %If we have several good candidates, we take the higher N to be more conservative
+           %     best_ISI_N = refined_ISIn_ms(refined_N == best_N)/1000;
+           % else
+           if isempty(candidate_idx)
+               best_N = nan;
+               best_ISI_N = nan;
            else
                best_N = max(N(candidate_idx));
                best_ISI_N = ISI_N(N==best_N);
@@ -837,24 +856,30 @@ classdef MEArecording < handle
                N = ops.N;
                ISI_N = ops.ISI_N;
            end
-           Burst = detectBurstsISIN(obj, N, ISI_N);
-           obj.Bursts.T_start = Burst.T_start;
-           obj.Bursts.T_end = Burst.T_end;
-           obj.mergeBursts(ops.merge_factor);
-           obj.pruneBursts();
-           
 
+           if isnan(obj.Bursts.best_N) %If no good parameters could be inferred
+               obj.Bursts.T_start = [];
+               obj.Bursts.T_end = [];
+           else
+               Burst = detectBurstsISIN(obj, N, ISI_N);
+               obj.Bursts.T_start = Burst.T_start;
+               obj.Bursts.T_end = Burst.T_end;
+               obj.pruneBursts();
+               obj.mergeBursts(ops.merge_factor);
+           end
+           
            if ops.plot_idx
                obj.PlotBurstCheck(); title(sprintf("N=%i; ISI_N=%.3f, Units=%i",N,ISI_N,length(obj.Units)))
            end
        end
 
-       function mergeBursts(obj,merge_factor)
+       function mergeBursts(obj,merge_factor, input)
            arguments
                obj MEArecording
                merge_factor (1,1) double = 0.5 %Bursts with an IBI of merge_factor * best_ISI_N will be merged
+               input (1,1) string = "processed" %"raw"
            end
-           if isfield(obj.Bursts,'raw')
+           if input== "raw" && isfield(obj.Bursts,'raw')
                Burst = obj.Bursts.raw;
            else
                Burst = obj.Bursts;
@@ -900,11 +925,12 @@ classdef MEArecording < handle
            arguments
                obj MEArecording
                ops.N (1,:) double = []
-               ops.Steps = 10.^(-3:.05:2)
+               ops.Steps = 10.^(-3:.025:2)
                ops.plot_idx = false
            end
            [min_isis, N_array, prom] = obj.calculateMinISIN(N=ops.N, Steps=ops.Steps, plot_idx=ops.plot_idx);
-            N_array = N_array(min_isis > 0);
+            N_array = N_array(min_isis > 0); % Remove Ns for which we did not see a second peak in the histogram
+            min_isis(min_isis == 0) = [];
            [SpikeTimes,~] = obj.remove_tonic_units(plot_idx=ops.plot_idx); 
            
            dunns_coeffs = zeros(size(N_array));
@@ -933,7 +959,7 @@ classdef MEArecording < handle
            arguments
                obj MEArecording
                ops.N (1,:) double = []
-               ops.Steps = 10.^(-3:.05:2)
+               ops.Steps = 10.^(-3:.025:2)
                ops.plot_idx = false
            end
            [SpikeTimes, SpikeUnits] = obj.remove_tonic_units();
@@ -1031,66 +1057,75 @@ classdef MEArecording < handle
        function [inburst_activity, inburst_units] =  getBurstStatistics(obj, ops)
            arguments
                obj MEArecording
-               ops.binning = 0.001
+               ops.binning = 0.01
            end
            if isempty(obj.Bursts) %Burst detection was not performed
-               detectBursts(obj);
+               detectBursts(obj, merge_factor=obj.Parameters.Bursts.MergeFactor);
            end
-           if length(obj.Bursts.T_start) < 2 %No bursts were detected
+           if length(obj.Bursts.T_start) < 3 %Not enough bursts were detected
                Burst.MeanInterBurstInterval = 0;
-               Burst.MeanBurstDuration = 0;
-               Burst.MeanRiseTime = 0;
-               Burst.MeanFallTime = 0;
-               Burst.MeanRiseVelocity = 0;
-               Burst.MeanDecayVelocity = 0;
+               Burst.BurstDuration = 0;
+               Burst.RiseTime = 0;
+               Burst.FallTime = 0;
+               Burst.PeakFR = 0;
+               Burst.StdFR = 0;
                Burst.StdBurstDuration = 0;
                Burst.StdInterBurstInterval = 0;
-               Burst.IntraBurstFiringRate = 0;
-               Burst.InterBurstFiringRate = 0;
+               Burst.IntraFiringRate = 0;
+               Burst.InterFiringRate = 0;
            else
                IBIs = obj.Bursts.T_start(2:end) - obj.Bursts.T_end(1:end-1);
                BDs = obj.Bursts.T_end - obj.Bursts.T_start;
                
                [RiseTime, FallTime, PeakFR, StdFR] = deal(nan(1,length(BDs)));
                Fs = round(1/ops.binning);
-               inburst_spikes = 0;
                inburst_activity = cell(1,length(BDs));
                inburst_units = cell(1,length(BDs));
                for iburst = 1:length(BDs)
                    try
                        burst_activity = obj.Spikes.Times(obj.Spikes.Times <= obj.Bursts.T_end(iburst) & obj.Spikes.Times >= obj.Bursts.T_start(iburst));
-                       inburst_units{iburst} = obj.Spikes.Units(obj.Spikes.Times <= obj.Bursts.T_end(iburst) & obj.Spikes.Times >= obj.Bursts.T_start(iburst));
                        binned_activity = histcounts(burst_activity,'BinWidth',ops.binning);
                        [max_binned, imax_binned] = max(binned_activity);
                        norm_activity = smoothdata(binned_activity/max_binned,'lowess');
-                       if length(norm_activity) < 4
-                           [peak_1,peak_1_idx] = max(norm_activity);
-                           peak_2 = peak_1; peak_2_idx = peak_1_idx;
-                       else
-                           [peak_1,peak_1_idx] = findpeaks(norm_activity,"MinPeakProminence",0.3,NPeaks=1);
-                           [peak_2,peak_2_idx] = findpeaks(norm_activity(end:-1:1),"MinPeakProminence",0.3,NPeaks=1);
-                           peak_2_idx = length(norm_activity) - peak_2_idx + 1;
-                       end
-                       if isempty(peak_1)
-                           [peak_1,peak_1_idx] = max(norm_activity);
-                       end
-                       if isempty(peak_2)
-                           [peak_2,peak_2_idx] = max(norm_activity);
-                       end
-                       
-                       pre_lower_level = min(norm_activity(1:peak_1_idx));
-                       post_lower_level = min(norm_activity(peak_2_idx:end));
-                       % Using mean to account for the rare case where rise/fall is split
-                       RiseTime(iburst) = mean(risetime([ones(1,Fs)*pre_lower_level norm_activity(1:peak_1_idx) ones(1,Fs)*peak_1],Fs));
-                       FallTime(iburst) = mean(falltime([ones(1,Fs)*peak_2 norm_activity(peak_2_idx:end) ones(1,Fs)*post_lower_level],Fs));
+                       RiseTime(iburst) = imax_binned * ops.binning;
+                       FallTime(iburst) = (length(binned_activity) - imax_binned) * ops.binning;
+                       %%% Old approch, but seems too unreliable %%%
+
+                       % if length(norm_activity) < 4
+                       %     [peak_1,peak_1_idx] = max(norm_activity);
+                       %     peak_2 = peak_1; peak_2_idx = peak_1_idx;
+                       % else
+                       %     [peak_1,peak_1_idx] = findpeaks(norm_activity,"MinPeakProminence",0.3,NPeaks=1);
+                       %     [peak_2,peak_2_idx] = findpeaks(norm_activity(end:-1:1),"MinPeakProminence",0.3,NPeaks=1);
+                       %     peak_2_idx = length(norm_activity) - peak_2_idx + 1;
+                       % end
+                       % if isempty(peak_1)
+                       %     [peak_1,peak_1_idx] = max(norm_activity);
+                       % end
+                       % if isempty(peak_2)
+                       %     [peak_2,peak_2_idx] = max(norm_activity);
+                       % end
+                       % 
+                       % pre_lower_level = min(norm_activity(1:peak_1_idx));
+                       % post_lower_level = min(norm_activity(peak_2_idx:end));
+                       % % Using mean to account for the rare case where rise/fall is split
+                       % RiseTime(iburst) = mean(risetime([ones(1,Fs)*pre_lower_level norm_activity(1:peak_1_idx) ones(1,Fs)*peak_1],Fs));
+                       % FallTime(iburst) = mean(falltime([ones(1,Fs)*peak_2 norm_activity(peak_2_idx:end) ones(1,Fs)*post_lower_level],Fs));
+
+                       %%% Old approch, but seems too unreliable %%%
+
                        PeakFR(iburst) = max_binned./length(obj.Units) * Fs;
                        StdFR(iburst) = std(norm_activity);
-                       inburst_spikes = inburst_spikes + length(burst_activity);
-                       inburst_activity{iburst} = burst_activity-burst_activity(1);
                    catch ME
                        warning(ME.message)
                    end
+                   
                end
+               [inburst, outburst] = obj.getBurstSpikes();
+               inter_spikes = cellfun(@length, outburst.spikes);
+               inter_fr = inter_spikes(2:end-1) ./ (IBIs * length(obj.Units));
+               intra_spikes = cellfun(@length, inburst.spikes);
+               intra_fr = intra_spikes ./ (BDs * length(obj.Units));
 
                cellfun_input = {IBIs, BDs, RiseTime, FallTime, PeakFR, StdFR};
                
@@ -1099,7 +1134,7 @@ classdef MEArecording < handle
                    cellfun_input = cellfun(@(x) rmoutliers(x,obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),...
                        cellfun_input,'un',0);
                end
-               feature_means = cellfun(@nanmean, cellfun_input,'un',0);
+               feature_means = cellfun(@nanmedian, cellfun_input,'un',0);
                
                [Burst.MeanInterBurstInterval,...
                    Burst.BurstDuration,...
@@ -1109,8 +1144,8 @@ classdef MEArecording < handle
                    Burst.StdFR] = feature_means{:};
                Burst.StdBurstDuration = std(BDs);
                Burst.StdInterBurstInterval = std(IBIs);
-               Burst.IntraFiringRate = (inburst_spikes/sum(BDs)) / length(obj.Units);
-               Burst.InterFiringRate = ((length(obj.Spikes.Times) - inburst_spikes)/(obj.RecordingInfo.Duration - sum(BDs))) / length(obj.Units);
+               Burst.IntraFiringRate = median(intra_fr);
+               Burst.InterFiringRate = median(inter_fr);
            end
            obj.NetworkFeatures.Burst = struct2table(Burst);
        end
@@ -1127,14 +1162,13 @@ classdef MEArecording < handle
                inburst.units{iburst} = obj.Spikes.Units(burst_idx);
                if iburst == 1
                    outburst_idx = obj.Spikes.Times > 0 & obj.Spikes.Times < obj.Bursts.T_start(iburst);
-                   
                else
                    outburst_idx = obj.Spikes.Times > obj.Bursts.T_end(iburst-1) & obj.Spikes.Times < obj.Bursts.T_start(iburst);
                end
                outburst.spikes{iburst} = obj.Spikes.Times(outburst_idx);
                outburst.units{iburst} = obj.Spikes.Units(outburst_idx);
            end
-           outburst_idx = obj.Spikes.Times > obj.Bursts.T_end(iburst-1) & obj.Spikes.Times < max(obj.Spikes.Times);
+           outburst_idx = obj.Spikes.Times > obj.Bursts.T_end(iburst);
            outburst.spikes{iburst+1} = obj.Spikes.Times(outburst_idx);
            outburst.units{iburst+1} = obj.Spikes.Units(outburst_idx);
        end
@@ -1762,13 +1796,15 @@ rents_exponent = 0;
                type string = "hist" %"scatter"
                ops.cutout = [0,50]
                ops.binning = 0.01
+               ops.input = "processed" %"raw" to use unmerged+untrimmed data
            end
            times = obj.Spikes.Times;
            sel_times = times(times > ops.cutout(1) & times < ops.cutout(2));
            
            figure('Color','w','Position',[100 500 1500 500]);
            if type == "hist"
-               histogram(sel_times,'BinWidth',ops.binning,'DisplayStyle','stairs')
+               % histogram(sel_times,'BinWidth',ops.binning,'DisplayStyle','stairs')
+               histogram(sel_times,ops.cutout(1):ops.binning:ops.cutout(2),'DisplayStyle','stairs')
            elseif type == "scatter"
                 units = obj.Spikes.Units;
                 sel_units = units(times > ops.cutout(1) & times < ops.cutout(2));
@@ -1777,18 +1813,29 @@ rents_exponent = 0;
            else
                error('Unknown input')
            end
-            
+           % axis tight
+           if ops.input == "raw"
+               t_start = obj.Bursts.raw.T_start;
+               t_end = obj.Bursts.raw.T_end;
+           elseif ops.input == "processed"
+               t_start = obj.Bursts.T_start;
+               t_end = obj.Bursts.T_end;
+           else
+               warning("Unknown input type, using processed burst data")
+           end
            if ~isempty(obj.Bursts.T_start)
-               sel_t_start = obj.Bursts.T_start(obj.Bursts.T_start>ops.cutout(1) & obj.Bursts.T_start < ops.cutout(2));
-               sel_t_end = obj.Bursts.T_end(obj.Bursts.T_end>ops.cutout(1) & obj.Bursts.T_end < ops.cutout(2));
+               sel_t_start = t_start(t_start>ops.cutout(1) & t_start < ops.cutout(2));
+               sel_t_end = t_end(t_end>ops.cutout(1) & t_end < ops.cutout(2));
                hold on
-               xline(obj.Bursts.T_start,'g--','LineWidth',1,'Label','Start','LabelHorizontalAlignment','center')
-               xline(obj.Bursts.T_end,'r--','LineWidth',1,'Label','End','LabelHorizontalAlignment','center')
+               xline(sel_t_start,'g--','LineWidth',1,'Label','Start','LabelHorizontalAlignment','center')
+               xline(sel_t_end,'r--','LineWidth',1,'Label','End','LabelHorizontalAlignment','center')
            elseif isempty(obj.Bursts)
                warning('No burst data found. Run obj.detectBursts() first')
            end
            box off
            xlim(ops.cutout)
+           % xlim((ops.cutout) /ops.binning)
+           
        end
        
        function PlotCCG(obj,ccg_idx1,ccg_idx2, color)

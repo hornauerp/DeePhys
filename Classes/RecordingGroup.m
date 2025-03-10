@@ -735,8 +735,10 @@ classdef RecordingGroup < handle
                 if level == "Unit"
                     input_table = MEArecording.getUnitFeatures(object_group,unit_features);
                     object_group = [rg.Units];
+                    n_neighbors = 100;
                 elseif level == "Recording"
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                    n_neighbors = 10;
                 else 
                     error('Unknown level')
                 end
@@ -744,6 +746,9 @@ classdef RecordingGroup < handle
                 if level == "Unit"
                     object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);
                     object_group = [object_group{:}];
+                    n_neighbors = 100;
+                else
+                    n_neighbors = 10;
                 end
             end
             
@@ -757,10 +762,10 @@ classdef RecordingGroup < handle
             
             switch method
                 case "UMAP"
-%                     n_neighbors = 15;
+                    
                     color_file = fullfile(rg.Recordings(1).getParentPath(),'umap','colorsByName.properties');
-                    [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data,'n_components',n_dims,'n_neighbors',10,'min_dist',0.1,'cluster_detail','adaptive','spread',1,'sgd_tasks',20,...
-                        'verbose','none','color_file',color_file);
+                    [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data,'n_components',n_dims,'n_neighbors',n_neighbors,'min_dist',1,'cluster_detail','adaptive','spread',5,'sgd_tasks',20,...
+                        'verbose','none','color_file',color_file); %Torsten
                     rg.DimensionalityReduction.(level).(method).Graph = umap.search_graph;
 %                     [M,Q] = community_louvain(umap.search_graph, 0.2);
 %                     t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all','Reproducible',true);
@@ -1833,12 +1838,13 @@ classdef RecordingGroup < handle
                 cluster_wfs{c} = aligned_wf(:,cluster_idx == c);
                 avg_wf{c} = median(cluster_wfs{c},2);
             end
-            
-            figure("Color","w");
-            ax = nexttile;
+
             avg_time_vector = linspace(min(time_vector),max(time_vector),max([200,length(time_vector)]));
             smoothed_avg = pchip(time_vector,horzcat(avg_wf{:})',avg_time_vector);
-%             p = plot(time_vector,horzcat(avg_wf{:}),"LineWidth",2);
+
+            figure("Color","w");
+            ax = nexttile;
+
             p = plot(avg_time_vector,smoothed_avg,"LineWidth",2);
             ax.ColorOrder = othercolor('Spectral9',max(cluster_idx));
             
@@ -1934,7 +1940,7 @@ classdef RecordingGroup < handle
                     x = grouping_values + jitter(g);
                     
                     data_mat = feature_matrix(group_idx==g,:);
-                    data_mat(isoutlier(data_mat,'ThresholdFactor',5)) = nan;
+                    data_mat(isoutlier(data_mat,'ThresholdFactor',10)) = nan;
 
                     
                     if normalization == "baseline"
