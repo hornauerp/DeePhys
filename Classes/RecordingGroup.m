@@ -1001,26 +1001,25 @@ classdef RecordingGroup < handle
             rg.Classification.(classification_var) = result;
         end
                 
-        function [train_acc, test_acc, avg_score, avg_pred_imp] = assessClassifier(rg, clf_result)
+        function [metrics_special, train_acc, avg_pred_imp, conf_mat] = assessClassifier(rg, clf_result)
             arguments
                rg RecordingGroup
                clf_result struct
             end
-            y_pred = vertcat(clf_result.Y_pred);
-            y_test = horzcat(clf_result.Y_test)';
-            scores = vertcat(clf_result.scores);
-            pred_imp = vertcat(clf_result.predImp);
-                        
-            idx = sub2ind(size(scores), 1:size(scores,1),y_test');
+            y = horzcat(clf_result.Y_test)';
+            y_hat = vertcat(clf_result.Y_pred);
             
-            test_acc = sum(y_pred == y_test)/length(y_pred);
+            conf_mat = confusionmat(y,y_hat);
+            metrics_special = multiclass_metrics_special(conf_mat);
+
+            pred_imp = vertcat(clf_result.predImp);
+            
+            
             train_acc = mean([clf_result.train_acc]);
-            avg_score = mean(scores(idx));
             avg_pred_imp = mean(pred_imp);
             
-            fprintf('Training accuracy was %.2f\n', train_acc)
-            fprintf('Test accuracy was %.2f\n', test_acc)
-            fprintf('Average score was %.2f\n', avg_score)
+            fprintf('Training accuracy: %.2f\n', train_acc)
+            fprintf('F1-score: %.2f\n', metrics_special.F1_score)
         end
         
         function result = applyClassifier(rg, level, alg, classification_var, clf_pooling_vals, test_var, test_pooling_vals, network_features, unit_features, feature_names, useClustered,...
@@ -1893,8 +1892,6 @@ classdef RecordingGroup < handle
                grouping_values = 1:(length(grouping_values)-1);
             end
             
-            
-            
             N_features = size(feature_table,2)/numel(grouping_values);
             
             if level == "Recording"
@@ -1915,7 +1912,7 @@ classdef RecordingGroup < handle
                colors = othercolor('RdBu4',N_groups);
             end
             
-            min_diff = min(diff(grouping_values));
+            min_diff = min([1, diff(grouping_values)]); % In case we only plot one value
             jitter = linspace(-min_diff/10,min_diff/10,N_groups);%jitter = zeros(1,N_groups); %Change to have jitter
             
             mean_mat = nan(N_features, length(grouping_values), N_groups);
@@ -1955,13 +1952,17 @@ classdef RecordingGroup < handle
                         y_err = std(data_mat,[],1,'omitnan');
                         plot_x = grouping_values;
                     end
-                    xx = linspace(min(x),max(x),((max(x) - min(x))*5)+1);
-                    yy = makima(x,y,xx);
+                    % if length(x) > 1
+                    %     xx = linspace(min(x),max(x),((max(x) - min(x))*5)+1);
+                    %     yy = makima(x,y,xx);
+                    % else
+                    % 
+                    % end
                     
-                    plot(xx,yy,'Color',colors(g,:),'HandleVisibility','off')
+                    plot(x,y,'Color',colors(g,:),'HandleVisibility','off')
                     hold on
                     errorbar(plot_x+jitter(g),y,y_err,...
-                        'LineWidth',1,'Color',colors(g,:),'CapSize',0,'LineStyle','none','Marker','o','MarkerSize',2,...
+                        'LineWidth',1,'Color',colors(g,:),'CapSize',0,'LineStyle','none','Marker','o','MarkerSize',5,...
                         'MarkerFaceColor',colors(g,:));
                     set(gca,'FontSize',fontsz)
                     marg = get(gca,'ylabel');

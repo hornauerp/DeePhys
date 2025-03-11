@@ -8,7 +8,8 @@
 % your own data.
 
 % This step will take some time, so if you want to play around with the
-% data immediately, 
+% data immediately you can make use of the existing files and skip to the
+% next tutorials.
 
 
 % Specify the DeePhys root path
@@ -63,6 +64,9 @@ metadata = struct();
 % during analysis. The files in the 'metadata' folder can serve as a
 % template, where you can add any other metadata information as a new
 % column. 
+
+% DONT CHANGE THE PlatingDate and Chip_IDs column headers when creating
+% your own metadata lookup file! All other names can be freely chosen.
 metadata.LookupPath = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/metadata/iNeurons_batch1.xlsx"; % INSERT YOUR OWN PATH HERE
 
 % The 'path_part_idx' variable exists to extract important metadata from the sorting path.
@@ -95,7 +99,7 @@ parallel = true; %Perform feature extraction in parallel, HIGHLY RECOMMENDED IF 
 
 failed_sortings = generate_MEArecordings_from_sorting_list(sorting_path_list, metadata, params, parallel);
 
-%% (Hopfully) Optional: Find source of failed feature extractions
+%% (Hopefully) Optional: Find source of failed feature extractions
 check_failed_analysis(sorting_path_list, metadata, params);
 
 % This is just a convenience functions that iterates through all failed
