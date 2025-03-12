@@ -1006,7 +1006,11 @@ classdef RecordingGroup < handle
                rg RecordingGroup
                clf_result struct
             end
-            y = horzcat(clf_result.Y_test)';
+            try
+                y = vertcat(clf_result.Y_test);
+            catch
+                y = horzcat(clf_result.Y_test)';
+            end
             y_hat = vertcat(clf_result.Y_pred);
             
             conf_mat = confusionmat(y,y_hat);
@@ -1552,7 +1556,7 @@ classdef RecordingGroup < handle
             
             if isempty(grouping_var)
                 object_group = [rg.Recordings];
-                input_table = object_group.getUnitFeatures(feature_groups);
+                input_table = object_group.getUnitFeatures(rg.Units,feature_groups);
             else
                 [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, feature_groups, normalization, useClustered);
            
@@ -1570,9 +1574,9 @@ classdef RecordingGroup < handle
                 [Y_train, Y_test, train_idx, test_idx] = rg.cv_split(true_cluster_idx, cv, k);
                 
                 % Balance class distribution by oversampling
-                if oversample
-                    [input_table, Y_train, train_idx, test_idx] = oversample_smaller_class(input_table, Y_train, train_idx);
-                end
+                % if oversample
+                %     [input_table, Y_train, train_idx, test_idx] = oversample_smaller_class(input_table, Y_train, train_idx);
+                % end
                 %
                 [X_train, X_test, feature_names] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
                 
@@ -1617,7 +1621,7 @@ classdef RecordingGroup < handle
             
             if isempty(grouping_var)
                 object_group = [rg.Recordings];
-                input_table = object_group.getUnitFeatures(feature_groups);
+                input_table = object_group.getUnitFeatures(rg.Units, feature_groups);
             else
                 [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, feature_groups, normalization, useClustered);
            
@@ -1820,10 +1824,9 @@ classdef RecordingGroup < handle
             if isempty(cluster_idx)
                 cluster_idx = [rg.Clustering.Unit.(method).Index];
             end
-            %             aligned_wf = rg.alignWaveforms([rg.Units]);
 
             if isempty(object_group)
-                aligned_wf = rg.alignWaveforms([rg.DimensionalityReduction.Unit.ObjectGroup]);
+                aligned_wf = rg.alignWaveforms([rg.Units]);
             else
                 aligned_wf = rg.alignWaveforms(object_group);
             end
@@ -2186,9 +2189,7 @@ classdef RecordingGroup < handle
             end
             
             rel_counts = cluster_counts_mat./sum(cluster_counts_mat,2);
-%             rel_counts = rel_counts(:,end:-1:1);
-            
-%             figure('Color','w');
+
             b = bar(rel_counts,'stacked','FaceColor','flat');
             if ~isempty(colors)
                 arrayfun(@(x) set(b(x),'CData',repmat(colors(x,:),[length(labels) 1])),1:length(b))
@@ -2197,6 +2198,7 @@ classdef RecordingGroup < handle
             xticklabels(labels)
             ylabel("Cluster percentage")
             box off
+            axis tight
         end
         
         function plot_group_feature_heatmap(rg, feature_names, separation_var, pooling_vals)
@@ -2220,7 +2222,7 @@ classdef RecordingGroup < handle
                 feature_names string
                 colors double = []
             end
-            input_table = rg.Recordings.getUnitFeatures("all");
+            input_table = rg.Recordings.getUnitFeatures(rg.Units,"all");
             figure('Color','w');
             tiledlayout('flow')
             for f = 1:length(feature_names)
@@ -2233,6 +2235,7 @@ classdef RecordingGroup < handle
                 end
                 ylim([quantile(x,0.05),quantile(x,0.95)])
             end
+            xticklabels([])
         end
         
         function color_mat = plot_unit_cluster_heatmap(rg, cluster_idx, feature_names, cmap)
@@ -2245,7 +2248,7 @@ classdef RecordingGroup < handle
             end
             N_Clust = length(unique(cluster_idx));
             
-            input_table = rg.Recordings.getUnitFeatures("all");
+            input_table = rg.Recordings.getUnitFeatures(rg.Units,"all");
             if isempty(feature_names)
                 feature_names = string([input_table.Properties.VariableNames]);
             end
@@ -2264,6 +2267,8 @@ classdef RecordingGroup < handle
             yticklabels(feature_names)
             colorbar
             set(gca,'CLim',[-max(max(abs(color_mat))) max(max(abs(color_mat)))])
+            set(gca,"TickLength",[0,0])
+            setAllFontSizes(gcf,7)
         end
     end
 end

@@ -1,5 +1,11 @@
 % This tutorial shows how to evaluate the extracted features based on some
 % metadata condition (e.g. cell lines, mutations) to generate phenotyes.
+
+% I would recommend to copy these scripts into a separate folder, where you
+% can change them without being overwritten if you pull a newer version of
+% DeePhys.
+
+%% SKIP THIS PART IF YOU DID THE SINGLE-CELL TUTORIAL BEFORE
 % Specify the DeePhys root path
 addpath(genpath("/home/phornauer/Git/DeePhys"))
 
@@ -55,6 +61,8 @@ pattern_rg = RecordingGroup(mearec_array, rg_params);
 % automatically detects recordings that were plated on the same day (same
 % PlatingDate in the metadata) and have the same chipID. If the
 % RecordingDate is provided, this will sort them by their DIV.
+
+%% SKIP UNTIL HERE IF YOU DID THE SINGLE-CELL TUTORIAL BEFORE
 
 %% Check unsupervised network phenotypes
 dr_level = "Recording"; %"Unit" or "Recording"
@@ -259,7 +267,7 @@ ylabel('Feature importance'); setAllFontSizes(gcf,7)
 %% Look at those features
 plt_feature_names = [result(1).Features(sort_idx(1:5))];
 
-% Normally, this would actually show a line plot with errorbars, so e need 
+% Normally, this would actually show a line plot with errorbars, so we need 
 % to specify some metadata variable here that connects the data points, 
 % although it is not really needed here (suboptimally coded).
 grouping_var = "DIV"; 
@@ -283,9 +291,9 @@ color_lim = 3;
     unit_features_clf, feature_names, normalization, comp_var, pooling_vals, useClustered, tolerance, color_lim);
 
 % As you see in the x-axis, this is not an ideal visualization as we only
-% have one DIV available. This works analogously if you have several
+% have one time point available. This works analogously if you have several
 % recordings across the development.
 
 
 % That is it for the core analysis pipeline for network analyses, check also the X
-% tutorial for more utility functions and more advanced options :)
+% tutorial for more utility functions  :)

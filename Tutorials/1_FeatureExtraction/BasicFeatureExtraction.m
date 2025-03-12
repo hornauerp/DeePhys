@@ -11,6 +11,9 @@
 % data immediately you can make use of the existing files and skip to the
 % next tutorials.
 
+% I would recommend to copy these scripts into a separate folder, where you
+% can change them without being overwritten if you pull a newer version of
+% DeePhys.
 
 % Specify the DeePhys root path
 addpath(genpath("/home/phornauer/Git/DeePhys"))
