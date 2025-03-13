@@ -849,24 +849,26 @@ classdef MEArecording < handle
            if isempty(ops.N) | isempty(ops.ISI_N)
                if ~(isfield(obj.Bursts,'best_N') && isfield(obj.Bursts,'best_ISI_N'))
                    inferOptimalBurstParameters(obj, ops.plot_idx);
+                   if isnan(obj.Bursts.best_N) %If no good parameters could be inferred
+                       obj.Bursts.T_start = [];
+                       obj.Bursts.T_end = [];
+                       return
+                   end
                end
                N = obj.Bursts.best_N;
                ISI_N = obj.Bursts.best_ISI_N;
            else
                N = ops.N;
-               ISI_N = ops.ISI_N;
-           end
+               obj.Bursts.best_N = ops.N;
 
-           if isnan(obj.Bursts.best_N) %If no good parameters could be inferred
-               obj.Bursts.T_start = [];
-               obj.Bursts.T_end = [];
-           else
-               Burst = detectBurstsISIN(obj, N, ISI_N);
-               obj.Bursts.T_start = Burst.T_start;
-               obj.Bursts.T_end = Burst.T_end;
-               obj.pruneBursts();
-               obj.mergeBursts(ops.merge_factor);
+               ISI_N = ops.ISI_N;
+               obj.Bursts.best_ISI_N = ISI_N;
            end
+           Burst = detectBurstsISIN(obj, N, ISI_N);
+           obj.Bursts.T_start = Burst.T_start;
+           obj.Bursts.T_end = Burst.T_end;
+           obj.pruneBursts();
+           obj.mergeBursts(ops.merge_factor);
            
            if ops.plot_idx
                obj.PlotBurstCheck(); title(sprintf("N=%i; ISI_N=%.3f, Units=%i",N,ISI_N,length(obj.Units)))
@@ -887,7 +889,11 @@ classdef MEArecording < handle
            end
            
            N_bursts = length(Burst.T_start);
+           % if ~isnan(obj.Bursts.best_ISI_N)
            IBI_merge = merge_factor * obj.Bursts.best_ISI_N;
+%            else
+% IBI_merge = merge_factor * obj.Bursts.ISI_N;
+%            end
            if N_bursts > 1
                %            Merge bursts with too short IBIs (< IBI_merge)
                short_burst_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1)> IBI_merge);
@@ -1827,13 +1833,20 @@ rents_exponent = 0;
                sel_t_start = t_start(t_start>ops.cutout(1) & t_start < ops.cutout(2));
                sel_t_end = t_end(t_end>ops.cutout(1) & t_end < ops.cutout(2));
                hold on
-               xline(sel_t_start,'g--','LineWidth',1,'Label','Start','LabelHorizontalAlignment','center')
-               xline(sel_t_end,'r--','LineWidth',1,'Label','End','LabelHorizontalAlignment','center')
+               if ~isempty(sel_t_start)
+                   xline(sel_t_start,'g--','LineWidth',1,'Label','Start','LabelHorizontalAlignment','center')
+               end
+               if ~isempty(sel_t_end)
+                   xline(sel_t_end,'r--','LineWidth',1,'Label','End','LabelHorizontalAlignment','center')
+               end
+               
            elseif isempty(obj.Bursts)
                warning('No burst data found. Run obj.detectBursts() first')
            end
            box off
            xlim(ops.cutout)
+           xlabel('Time (s)')
+
            % xlim((ops.cutout) /ops.binning)
            
        end
@@ -1891,12 +1904,21 @@ rents_exponent = 0;
                hold on
                plot(X,Y,'k','linewidth',1);
            end
+           if matrix == "bu"
            cm = othercolor('RdBu5',3);
+           else
+            cm = magma;
+           end
            colormap(flipud(cm))
+           colorbar;
        end
        
        function data = PlotUnitClusterActivity(obj, time_cutout)
-           ids = [obj.Units.ClusterID];
+           % try
+           ids = [obj.Units.ClusterID]; % Catch case where no clustering was performed
+           if isempty(ids)
+               error('Need to run clustering first')
+           end
            clust_sz = histcounts(ids);
            N_clust = max(ids);
            clust_act = {};
@@ -1970,6 +1992,7 @@ rents_exponent = 0;
                v{u} = viscircles([x_ais{u}+(scale_factor/2), y_ais{u}],1,'color',colors(u,:));
                plot(x{u}',y{u}','Color',colors(u,:),'LineWidth',1.5)
            end
+           axis off
        end
        
        function PlotUnitTraces(obj, raw_path, dataset, unit, cutout, spike_id, color, N_traces, filter_traces)
@@ -2010,16 +2033,5 @@ rents_exponent = 0;
            
        end
        
-       function PlotActivityScan(obj, activity_scan)
-           arguments
-               obj MEArecording
-               activity_scan string
-           end
-           well_info = h5info(activity_scan,"/wells/well001");
-           data_store_names = cellfun(@string, {well_info.Links.Value});
-           data_store_settings = h5read(activity_scan, [char(data_store_names(1)), '/settings/mapping']);
-           data_store_data = h5read(activity_scan, [char(data_store_names(1)), '/spikes']);
-           channel_spikes = groupcounts(data_store_data.channel);
-       end
     end
 end

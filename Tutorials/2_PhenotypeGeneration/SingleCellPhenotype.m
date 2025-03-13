@@ -244,6 +244,12 @@ wavemap_rg.removeUnitsByCluster(clust_method, ID, concatenated);
 % We can see that the cluster is now gone
 wavemap_rg.plot_cluster_waveforms(clust_method);
 
+% After you remove units, you should update spike times/features
+for r = 1:length(wavemap_rg.Recordings)
+    wavemap_rg.Recordings(r).updateSpikeTimes();
+    wavemap_rg.Recordings(r).aggregateSingleCellFeatures();
+end
+
 %% Classification of cell clusters
 % If - through a drug experiment or through dedicated cell type ratios in
 % your cultures - you would like to generate the phenotype of your cells in
