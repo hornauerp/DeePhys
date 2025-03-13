@@ -1,9 +1,5 @@
 classdef MEArecording < handle
     
-    %%%%%%%TODO%%%%%%%
-    % 
-    %%%%%%%%%%%%%%%%%%
-    
     properties
         Metadata
         RecordingInfo
@@ -105,7 +101,6 @@ classdef MEArecording < handle
         
         function template_matrix = getTemplateMatrix(obj)
             template_matrix = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
-%             template_matrix = template_matrix(obj.Spikes.hasSpikes,:,:);
         end
         
         function duration = getRecordingDuration(obj)
@@ -889,11 +884,7 @@ classdef MEArecording < handle
            end
            
            N_bursts = length(Burst.T_start);
-           % if ~isnan(obj.Bursts.best_ISI_N)
            IBI_merge = merge_factor * obj.Bursts.best_ISI_N;
-%            else
-% IBI_merge = merge_factor * obj.Bursts.ISI_N;
-%            end
            if N_bursts > 1
                %            Merge bursts with too short IBIs (< IBI_merge)
                short_burst_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1)> IBI_merge);
@@ -977,7 +968,6 @@ classdef MEArecording < handle
                    N_array = min_N:max_N;
                else
                    N_array = round(linspace(min_N,max_N,20));
-                   % N_array = min_N:max_N;
                end
            else
                N_array = ops.N;
@@ -1020,7 +1010,6 @@ classdef MEArecording < handle
 
            pruned.T_start = nan(size(obj.Bursts.T_start));
            pruned.T_end = nan(size(obj.Bursts.T_end));
-           % figure('Color','W');tiledlayout('flow','TileSpacing','compact','Padding','compact')
            for iburst = 1:length(obj.Bursts.T_start)
                padding = max([obj.Bursts.best_ISI_N, (obj.Bursts.T_end(iburst) - obj.Bursts.T_start(iburst)) * 0.5]);
                padded_start = obj.Bursts.T_start(iburst) - padding;
@@ -1042,11 +1031,7 @@ classdef MEArecording < handle
                checks(1) = mean(binned_activity(threshold_l:threshold_r)) > mean(binned_activity);
                checks(2) = threshold_l > 1 && threshold_r < length(binned_activity);
                checks(3) = threshold_l < threshold_r;
-               % nexttile
-               % plot(binned_activity);xline([threshold_l,threshold_r],'r')
-               % axis off 
-% pruned_activity = obj.Spikes.Times(obj.Spikes.Times > (padded_start + threshold_l * bin_width) & obj.Spikes.Times < padded_end - (length(smoothed_activity) - threshold_r) * bin_width);
-% pruned_binned = histcounts(pruned_activity,(padded_start + threshold_l * bin_width):bin_width:(padded_end - (length(smoothed_activity) - threshold_r) * bin_width));
+            
                if all(checks)
                    pruned.T_start(iburst) = padded_start + threshold_l * bin_width;
                    pruned.T_end(iburst) = padded_end - (length(smoothed_activity) - threshold_r) * bin_width;
