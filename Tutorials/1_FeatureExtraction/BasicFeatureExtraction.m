@@ -29,11 +29,23 @@ addpath(genpath("../../Toolboxes"))
 % the feature extraction. Ideally, you have stored your data in a way that
 % can make use of the 'generate_sorting_path_list' function. 
 
+% The idea of this function is to find all folders that contain spike sorting
+% output from a specified 'root_path'.
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/network/240610"; % INSERT YOUR OWN PATH HERE
-path_logic = {'T00*','Network','w*','sorter_output'}; % USE THE WILDCARD * TO FIND ALL SORTINGS IN ONE GO
+
+% The path_logic is then used to selectively include certain subfolders.
+% Each element in the cell array hereby represents one level in the folder
+% structure (i.e., one subfolder). 
+% Often, you will have similar folders with only slight differences
+% (e.g. recording dates or chip ids), which can be found in one
+% go by using the wildcard character *. 
+path_logic = {'T00*','Network','w*','sorter_output'}; 
 
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
 fprintf("Generated %i sorting paths\n",length(sorting_path_list))
+
+% If your data is stored differently, you can also manually provide the
+% sorting_path_list as a list of strings.
 
 %% Set parameter values
 % Next, we need to specify the relevant parameters. The default values
@@ -43,6 +55,12 @@ fprintf("Generated %i sorting paths\n",length(sorting_path_list))
 
 emptyRec = MEArecording();
 params = emptyRec.returnDefaultParams();
+
+% Since we extract a variety of different features, we have a lot of
+% parameters. Several of those are, however, the defaults used by the
+% authors and should not need changing. Feel free to tinker with those as
+% well, also if they are not explicitly listed here.
+
 params.QC.Amplitude             = [];
 params.QC.FiringRate            = [0.01 100];
 params.QC.Axon                  = 0.8;
@@ -69,7 +87,7 @@ metadata = struct();
 % column. 
 
 % DONT CHANGE THE PlatingDate and Chip_IDs column headers when creating
-% your own metadata lookup file! All other names can be freely chosen.
+% your own metadata lookup file! All other names can be chosen freely.
 metadata.LookupPath = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/metadata/iNeurons_batch1.xlsx"; % INSERT YOUR OWN PATH HERE
 
 % The 'path_part_idx' variable exists to extract important metadata from the sorting path.

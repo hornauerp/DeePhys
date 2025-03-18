@@ -92,7 +92,7 @@ useClustered = false; %Only usable when clustering and assignClusterIdx was run 
 
 % Very useful when you have several experiments/batches that typically
 % behave slightly different. Depending on the Metadata variable specified
-% here, this will z-score feature for each group before further processing
+% here, this will z-score features for each group before further processing
 normalization_var = ["PlatingDate"]; %Use to normalize by groups of the normalization_var (e.g. PlatingDate would normalize by individual batches)
 
 % This variable will group recordings into cultures based on the metadata
@@ -144,11 +144,12 @@ figure("Color","w");
 legend(["CHIR","RA","BMP4","CHIR+BMP4","RA+BMP4","CTRL"])
 
 %% Optional: The pooling_vars variable
-% Sometimes we might want to groups as a conditions, without a specific
-% metadata variable being available to do so. E.g., maybe we want to
-% compare conditions with CHIR to those without CHIR. This is possible
-% using the pooling_vals variable. This is a cell array of cell arrays,
-% for each metadata variable that each represent a grouping of conditions:
+% Sometimes we might want to group different conditions as one, without a 
+% specific metadata variable being available to do so. 
+% E.g., maybe we want to% compare conditions with CHIR to those without 
+% CHIR. This is possible using the pooling_vals variable. 
+% This is a cell array of cell arrays, for each metadata variable that each
+% represent a grouping of conditions:
 pooling_vals = {{{"C1","C4"},{"C2","C3","C5","C6"}}};
 % It looks weird, but we really need 3 nested cell arrays :)
 % number of metadata variables * number of groups * conditions in group
@@ -179,7 +180,7 @@ fprintf("Clustering by '%s' results in a purity of %.3f\n",cluster_var, cluster_
 
 %% Supervised analysis
 % If the unsupervised methods are promising, we might be interested in
-% understanding which features drive those differences or if the aren't, we
+% understanding which features drive those differences or if they aren't, we
 % might want to try if supervised methods work better. To this end, we will
 % generate a classifier. This function takes many arguments, however, most
 % are identical to the unsupervised approach.
@@ -262,7 +263,9 @@ ylabel('Feature importance'); setAllFontSizes(gcf,7)
 % classifier more robust to outliers and should make it more generalizable.
 % This optimal classifier can then be used to e.g. evaluate treatment approaches
 % for a disease line. While we do not cover this in the tutorial here, as
-% it doesnt apply to our dataset, you can look at the 
+% it doesnt apply to our dataset, you can look at the SingleCellPhenotype
+% on how to do this for units instead of Recordings, which shares most of
+% the workflow
 
 %% Look at those features
 plt_feature_names = [result(1).Features(sort_idx(1:5))];

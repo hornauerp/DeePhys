@@ -738,7 +738,7 @@ classdef RecordingGroup < handle
                     n_neighbors = 100;
                 elseif level == "Recording"
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
-                    n_neighbors = 10;
+                    n_neighbors = 5;
                 else 
                     error('Unknown level')
                 end

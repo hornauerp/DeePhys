@@ -14,7 +14,7 @@
 % Specify the DeePhys root path
 addpath(genpath("/home/phornauer/Git/DeePhys")) % CHANGE
 
-% Or if your working directory is 2_FeatureExtraction we can also use a
+% Or if your working directory is 1_FeatureExtraction we can also use a
 % relative path
 addpath(genpath("../../Functions"))
 addpath(genpath("../../Classes"))
@@ -28,10 +28,13 @@ full_path = fullfile(root_path,file_path);
 load(full_path)
 
 %% The MEArecording obj
-% First, take a look at the Properties of our 'obj'. It should (hopefully)
-% be pretty much self explanatory.
+% First, take a look at the Properties of our 'obj', which is an example of 
+% the objects that we generated during the FeatureExtraction. 
 
 obj
+
+% While most properties are (hopefully) pretty much self explanatory, here 
+% a short description:
 
 % Metadata: Inferred from the lookup.xlsx file you provided during feature
 %   extraction
@@ -87,6 +90,9 @@ figure('Color','w')
 obj.PlotCCG(exc_con(candidate_con,1),exc_con(candidate_con,2)); 
 % Great, we see a nice peak! Now we can additionally check where the units
 % are located to exclude e.g. spike sorting errors.
+
+% If you use different recordings/units and don't see a peak, these two
+% units are likely not (synaptically) connected.
 
 unit_ids = [exc_con(candidate_con,1),exc_con(candidate_con,2)];
 wf_cutout = 1:60; %Samples from the waveform to plot
