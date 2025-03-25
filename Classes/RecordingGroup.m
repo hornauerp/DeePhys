@@ -640,7 +640,6 @@ classdef RecordingGroup < handle
             % end
             [iG, G] = rg.combineMetadataIndices(object_group, grouping_var);
             g_idx = unique(iG);
-            % [iG,G] = findgroups(metadata);
             for g = 1:length(g_idx)
                 iBatch_train = (iG == g_idx(g));% & train_idx';
                 [norm_mat, batch_mean, batch_sd] = normalize(feat_mat(iBatch_train,:));
@@ -738,7 +737,7 @@ classdef RecordingGroup < handle
                     n_neighbors = 100;
                 elseif level == "Recording"
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
-                    n_neighbors = 5;
+                    n_neighbors = 100;
                 else 
                     error('Unknown level')
                 end

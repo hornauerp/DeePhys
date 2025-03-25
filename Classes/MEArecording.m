@@ -843,7 +843,12 @@ classdef MEArecording < handle
            end
            if isempty(ops.N) | isempty(ops.ISI_N)
                if ~(isfield(obj.Bursts,'best_N') && isfield(obj.Bursts,'best_ISI_N'))
-                   inferOptimalBurstParameters(obj, ops.plot_idx);
+                   try
+                       inferOptimalBurstParameters(obj, ops.plot_idx);
+                   catch
+                       obj.Bursts.best_N = NaN;
+                       obj.Bursts.best_ISI_N = NaN;
+                   end
                    if isnan(obj.Bursts.best_N) %If no good parameters could be inferred
                        obj.Bursts.T_start = [];
                        obj.Bursts.T_end = [];

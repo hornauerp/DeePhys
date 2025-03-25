@@ -10,6 +10,7 @@ classdef Unit < handle
         RegularityFeatures
         GraphFeatures
         Catch22
+        ACG
     end
 
     properties(SetObservable = true)
@@ -18,7 +19,6 @@ classdef Unit < handle
 
     properties(Dependent)
         unitID
-        ACG
         FullACG
     end
     
@@ -51,13 +51,31 @@ classdef Unit < handle
             end
         end
 
+        function unit = set.ACG(unit,params)
+            arguments
+                unit Unit
+                params struct = struct()
+            end
+            if isempty(params)
+                try
+                    acg = unit.MEArecording.Connectivity.CCG.CCGs(:,unit.unitID,unit.unitID);
+                catch
+                    [acg,t] = CCG(unit.SpikeTimes,ones(size(unit.SpikeTimes)),'binSize',unit.MEArecording.Parameters.CCG.BinSize,'duration',unit.MEArecording.Parameters.CCG.Duration,'Fs',1/unit.MEArecording.RecordingInfo.SamplingRate);
+                end
+            else
+                [acg,t] = CCG(unit.SpikeTimes,ones(size(unit.SpikeTimes)),'binSize',params.BinSize,'duration',params.Duration,'Fs',1/unit.MEArecording.RecordingInfo.SamplingRate);
+            end
+            unit.ACG = double(acg);
+        end
+
         function unit_id = get.unitID(unit)
             unit_id = find(unit.MEArecording.Units == unit);
         end
 
-        function acg = get.ACG(unit)
-            acg = unit.MEArecording.Connectivity.CCG.CCGs(:,unit.unitID,unit.unitID);
-        end
+        % function acg = get.ACG(unit)
+        % 
+        %     % acg = unit.MEArecording.Connectivity.CCG.CCGs(:,unit.unitID,unit.unitID);
+        % end
 
         function acg = get.FullACG(unit)
             acg = unit.MEArecording.Connectivity.FullCCG.CCGs(:,unit.unitID,unit.unitID);
