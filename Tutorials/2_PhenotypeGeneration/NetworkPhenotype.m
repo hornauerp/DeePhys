@@ -23,7 +23,7 @@ addpath(genpath("../../Toolboxes"))
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/network/"; %Root path
 path_logic = {'2406*','T002*','Network','w*','sorter_output'}; %Variable parts
 path_list = generate_sorting_path_list(root_path, path_logic);
-fprintf("Generated %i sorting paths\n",length(sorting_path_list))
+fprintf("Generated %i sorting paths\n",length(path_list))
 
 %% Load data
 % We do this in parallel to speed things up. By default we also dont load
@@ -121,6 +121,13 @@ tolerance = 0;
 pattern_rg.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, feature_names, useClustered,...
                     normalization_var, grouping_var, grouping_values, normalization, tolerance);
 
+% Since the UMAP algorithm was developed by another group, there will be
+% pop-ups that prompt you to download accelerants. If it is possible for
+% you, I would recommend downloading them as it drastically speeds up
+% computations. However, this is not mandatory. Also, you can ignore any
+% error thrown by this function (typically caused by an attempted
+% connection to the download servers for the accelerants/example datasets).
+
 %% Evaluating clustering results
 % The results are stored in the pattern_rg object under
 % DimensionalityReduction. Results are then sorted by dr_level and
@@ -157,7 +164,7 @@ pooling_vals = {{{"C1","C4"},{"C2","C3","C5","C6"}}};
 figure("Color","w");
 [cluster_idx, group_labels_comb] = pattern_rg.plot_true_clusters(dr_level, dr_method, cluster_var, ...
     cmap=cmap,nodeSz=nodeSz, mapSz=mapSz, sigma=sigma,pooling_vals=pooling_vals);
-legend(["ChIR","Non-CHIR"])
+legend(["CHIR","Non-CHIR"])
 
 % The pooling_vars variable is available for a number of functions that
 % need a grouping/clustering of samples by some metadata variable. It works
@@ -294,8 +301,9 @@ color_lim = 3;
     unit_features_clf, feature_names, normalization, comp_var, pooling_vals, useClustered, tolerance, color_lim);
 
 % As you see in the x-axis, this is not an ideal visualization as we only
-% have one time point available. This works analogously if you have several
-% recordings across the development.
+% have one time point available. If you have several
+% recordings across the development or some other time series, this will be
+% plotted seperately on the x-axis.
 
 
 % That is it for the core analysis pipeline for network analyses, check also the X

@@ -28,7 +28,7 @@ addpath(genpath("../../Toolboxes"))
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/network/"; %Root path
 path_logic = {'2406*','T002*','Network','w*','sorter_output'}; %Variable parts
 path_list = generate_sorting_path_list(root_path, path_logic);
-fprintf("Generated %i sorting paths\n",length(sorting_path_list))
+fprintf("Generated %i sorting paths\n",length(path_list))
 
 %% Load data
 % We do this in parallel to speed things up. By default we also dont load
@@ -88,7 +88,14 @@ normalization = []; %"baseline" (divided by first data point) or "scaled" [0 1]
 tolerance = 1; %Tolerance for the grouping_values (e.g. if you want to group recordings with a DIV that is off by one (14 +/- 1))
 pattern_rg.reduceDimensionality(dr_level, dr_method, n_dims, unit_features, network_features, feature_names, useClustered,...
                     normalization_var, grouping_var, grouping_values, normalization, tolerance);
-           
+
+% Since the UMAP algorithm was developed by another group, there will be
+% pop-ups that prompt you to download accelerants. If it is possible for
+% you, I would recommend downloading them as it drastically speeds up
+% computations. However, this is not mandatory. Also, you can ignore any
+% error thrown by this function (typically caused by an attempted
+% connection to the download servers for the accelerants/example datasets).
+
 %% Clusters in one plot
 grouping_var = ["Patterning"];
 figure("Color","w");
@@ -117,7 +124,10 @@ clust_method = "louvain"; %"kmeans", "hierarchical", "spectral", "gmm", "louvain
 % parameter is 1, with smaller values yielding fewer clusters.
 clust_param = 1; 
 pattern_rg.clusterByFeatures(dr_method,dr_level,clust_method,clust_param);
-n_clust = max(pattern_rg.Clustering.Unit.(clust_method).Index)
+
+% Only relevant for louvain clustering
+n_clust = max(pattern_rg.Clustering.Unit.(clust_method).Index);
+fprintf('Found %i clusters \n', n_clust)
 
 %% Visualize clustering
 % Coordinates of dimensionality reduction
@@ -137,7 +147,7 @@ ax = gca;
 [reduction, cmap] = RecordingGroup.plot_cluster_outlines(reduction, cluster_idx, ax, plot_centroid, ...
     nodeSz, mapSz, sigma, cmap);
 
-% Play around with the clust_param values to find a reasonable clustering, 
+% Play around with the clust_param value to find a reasonable clustering, 
 % e.g.if you want to isolate a particular cell cluster.
 
 %% Alternative: Plot cluster densities
@@ -185,7 +195,7 @@ pattern_rg.plot_unit_cluster_features(cluster_idx,feature_names, cmap);
 % each condition specified.
 metadata_var = "Patterning";
 clust_method = "louvain";
-colors = othercolor('Spectral9',n_louvain);
+colors = othercolor('Spectral9',n_clust);
 pooling_vals = {};
 figure('Color','w');
 pattern_ratios = pattern_rg.plot_cluster_proportions(metadata_var, pooling_vals, clust_method, colors);
@@ -195,6 +205,7 @@ xticklabels(["CHIR","RA","BMP4","CHIR+BMP4","RA+BMP4","CTRL"])
 metadata_var = "ChipID";
 figure('Color','w');
 pattern_ratios = pattern_rg.plot_cluster_proportions(metadata_var, pooling_vals, clust_method, colors);
+xticks(1:length(pattern_ratios))
 
 %% Runing WaveMAP
 % We expanded on the original WaveMAP approach by additionally
@@ -302,6 +313,10 @@ figure('Color','w');
 bar(sorted_pI); xticks(1:length(avg_pred_imp)); xticklabels(result(1).Features(sort_idx)); box off
 ylabel('Feature importance'); setAllFontSizes(gcf,7)
 
+% For a table/explanations of the different features, please take a look at
+% the original publication (https://doi.org/10.1016/j.stemcr.2023.12.008)
+% or the wiki on Github.
+
 %% Apply a classifier
 % While we don't really have a use case for this workflow here, we will
 % showcase it anyways. First, we need to specify the cultures we want to
@@ -329,5 +344,6 @@ result = pattern_rg.applyClusteredUnitClassifier(train_cluster_idx, train_idx, t
 figure("Color","w")
 conf_mat = confusionchart(cluster_idx(test_idx),result.Y_pred);
 
-% That is it for the core analysis pipeline for single-cell analyses, 
-% check also the X tutorial for more utility functions
+% That is it for the core analysis pipeline for single-cell analyses, if
+% you have any questions, please do not hesitate to open an issue on the
+% github page!
