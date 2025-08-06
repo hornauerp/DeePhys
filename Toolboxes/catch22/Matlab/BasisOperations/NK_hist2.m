@@ -31,6 +31,10 @@ if any(size(x) ~= size(y))
     error('The size of the two first input vectors should be same!');
 end
 
+x = double(x);
+y = double(y);
+
+
 [xn, xbin] = histc(x,xedges);
 [yn, ybin] = histc(y,yedges);
 

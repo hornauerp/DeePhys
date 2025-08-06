@@ -28,8 +28,8 @@ featureValues = zeros(numFeatures,1);
 
 for featureInd = 1:numFeatures
     featureName = featureNames{featureInd};
-    fh = str2func(['catch22_', featureName]);
-    featureValues(featureInd) = fh(data');
+    fh = str2func(featureName); %'catch22_', 
+    featureValues(featureInd) = fh(boolean(data'));
 end
 
 end

@@ -93,7 +93,7 @@ classdef Unit < handle
                 act_feat.MeanInterSpikeInterval = mean(isi);
                 act_feat.VarianceInterSpikeInterval = var(isi);
                 act_feat.CVInterSpikeInterval = std(isi)/mean(isi);
-                pacf = parcorr(isi,1);
+                pacf = parcorr(isi,NumLags=1);
                 act_feat.PartialAutocorrelation = pacf(2);
                 unit.ActivityFeatures = struct2table(act_feat);
                 if unit.MEArecording.Parameters.Analyses.Regularity

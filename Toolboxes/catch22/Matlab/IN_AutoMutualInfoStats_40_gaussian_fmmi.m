@@ -6,7 +6,7 @@ function out = IN_AutoMutualInfoStats_40_gaussian_fmmi(y)
 %
 % maxTau, maximal time delay
 %
-% estMethod = 'gaussian'
+% BestMethod = 'gaussian'
 %
 %---OUTPUTS:
 % out = fmmi, statistic on the AMIs and their pattern across
@@ -87,7 +87,7 @@ end
 end
 
 function out = autocorrelation(y, maxLag)
-
+    y = double(y);
     N = length(y);
 
     if maxLag >= N

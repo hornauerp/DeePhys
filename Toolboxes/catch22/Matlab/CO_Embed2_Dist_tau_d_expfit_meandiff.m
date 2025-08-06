@@ -60,13 +60,13 @@ end
 % 2-dimensional time-delay embedding:
 % ------------------------------------------------------------------------------
 
-m = [y(1:end-tau), y(1+tau:end)];
+m = [y(1:end-tau); y(1+tau:end)];
 
 % ------------------------------------------------------------------------------
 % Calculate Euclidean distances between successive points in this space, d:
 % ------------------------------------------------------------------------------
 
-d = sqrt(diff(m(:,1)).^2 + diff(m(:,2)).^2); % Euclidean distance
+d = sqrt(diff(m(1,:)).^2 + diff(m(2,:)).^2); % Euclidean distance
 
 % % ------------------------------------------------------------------------------
 % % Empirical distance distribution often fits Exponential distribution quite well

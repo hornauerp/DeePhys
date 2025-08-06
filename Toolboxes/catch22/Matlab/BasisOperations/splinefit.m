@@ -264,8 +264,21 @@ function u = lsqsolve(A,y,beta)
 %LSQSOLVE Solve Min norm(u*A-y)
 
 
+%Solution
+if islogical(y)
+    y = double(y); % Convert logical to double
+end
+if iscolumn(y)
+    y = y'; % Convert to row vector (1 x 18000)
+end
+
+% Solve the least squares problem: A^T v = y^T
+v = A' \ y'; % y' is 18000 x 1, A' is 18000 x 5, so v is 5 x 1
+u = v'; % u is 1 x 5
+
+
 % Solution
-u = y/A;
+%u = y/A;
 
 % % Robust fitting
 % if beta > 0
