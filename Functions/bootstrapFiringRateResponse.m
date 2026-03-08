@@ -45,11 +45,13 @@ increase  = [];
 decrease  = [];
 unchanged = [];
 
+% Use empirical percentiles — robust to non-normal and degenerate null distributions
+thresholds = prctile(bootstrp_diff, [alpha/2 * 100, (1 - alpha/2) * 100], 2);
+
 for u = 1:n_units
-    pd = fitdist(bootstrp_diff(u,:)', 'Normal');
-    if emp_diff(u) > icdf(pd, 1 - alpha/2)
+    if emp_diff(u) > thresholds(u, 2)
         increase  = [increase,  u]; %#ok<AGROW>
-    elseif emp_diff(u) < icdf(pd, alpha/2)
+    elseif emp_diff(u) < thresholds(u, 1)
         decrease  = [decrease,  u]; %#ok<AGROW>
     else
         unchanged = [unchanged, u]; %#ok<AGROW>

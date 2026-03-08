@@ -26,7 +26,6 @@ unit_list = Unit.empty;
 
 for c = 1:length(rg.Cultures)
     culture = rg.Cultures(c);
-    n_units = length(culture.Units);
 
     % Bootstrap test: bin spike matrix and compare pre vs post windows
     pre_mat  = culture.getBinnedSpikeMat(p.BinSize, p.PreCutout);

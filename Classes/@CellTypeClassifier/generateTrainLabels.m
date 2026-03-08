@@ -48,7 +48,13 @@ candidate_reduction = reduction(ctc.ResponsiveUnitIdx, :);
     'NumObservationsPerLearner', p_outlr.NObsPerLearner);
 
 clean_candidates = candidate_reduction(~tf_forest, :);
-centroid = mean(clean_candidates);
+if isempty(clean_candidates)
+    warning('EIAnalyzer:generateTrainLabels', ...
+        'All %i responsive candidates flagged as outliers by iforest — falling back to all candidates.', ...
+        size(candidate_reduction, 1));
+    clean_candidates = candidate_reduction;
+end
+centroid = mean(clean_candidates, 1);
 
 % Find counterexamples: units far from interneuron centroid
 dists = pdist2(centroid, reduction);
@@ -59,8 +65,8 @@ far_idx = find(dists > dist_threshold);
 n_candidates = sum(~tf_forest);
 counterexample_idx = randsample(far_idx, min(2*n_candidates, length(far_idx)), false);
 
-in_train_id = find(ctc.ResponsiveUnitIdx) .* ~tf_forest';
-in_train_id = in_train_id(in_train_id > 0);
+responsive_indices = find(ctc.ResponsiveUnitIdx);
+in_train_id = responsive_indices(~tf_forest(:)');
 ex_train_id = counterexample_idx(~ismember(counterexample_idx, in_train_id));
 
 train_ids = [ex_train_id, in_train_id];

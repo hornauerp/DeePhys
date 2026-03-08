@@ -18,7 +18,7 @@ rg  = ctc.RecordingGroup;
 p   = eia.Parameters.Activity;
 
 [cluster_idx, ~] = rg.combineMetadataIndices(ctc.UnitList, ["ChipID", "RecordingDate"]);
-n_cultures = max(cluster_idx);
+n_cultures = length(rg.Cultures);
 
 activity    = repmat(struct('I',[],'E',[],'total',[],'ratio',[],'x',[]), 1, n_cultures);
 binned_mats = cell(1, n_cultures);

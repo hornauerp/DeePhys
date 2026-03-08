@@ -26,7 +26,7 @@ for c = 1:length(eia.Activity)
     noise_floor = unique_E(min(2, length(unique_E)));
 
     z = double(act.ratio < p.Threshold & act.E > noise_floor) + 1;
-    z = medfilt1(z, p.SmoothWindow);
+    z = round(medfilt1(z, p.SmoothWindow));
     burst_state{c} = z;
 end
 

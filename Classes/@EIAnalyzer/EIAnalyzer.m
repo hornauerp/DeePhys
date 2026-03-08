@@ -50,6 +50,7 @@ classdef EIAnalyzer < handle
             defaultParams.BurstDetection.PeakCutout      = 150;   % bins ± burst peak to extract
             defaultParams.BurstDetection.PeakHeight      = 0.1;   % minimum peak height
             defaultParams.BurstDetection.PeakProminence  = 0.1;   % minimum peak prominence
+            defaultParams.BurstDetection.MinPeakDistance = 6;     % minimum bins between detected burst peaks
             defaultParams.BurstDetection.SelectedVariant = 4;     % burst variant: 1=all, 2=cluster1, 3=cluster2, 4=both-aligned
         end
     end
