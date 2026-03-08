@@ -4,9 +4,6 @@
             ccg_type string = "CCG" %or "FullCCG"
            end
            fh = str2func("calculate" + ccg_type);
-           if ~isfield(obj.Connectivity,ccg_type) || ~isfield(obj.Connectivity.(ccg_type),'CCGs')
-               fh(obj);
-           end
            [ccgR1,tR] = fh(obj);
            if size(ccgR1,2) < length(obj.Units) %Pad if the last unit(s) have no spikes
                padded_ccg = zeros(size(ccgR1,1),length(obj.Units),length(obj.Units));

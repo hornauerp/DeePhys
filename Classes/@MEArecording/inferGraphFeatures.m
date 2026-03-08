@@ -44,7 +44,9 @@ rents_exponent = 0; % Placeholder: rentian_scaling_2d computation disabled above
                  nw_val = [density, rents_exponent, assortativity];%, rich_club];
 
              else
-                 disp("No binary connectivity matrix available")
+                 warning('MEArecording:inferGraphFeatures', ...
+                     'Algorithm "%s" has no binary connectivity matrix — skipping.', alg(a));
+                 continue
              end
 
              global_efficiency = efficiency_bin(con_mat);
