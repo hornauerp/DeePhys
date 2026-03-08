@@ -106,9 +106,10 @@ classdef RecordingGroup < handle
         function cultures = groupCultures(rg, grouping_var)
             arguments
                rg RecordingGroup
-               grouping_var = [] %Needed if recordings from the same culture need to be grouped at different time points (e.g. two different dose responses)
+               grouping_var string = "" % Metadata field that varies across recordings within one culture
+                                        % (e.g. "Concentration" for dose-response, "RecordingDate" for timepoints)
             end
-            cultures = [];
+            cultures = Culture.empty;
             metadata = [rg.Recordings.Metadata];
             if ~isfield(metadata,"ChipID")
                 warning('No chip IDs provided, cannot group recordings')
@@ -133,17 +134,17 @@ classdef RecordingGroup < handle
                    inclusion = {{'PlatingDate',pd}};
                    plating_idx = rg.filterRecordingArray(chip_metadata, inclusion);
                    culture_array = chip_array(plating_idx);
-                   if ~isempty(grouping_var)
+                   if grouping_var ~= ""
                        group_metadata = [culture_array.Metadata];
                        group_values = unique([group_metadata.(grouping_var)]);
                        for gv = group_values
                            inclusion = {{grouping_var, gv}};
                            group_idx = rg.filterRecordingArray(group_metadata, inclusion);
                            group_array = culture_array(group_idx);
-                           cultures = [cultures {group_array}];
+                           cultures = [cultures, Culture(group_array, grouping_var, gv)]; %#ok<AGROW>
                        end
                    else
-                       cultures = [cultures {culture_array}];
+                       cultures = [cultures, Culture(culture_array)]; %#ok<AGROW>
                    end
                 end
             end
