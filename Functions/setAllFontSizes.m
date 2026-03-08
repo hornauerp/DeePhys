@@ -1,4 +1,9 @@
 function setAllFontSizes(figure_handle,fontsz)
+% SETALLFONTSZIZES  Set font size on all axes, legends, and colorbars in a figure.
+%
+% INPUTS:
+%   figure_handle - Handle to the target figure
+%   fontsz        - Desired font size (numeric)
 allPolarInFigure = findall(figure_handle,'type','polaraxes');
 allAxesInFigure = findall(figure_handle,'type','axes');
 allLegendInFigure = findall(figure_handle,'type','legend');

@@ -1,4 +1,18 @@
 function output_path_list = split_sortings(sorting_path, split_times, output_folder)
+% SPLIT_SORTINGS  Split a spike sorting output into time-windowed sub-sortings.
+%
+% Reads spike_times.npy and spike_templates.npy from sorting_path, slices them
+% into the requested windows, and writes each window to a new subfolder.
+% Skips processing if the output files already exist.
+%
+% INPUTS:
+%   sorting_path  - Path to the root sorting folder (containing spike_times.npy etc.)
+%   split_times   - N×2 double matrix of [start, end] times in minutes per window
+%   output_folder - (optional) Base name for output subfolders; default "split"
+%
+% OUTPUTS:
+%   output_path_list - String array of paths to the created sub-sorting folders
+
 arguments
     sorting_path string
     split_times (:,2) double %In minutes; first column indicates start times, second column corresponding end times

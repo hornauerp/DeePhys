@@ -23,7 +23,7 @@ function tileCoef = sttc(N1v, N2v, dtv, Time, spike_times_1, spike_times_2)
 % I have included some of the original comments
 % Last Update: 20180516 
 
-N1 = N1v; % need to think about these gloabl var names
+N1 = N1v; % need to think about these global var names
 N2 = N2v; 
 dt = dtv; 
 
