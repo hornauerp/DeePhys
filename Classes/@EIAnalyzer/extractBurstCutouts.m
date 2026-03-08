@@ -67,14 +67,15 @@ for c = 1:length(eia.Activity)
     if size(burst_mat, 1) < 4; continue; end
 
     % Cross-correlation alignment to mean burst shape
+    % NaN-pad edges rather than wrapping to avoid contaminating the mean shape.
     norm_burst = burst_mat ./ max(burst_mat, [], 2);
     mean_burst = mean(norm_burst, 1);
     for b = 1:size(burst_mat, 1)
         [~, max_lag]  = max(xcorr(norm_burst(b,:), mean_burst, p.PeakCutout));
         shift         = (p.PeakCutout + 1) - max_lag;
-        burst_mat(b,:) = circshift(burst_mat(b,:), shift);
-        i_mat(b,:)    = circshift(i_mat(b,:),     shift);
-        e_mat(b,:)    = circshift(e_mat(b,:),     shift);
+        burst_mat(b,:) = nanShift(burst_mat(b,:), shift);
+        i_mat(b,:)    = nanShift(i_mat(b,:),     shift);
+        e_mat(b,:)    = nanShift(e_mat(b,:),     shift);
     end
 
     % Build four burst variants
@@ -94,9 +95,9 @@ for c = 1:length(eia.Activity)
         bm4 = burst_mat; im4 = i_mat; em4 = e_mat;
         id2 = find(idx == 2);
         for b = 1:length(id2)
-            bm4(id2(b),:) = circshift(burst_mat(id2(b),:), shift2);
-            im4(id2(b),:) = circshift(i_mat(id2(b),:),     shift2);
-            em4(id2(b),:) = circshift(e_mat(id2(b),:),     shift2);
+            bm4(id2(b),:) = nanShift(burst_mat(id2(b),:), shift2);
+            im4(id2(b),:) = nanShift(i_mat(id2(b),:),     shift2);
+            em4(id2(b),:) = nanShift(e_mat(id2(b),:),     shift2);
         end
         ba{4} = struct('total', bm4, 'i_mat', im4, 'e_mat', em4);
     catch
@@ -108,4 +109,17 @@ for c = 1:length(eia.Activity)
 end
 
 eia.BurstCutouts = cutouts;
+end
+
+function out = nanShift(row, shift)
+% NANSHIFT  Shift a row vector by shift bins, NaN-padding the vacated edge.
+n   = length(row);
+out = nan(1, n);
+if shift == 0
+    out = row;
+elseif shift > 0
+    out(shift+1:end) = row(1:end-shift);
+else  % shift < 0
+    out(1:end+shift) = row(1-shift:end);
+end
 end

@@ -28,13 +28,12 @@ end
 
 p = ctc.Parameters.UMAP;
 tdir = p.TemplateDir;
-template_file = fullfile(tdir, 'ctc_supervised_umap_template.mat');
-
 % Use unique filenames to avoid collisions in parallel runs
-uid       = char(java.util.UUID.randomUUID);
-train_csv = fullfile(tdir, ['ctc_umap_train_' uid '.csv']);
-test_csv  = fullfile(tdir, ['ctc_umap_test_'  uid '.csv']);
-clean_up  = onCleanup(@() cellfun(@(f) deleteFile(f), {train_csv, test_csv}));
+uid           = char(java.util.UUID.randomUUID);
+template_file = fullfile(tdir, ['ctc_supervised_umap_template_' uid '.mat']);
+train_csv     = fullfile(tdir, ['ctc_umap_train_' uid '.csv']);
+test_csv      = fullfile(tdir, ['ctc_umap_test_'  uid '.csv']);
+clean_up      = onCleanup(@() cellfun(@(f) deleteFile(f), {train_csv, test_csv, template_file}));
 
 % Write training data to CSV (run_umap reads CSV for supervised mode)
 train_tbl = array2table([X_train, Y_train'], ...

@@ -7,7 +7,7 @@ function [sorted_acgs, sorted_idx] = sortACGsByPeak(acgs, type)
 % INPUTS:
 %   acgs - (N_units x N_bins) normalised ACG matrix
 %   type - "max"  — sort by bin of maximum amplitude (default)
-%           "mean" — sort by mean-weighted peak position
+%           "mean" — sort by normalised mean amplitude (mean/max of first half)
 %
 % OUTPUTS:
 %   sorted_acgs - (N_units x N_bins) reordered ACG matrix

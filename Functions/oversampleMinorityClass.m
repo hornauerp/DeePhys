@@ -25,7 +25,7 @@ train_grp  = object_group(train_idx);
 test_grp   = object_group(~train_idx);
 
 classes    = unique(y_train);
-max_count  = max(histcounts(y_train, [classes; classes(end)+1]));
+max_count  = max(histcounts(y_train, [classes, classes(end)+1]));
 
 new_rows  = {};
 new_y     = [];

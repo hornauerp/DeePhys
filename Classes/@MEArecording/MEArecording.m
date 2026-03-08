@@ -61,7 +61,7 @@ classdef MEArecording < handle
                 disp('Import metadata from file')
             else
                 obj.Metadata = metadata;
-                warning("Used metadata provided, no import")
+                warning("Using provided metadata directly (no file import)")
             end
             
             if isfield(obj.Metadata,"RecordingDate") && ~isempty(obj.Metadata.RecordingDate) && isfield(obj.Metadata,"PlatingDate") && ~isempty(obj.Metadata.PlatingDate)
@@ -85,6 +85,7 @@ classdef MEArecording < handle
             params_path = fullfile(obj.Metadata.InputPath, "params.py");
             fileID = fopen(params_path,'r');
             params_txt = fscanf(fileID,'%c');
+            fclose(fileID);
             params_parts = strsplit(params_txt,'\n');
             sr_idx = startsWith(params_parts,'sample');
             sr = strsplit(params_parts{sr_idx},' = ');
@@ -245,7 +246,13 @@ classdef MEArecording < handle
             if ~isempty(obj.Parameters.QC.Noise) && ~isnan(obj.Parameters.QC.Noise)
                 SAMPLES_PER_MS = 10; % 10 kHz effective rate after interpolation (10 samples/ms)
                 [~,peak_amp_idx] = min(norm_wf_matrix);
-                avg_peak_idx = median(peak_amp_idx(peak_amp_idx >1));
+                avg_peak_idx = median(peak_amp_idx(peak_amp_idx > 1));
+                if isnan(avg_peak_idx)
+                    % All peaks at index 1 — cannot define a noise cutout window; skip
+                    is_noisy = zeros(size(norm_wf_matrix,2),1);
+                    fprintf('Identified %i units as noise\n',sum(is_noisy))
+                    return
+                end
                 cutout_idx = round(avg_peak_idx) + obj.Parameters.QC.NoiseCutout(1) * SAMPLES_PER_MS:...
                     round(avg_peak_idx) + obj.Parameters.QC.NoiseCutout(2) * SAMPLES_PER_MS;
                 bad_peak = peak_amp_idx < cutout_idx(1) | peak_amp_idx > cutout_idx(end);
@@ -301,7 +308,7 @@ classdef MEArecording < handle
                 padded_rise = [ones(100,1)*rise_cutout(1); rise_cutout; ones(100,1)*rise_cutout(end)];
                 unit_features.Rise = mean(slewrate(padded_rise,interpolation_factor));
                 decay_cutout = interp_wf_matrix(peak_2_idx(u):end,u);
-                decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout)));
+                decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout), 1, 'first'));
                 padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
                 unit_features.Decay = mean(slewrate(padded_decay,interpolation_factor));
                 unit_features.Asymmetry = asymmetry(u);
@@ -374,7 +381,6 @@ classdef MEArecording < handle
                 Burst.T_start = [];
                 Burst.T_end = [];
             else
-                tic;
                 [spike_times, ~] = obj.removeTonic();
                 dT = zeros(N,length(spike_times))+inf;
                 for j = 0:N-1
@@ -438,9 +444,8 @@ classdef MEArecording < handle
                     Burst.T_start(i) = spike_times(ID(1));
                     Burst.T_end(i) = spike_times(ID(end));
                 end
-                run_time = toc;
-                fprintf('Detected %i bursts in %.2f seconds using %0.2f minutes of spike data.\n', ...
-                    MaxBurstNumber,run_time,diff(spike_times([1 end]))/60);
+                fprintf('Detected %i bursts using %0.2f minutes of spike data.\n', ...
+                    MaxBurstNumber, diff(spike_times([1 end]))/60);
             end
         end
         

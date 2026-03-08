@@ -37,9 +37,6 @@ function result = classifyByFeatureGroups(rg, level, alg, classification_var, po
                     input_table = object_group.getUnitFeatures(unit_features);
                     object_group = [rg.Units];
                     [Y, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var, pooling_vals);
-                    if ~isempty(classification_val) %New division / pool conditions
-                        [Y,group_labels_comb] = poolMetadataValues(clf_group_idx, group_labels_comb, classification_val);
-                    end
                 elseif level == "Recording"
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
                     Y = group_idx;
@@ -70,8 +67,12 @@ function result = classifyByFeatureGroups(rg, level, alg, classification_var, po
                 [clf,train_acc] = rg.create_classifier(X_train, Y_train, alg, N_hyper);
                 [Y_pred,scores] = predict(clf, X_test);
 
-                options = statset('UseParallel',true);
-                predImp = oobPermutedPredictorImportance(clf,'Options',options);
+                if alg == "rf"
+                    options = statset('UseParallel',true);
+                    predImp = oobPermutedPredictorImportance(clf,'Options',options);
+                else
+                    predImp = [];
+                end
 % predImp = [];
 
                 result(k).Mdl = clf;

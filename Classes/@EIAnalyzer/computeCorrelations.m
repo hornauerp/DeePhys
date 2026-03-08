@@ -31,6 +31,10 @@ for c = 1:length(eia.Activity)
     culture_labels = ctc.UnitLabels(cluster_idx == c);
     if ~isempty(culture_labels) && length(culture_labels) == n_rows
         cell_id(culture_labels == 2) = 2;
+    elseif ~isempty(culture_labels)
+        warning('EIAnalyzer:computeCorrelations', ...
+            'Culture %i: label count (%i) does not match binned matrix rows (%i) — cell_id defaulting to all-excitatory.', ...
+            c, length(culture_labels), n_rows);
     end
 
     corrs(c).pop_corr = pop_corr;

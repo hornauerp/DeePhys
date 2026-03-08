@@ -20,15 +20,20 @@ arguments
     time_window (1,2) double = [0, sum(arrayfun(@(r) r.RecordingInfo.Duration, culture.Recordings))]
 end
 
-n_units    = length(culture.Units);
+baseline_units = culture.Units;           % canonical unit order from Recordings(1)
+n_units    = length(baseline_units);
+baseline_ids = [baseline_units.unitID];
 bins       = time_window(1) : bin_size : time_window(2);
 binned_mat = zeros(n_units, length(bins) - 1);
 offset     = 0;
 
 for r = 1:culture.N
-    rec = culture.Recordings(r);
+    rec        = culture.Recordings(r);
+    rec_ids    = [rec.Units.unitID];
+    [~, row_idx] = ismember(baseline_ids, rec_ids);  % map baseline order → rec order
     for u = 1:n_units
-        spike_times = rec.Units(u).SpikeTimes + offset;
+        if row_idx(u) == 0; continue; end            % unit absent in this recording
+        spike_times = rec.Units(row_idx(u)).SpikeTimes + offset;
         in_window   = spike_times >= time_window(1) & spike_times < time_window(2);
         binned_mat(u,:) = binned_mat(u,:) + histcounts(spike_times(in_window), bins);
     end

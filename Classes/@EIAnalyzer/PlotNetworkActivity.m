@@ -19,7 +19,7 @@ assert(~isempty(eia.BurstState), ...
 act = eia.Activity(culture_idx);
 z   = eia.BurstState{culture_idx};
 
-colors = [0.12, 0.47, 0.71; 0.84, 0.19, 0.15];  % blue (burst) / red (non-burst)
+colors = [0.12, 0.47, 0.71; 0.84, 0.19, 0.15];  % blue (non-burst, z=1) / red (burst, z=2)
 vertex_colors = colors(z, :);
 
 smooth_total = smoothdata(act.total, 'SmoothingFactor', 0.1);

@@ -29,12 +29,8 @@ classdef CellTypeClassifier < handle
             end
             ctc.RecordingGroup = rg;
             ctc.Parameters = parseStructParameters(ctc.returnDefaultParams(), parameters);
-            % Collect all units from the baseline recording of each culture
-            unit_list = Unit.empty;
-            for c = 1:length(rg.Cultures)
-                unit_list = [unit_list, rg.Cultures(c).Units]; %#ok<AGROW>
-            end
-            ctc.UnitList = unit_list;
+            % UnitList is populated by identifyResponsiveUnits(), which also sets
+            % the cumulative culture offsets needed for ResponsiveUnitIdx.
         end
     end
 

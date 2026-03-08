@@ -35,7 +35,7 @@
 %                      [b,~] = robustfit(log10(N),log10(E));
 %                      rents_exponent = b(2,1);
 %                  catch
-rents_exponent = 0;
+rents_exponent = 0; % Placeholder: rentian_scaling_2d computation disabled above
 %                  end
                  clustering_coef = clustering_coef_bu(con_mat);
                  assortativity = assortativity_bin(con_mat,0);

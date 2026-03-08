@@ -36,7 +36,7 @@
                 padded_rise = [ones(100,1)*rise_cutout(1); rise_cutout; ones(100,1)*rise_cutout(end)];
                 unit_features.Rise = mean(slewrate(padded_rise,interpolation_factor));
                 decay_cutout = interp_wf_matrix(peak_2_idx(u):end,u);
-                decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout)));
+                decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout), 1, 'first'));
                 padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
                 unit_features.Decay = mean(slewrate(padded_decay,interpolation_factor));
                 unit_features.Asymmetry = asymmetry(u);

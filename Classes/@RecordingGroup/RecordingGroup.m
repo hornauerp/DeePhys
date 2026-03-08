@@ -229,7 +229,7 @@ classdef RecordingGroup < handle
                        t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all','Reproducible',true);
                        clf = fitcensemble(X_train,Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset("UseParallel",true));
                end
-               train_acc = 1-resubLoss(clf,'LossFun','classiferror');
+               train_acc = 1-resubLoss(clf,'LossFun','classerror');
            end
        end
        

@@ -24,7 +24,7 @@ arguments
     alpha       (1,1) double = 1e-10
 end
 
-assert(diff(pre_cutout) == diff(post_cutout), ...
+assert(abs(diff(pre_cutout) - diff(post_cutout)) < 1e-9, ...
     'Pre and post cutouts must span equal durations');
 
 pre_mat  = culture.getBinnedSpikeMat(bin_size, pre_cutout);

@@ -37,14 +37,14 @@ function [feature_table, culture_array, values] = aggregateCultureFeatureTables(
             culture_array = {};
             for iC = 1:length(rg.Cultures)
                 rec_table_array = cell(1,length(values));
-                culture_metadata = [rg.Cultures{iC}.Metadata];
+                culture_metadata = [rg.Cultures(iC).Recordings.Metadata];
                 value = [culture_metadata.(metadata_field)];
                 if length(value) >= length(values)
                     value_dev = abs(value - values');
                     value_count = sum(value_dev<=tolerance,1);
 %                     value = value(value_count==1);
                     if sum(value_count==1) == length(values) % Need to find a way to handle two recordings falling within the tolerance window
-                        sel_rec = rg.Cultures{iC}(value_count == 1);
+                        sel_rec = rg.Cultures(iC).Recordings(value_count == 1);
                         sel_md = [sel_rec.Metadata];
                         [~, sort_idx] = sort([sel_md.(metadata_field)],'ascend');
                         sel_rec = sel_rec(sort_idx);
@@ -125,14 +125,14 @@ function [sparse_feature_mat, var_names, grouping_idx, separation_idx] = aggrega
             if isnan(grouping_val)
                 grouping_val = unique_values;
             end
-            test_table = getRecordingFeatures(rg.Recordings(r), network_features, unit_features, useClustered);
+            test_table = getRecordingFeatures(rg.Recordings(1), network_features, unit_features, useClustered);
             num_fields = size(test_table,2);
             sparse_feature_mat = nan(length(rg.Cultures), length(grouping_val), num_fields);
             for i = 1:length(rg.Cultures)
-                culture_metadata = [rg.Cultures{i}.Metadata];
+                culture_metadata = [rg.Cultures(i).Recordings.Metadata];
                 culture_vals = [culture_metadata.(grouping_var)];
                 [vals, val_idx] = sort(culture_vals,'ascend');
-                recordings = rg.Cultures{i}(val_idx);
+                recordings = rg.Cultures(i).Recordings(val_idx);
                 value_dev = abs(grouping_val - vals');
                 value_count = find(sum(value_dev<=tolerance));
                 for r = 1:length(recordings)
