@@ -33,15 +33,16 @@ for c = 1:n_cultures
     mean_total = mean(bc.total, 1, 'omitnan');
     mean_i     = mean(bc.i_mat, 1, 'omitnan');
 
-    segment          = mean_total(burst_win);
-    seg_max          = max(segment);
+    segment = mean_total(burst_win);
+    seg_max = max(segment);
     if seg_max == 0; continue; end
-    norm_bursts(c,:) = segment ./ seg_max;
 
-    ie_segment    = mean_i(burst_win) ./ mean_total(burst_win);
+    ie_segment = mean_i(burst_win) ./ mean_total(burst_win);
     ie_segment(~isfinite(ie_segment)) = 0;  % replace Inf/NaN from zero total
-    ie_max        = max(ie_segment);
+    ie_max = max(ie_segment);
     if ie_max == 0; continue; end
-    norm_ie(c,:)  = ie_segment ./ ie_max;
+
+    norm_bursts(c,:) = segment    ./ seg_max;
+    norm_ie(c,:)     = ie_segment ./ ie_max;
 end
 end

@@ -44,12 +44,13 @@ for c = 1:n_cultures
     E_fr     = mean(binned_mat(exc_rows, :), 1);
     total_fr = mean(binned_mat, 1);
 
-    if isempty(I_fr) || ~any(inh_rows); I_fr = zeros(1, size(binned_mat, 2)); end
-    if isempty(E_fr) || ~any(exc_rows); E_fr = zeros(1, size(binned_mat, 2)); end
+    if ~any(inh_rows); I_fr = zeros(1, size(binned_mat, 2)); end
+    if ~any(exc_rows); E_fr = zeros(1, size(binned_mat, 2)); end
 
     ratio         = I_fr ./ E_fr;
     finite_ratio  = ratio(isfinite(ratio) & ~isnan(ratio));
     max_ratio     = max(finite_ratio);
+    if isempty(max_ratio); max_ratio = 0; end   % all-zero E trace → no finite ratio
     ratio(isinf(ratio))  = max_ratio;
     ratio(isnan(ratio))  = 0;
 

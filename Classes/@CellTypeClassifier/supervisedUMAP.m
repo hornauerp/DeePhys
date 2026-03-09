@@ -13,7 +13,7 @@ function [Y_pred, umap_train, umap_test, test_reduction, train_reduction] = supe
 %   X_test        - (N_test x F) normalised feature matrix
 %
 % OUTPUTS:
-%   Y_pred          - (N_test x 1) predicted class labels
+%   Y_pred          - (1 x N_test) predicted class labels
 %   umap_train      - trained UMAP model object
 %   umap_test       - UMAP model used for test projection
 %   test_reduction  - (N_test  x NDims) embedding coordinates for test units

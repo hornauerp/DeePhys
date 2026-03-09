@@ -30,8 +30,8 @@ for c = 1:length(eia.Activity)
     act = eia.Activity(c);
     z   = eia.BurstState{c};
 
-    % Detect peaks in burst-state excitatory activity
-    only_burst = act.total .* (z' == 2);
+    % Detect peaks in burst-state total activity
+    only_burst = act.total .* (z == 2);
     [~, locs]  = findpeaks(only_burst, ...
         'MinPeakHeight',     p.PeakHeight, ...
         'MinPeakProminence', p.PeakProminence, ...
