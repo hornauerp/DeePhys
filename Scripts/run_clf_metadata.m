@@ -218,7 +218,9 @@ eia.computeCorrelations();
 
 eia.PlotNetworkActivity(1);
 
-[norm_bursts, norm_ie] = eia.normalizeBurstCutouts();
+eia.normalizeBurstCutouts();
+norm_bursts = eia.NormalizedCutouts.bursts;
+norm_ie     = eia.NormalizedCutouts.ie;
 
 figure('Color', 'w');
 tiledlayout(2, 2, 'TileSpacing', 'compact');

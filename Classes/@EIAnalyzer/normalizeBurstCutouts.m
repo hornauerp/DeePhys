@@ -1,16 +1,12 @@
-function [norm_bursts, norm_ie] = normalizeBurstCutouts(eia)
+function normalizeBurstCutouts(eia)
 % NORMALIZEBURSTCUTOUTS  Normalise burst cutouts across cultures for cross-culture comparison.
 %
-% Computes the mean burst profile per culture, normalises within each culture,
-% and returns matrices suitable for cross-culture visualisation (e.g. heatmaps).
-% Only the second half of the burst window (peak and decay) is returned to avoid
+% Computes the mean burst profile per culture, normalises within each culture.
+% Only the second half of the burst window (peak and decay) is stored to avoid
 % edge artefacts from cross-correlation alignment.
 %
 % Requires eia.BurstCutouts (run extractBurstCutouts first).
-%
-% OUTPUTS:
-%   norm_bursts - (N_cultures x N_bins) normalised mean total burst activity
-%   norm_ie     - (N_cultures x N_bins) normalised mean I/E ratio during bursts
+% Sets: eia.NormalizedCutouts  (.bursts and .ie, each N_cultures x N_bins)
 
 arguments
     eia EIAnalyzer
@@ -45,4 +41,7 @@ for c = 1:n_cultures
     norm_bursts(c,:) = segment    ./ seg_max;
     norm_ie(c,:)     = ie_segment ./ ie_max;
 end
+
+eia.NormalizedCutouts = struct('bursts', norm_bursts, 'ie', norm_ie);
+fprintf('Normalised burst cutouts for %i cultures\n', n_cultures);
 end

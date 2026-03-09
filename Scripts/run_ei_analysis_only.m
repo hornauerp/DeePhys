@@ -85,7 +85,9 @@ end
 
 % Normalised burst shapes
 % old: manual norm loop in clf_all_batches.m lines 196-218
-[norm_bursts, norm_ie] = eia.normalizeBurstCutouts();
+eia.normalizeBurstCutouts();
+norm_bursts = eia.NormalizedCutouts.bursts;
+norm_ie     = eia.NormalizedCutouts.ie;
 
 figure('Color', 'w');
 tiledlayout(2, 3, 'TileSpacing', 'compact');

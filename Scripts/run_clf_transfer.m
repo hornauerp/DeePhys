@@ -206,9 +206,11 @@ eia.computeCorrelations();
 %% 8 — Normalise burst cutouts
 %
 % old: clf_transfer.m lines 74–87 (mean per culture, row-normalise, extract burst_cutout)
-%      new: normalizeBurstCutouts returns the peak-to-end half-window, row-normalised
+%      new: normalizeBurstCutouts stores the peak-to-end half-window, row-normalised, in eia.NormalizedCutouts
 
-[norm_bursts, norm_ie] = eia.normalizeBurstCutouts();
+eia.normalizeBurstCutouts();
+norm_bursts = eia.NormalizedCutouts.bursts;
+norm_ie     = eia.NormalizedCutouts.ie;
 
 %% 9 — Visualise (train / test split)
 %

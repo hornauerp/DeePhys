@@ -23,7 +23,8 @@ classdef EIAnalyzer < handle
         Activity        % (1 x N_cultures) struct array: .I .E .total .ratio .x
         BurstState      % (1 x N_cultures) cell: binary burst-state vector per culture
         BurstCutouts    % (1 x N_cultures) struct: .total .i_mat .e_mat (selected variant)
-        Correlations    % (1 x N_cultures) struct: .pop_corr .cell_id
+        Correlations       % (1 x N_cultures) struct: .pop_corr .cell_id
+        NormalizedCutouts  % struct: .bursts (N_cultures x N_bins), .ie (N_cultures x N_bins)
     end
 
     methods
