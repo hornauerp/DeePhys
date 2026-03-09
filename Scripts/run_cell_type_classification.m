@@ -74,12 +74,12 @@ parameters.UMAP.GroupingValues  = 0;            % use baseline recordings only
 parameters.UMAP.NNeighbors      = 100;
 parameters.UMAP.MinDist         = 0.1;
 parameters.UMAP.Spread          = 1;
-parameters.UMAP.NDims           = 2;
+parameters.UMAP.NDims           = 10;
 
 % Isolation forest (Step 4)
 parameters.OutlierDetection.ContaminationFraction = 0.5;
 parameters.OutlierDetection.NObsPerLearner        = 50;
-parameters.OutlierDetection.DistancePercentile    = 95;
+parameters.OutlierDetection.DistancePercentile    = 80;
 
 ctc = CellTypeClassifier(rg, parameters);
 
@@ -91,10 +91,8 @@ ctc = CellTypeClassifier(rg, parameters);
 %
 % old: [interneuron_idx, unit_list] = identify_interneurons(dr_rg)
 %      which internally called bootstrap_fr_response() per culture
-
-ctc.identifyResponsiveUnits();
-
-
+metadata_filter = {'AAV', 128};
+ctc.identifyResponsiveUnits(metadata_filter);
 
 %% 4 — Generate training labels
 %
@@ -132,7 +130,7 @@ fprintf('Classification: %i excitatory | %i inhibitory | %i unclassified\n', ...
 %% 6 — Inspect classification quality
 
 % --- ACG images (replaces the manual imagesc block in clf_all_batches.m) ---
-all_acgs  = vertcat(ctc.UnitList.ACG);
+all_acgs  = horzcat(ctc.UnitList.FullACG)';
 norm_acgs = all_acgs ./ max(all_acgs, [], 2);
 
 inh_acgs = norm_acgs(ctc.UnitLabels == 2, :);
