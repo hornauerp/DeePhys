@@ -127,7 +127,11 @@ n_nan = sum(isnan(ctc.UnitLabels));
 fprintf('Classification: %i excitatory | %i inhibitory | %i unclassified\n', ...
     n_exc, n_inh, n_nan);
 
-%% 6 — Inspect classification quality
+%% 6 — UMAP sanity check  (optional — comment out to skip)
+
+plotUMAPSanityCheck(ctc);
+
+%% 7 — Inspect classification quality
 
 % --- ACG images (replaces the manual imagesc block in clf_all_batches.m) ---
 all_acgs  = horzcat(ctc.UnitList.FullACG)';
@@ -144,6 +148,9 @@ tiledlayout(1, 2, 'TileSpacing', 'compact');
 nexttile; imagesc(sorted_inh_acgs); title('Inhibitory ACGs', 'FontWeight', 'normal'); colorbar
 nexttile; imagesc(sorted_exc_acgs); title('Excitatory ACGs',  'FontWeight', 'normal'); colorbar
 
+% Waveforms and ACGs split by cell type and training / test set
+plotCellTypeFeatures(ctc.UnitList, ctc.UnitLabels, ctc.TrainLabels);
+
 % --- I/E ratio per chip ---
 [chip_idx, chip_labels] = rg.combineMetadataIndices(ctc.UnitList, "ChipID");
 in_count  = histcounts(chip_idx(ctc.UnitLabels == 2));
@@ -153,7 +160,7 @@ fprintf('Inhibitory fraction per chip: ');
 fprintf('%.2f ', ie_per_chip);
 fprintf('\n');
 
-%% 7 — E/I network analysis with EIAnalyzer
+%% 8 — E/I network analysis with EIAnalyzer
 
 % old: generate_unit_spk_mat + create_activity_cutout + plot_EI_network_activity
 %      + generate_EI_burst_cutouts + calculate_correlations
@@ -188,7 +195,7 @@ eia.extractBurstCutouts();
 % old: results = calculate_correlations(results)
 eia.computeCorrelations();
 
-%% 8 — Visualise
+%% 9 — Visualise
 
 % Plot firing-rate trace coloured by burst state for the first culture.
 % old: plot_EI_network_activity(activity, threshold, smooth_window)
@@ -207,7 +214,7 @@ nexttile; plot(nanmean(norm_ie)); hold on; plot(nanmean(norm_bursts));
 nexttile; plot(gradient(nanmean(norm_bursts)));
           xlabel('Bin'); title('d/dt total activity', 'FontWeight', 'normal'); box off
 
-%% 9 — Save
+%% 10 — Save
 
 save_dir  = fullfile(deephys_root, 'Data', 'Classification');
 if ~isfolder(save_dir); mkdir(save_dir); end

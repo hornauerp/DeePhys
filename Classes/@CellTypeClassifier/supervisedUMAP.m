@@ -1,4 +1,4 @@
-function [Y_pred, umap_train, umap_test, test_reduction] = supervisedUMAP(ctc, X_train, Y_train, feature_names, X_test)
+function [Y_pred, umap_train, umap_test, test_reduction, train_reduction] = supervisedUMAP(ctc, X_train, Y_train, feature_names, X_test)
 % SUPERVISEDUMAP  Train a supervised UMAP and project test data for classification.
 %
 % Saves a UMAP template file to ctc.Parameters.UMAP.TemplateDir so that test
@@ -13,10 +13,11 @@ function [Y_pred, umap_train, umap_test, test_reduction] = supervisedUMAP(ctc, X
 %   X_test        - (N_test x F) normalised feature matrix
 %
 % OUTPUTS:
-%   Y_pred         - (N_test x 1) predicted class labels
-%   umap_train     - trained UMAP model object
-%   umap_test      - UMAP model used for test projection
-%   test_reduction - (N_test x NDims) embedding coordinates for test units
+%   Y_pred          - (N_test x 1) predicted class labels
+%   umap_train      - trained UMAP model object
+%   umap_test       - UMAP model used for test projection
+%   test_reduction  - (N_test  x NDims) embedding coordinates for test units
+%   train_reduction - (N_train x NDims) embedding coordinates for training units
 
 arguments
     ctc CellTypeClassifier

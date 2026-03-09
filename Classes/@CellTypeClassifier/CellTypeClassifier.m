@@ -19,6 +19,11 @@ classdef CellTypeClassifier < handle
         TrainLabels             % struct: .sorted_train_ids, .sorted_y_train, .umap_train_idx, .umap_test_idx
         UnitLabels              % (1 x N) double — 1=excitatory, 2=inhibitory, NaN=unclassified
         UMAP                    % trained UMAP model returned by run_umap
+        Reduction = struct('Unsupervised', [], 'Train', [], 'Test', [])
+                                % struct storing UMAP embeddings for sanity-check plots:
+                                %   .Unsupervised — (N x D) from generateTrainLabels (all units, unsupervised)
+                                %   .Train        — (N_train x D) from classifyUnits (supervised training embedding)
+                                %   .Test         — (N_test  x D) from classifyUnits (supervised test projection)
     end
 
     methods

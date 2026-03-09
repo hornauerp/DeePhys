@@ -24,7 +24,10 @@ labels = ctc.TrainLabels;
 [X_train, X_test, feature_names] = prepareInputMatrix(rg, input_table, ctc.UnitList, ...
     p_umap.NormalizationVar, labels.umap_train_idx, labels.umap_test_idx);
 
-[Y_pred, ~, ~, ~] = supervisedUMAP(ctc, X_train, labels.sorted_y_train, feature_names, X_test);
+[Y_pred, ~, ~, test_reduction, train_reduction] = supervisedUMAP(ctc, X_train, labels.sorted_y_train, feature_names, X_test);
+
+ctc.Reduction.Train = train_reduction;
+ctc.Reduction.Test  = test_reduction;
 
 full_labels = nan(1, length(ctc.UnitList));
 full_labels(labels.sorted_train_ids) = labels.sorted_y_train;

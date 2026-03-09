@@ -41,6 +41,7 @@ template_file = fullfile(p_umap.TemplateDir, 'ctc_umap_template.mat');
     'method', 'Java', 'verbose', 'none', ...
     'save_template_file', template_file);
 ctc.UMAP = umap_model;
+ctc.Reduction.Unsupervised = reduction;
 
 % Isolation forest on responsive-unit candidates to remove outliers
 candidate_reduction = reduction(ctc.ResponsiveUnitIdx, :);
