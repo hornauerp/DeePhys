@@ -1,7 +1,7 @@
 function [Y_pred, umap_train, umap_test, test_reduction] = supervisedUMAP(ctc, X_train, Y_train, feature_names, X_test)
 % SUPERVISEDUMAP  Train a supervised UMAP and project test data for classification.
 %
-% Saves UMAP template files to ctc.Parameters.UMAP.TemplateDir so that test
+% Saves a UMAP template file to ctc.Parameters.UMAP.TemplateDir so that test
 % data can be projected onto the same embedding as training data.
 % Requires run_umap (MATLAB UMAP toolbox) to be on the MATLAB path.
 %
@@ -9,7 +9,7 @@ function [Y_pred, umap_train, umap_test, test_reduction] = supervisedUMAP(ctc, X
 %   ctc           - CellTypeClassifier (provides Parameters.UMAP.*)
 %   X_train       - (N_train x F) normalised feature matrix
 %   Y_train       - (1 x N_train) class labels (1 = excitatory, 2 = inhibitory)
-%   feature_names - (1 x F) feature name strings
+%   feature_names - (1 x F) feature name strings  [kept for API compatibility]
 %   X_test        - (N_test x F) normalised feature matrix
 %
 % OUTPUTS:
@@ -22,25 +22,18 @@ arguments
     ctc CellTypeClassifier
     X_train (:,:) double
     Y_train (1,:) double
-    feature_names (1,:) string
+    feature_names (1,:) string %#ok<INUSA>
     X_test  (:,:) double
 end
 
 p = ctc.Parameters.UMAP;
 tdir = p.TemplateDir;
-% Use unique filenames to avoid collisions in parallel runs
 uid           = char(java.util.UUID.randomUUID);
 template_file = fullfile(tdir, ['ctc_supervised_umap_template_' uid '.mat']);
-train_csv     = fullfile(tdir, ['ctc_umap_train_' uid '.csv']);
-test_csv      = fullfile(tdir, ['ctc_umap_test_'  uid '.csv']);
-clean_up      = onCleanup(@() cellfun(@(f) deleteFile(f), {train_csv, test_csv, template_file}));
+clean_up      = onCleanup(@() deleteFile(template_file)); %#ok<NASGU>
 
-% Write training data to CSV (run_umap reads CSV for supervised mode)
-train_tbl = array2table([X_train, Y_train'], ...
-    'VariableNames', [feature_names, "NeuronType"]);
-writetable(train_tbl, train_csv);
-
-[~, umap_train, ~, ~] = run_umap(train_csv, ...
+% Training call — pass matrix directly (label column appended as last column)
+[~, umap_train, ~, ~] = run_umap([X_train, Y_train'], ...
     'label_column',       'end', ...
     'n_components',       p.NDims, ...
     'n_neighbors',        p.NNeighbors, ...
@@ -51,16 +44,13 @@ writetable(train_tbl, train_csv);
     'verbose',            'none', ...
     'save_template_file', template_file);
 
-% Write test data to CSV and project using saved template
-test_tbl = array2table(X_test, 'VariableNames', feature_names);
-writetable(test_tbl, test_csv);
-
-[test_reduction, umap_test, ~, extras] = run_umap(test_csv, ...
-    'method',             'Java', ...
-    'sgd_tasks',        20, ...
-    'verbose',          'none', ...
+% Test call — pass matrix directly using saved template
+[test_reduction, umap_test, ~, extras] = run_umap(X_test, ...
+    'sgd_tasks',         20, ...
+    'method',            'Java', ...
+    'verbose',           'none', ...
     'match_supervisors', 3, ...
-    'template_file',    template_file);
+    'template_file',     template_file);
 
 Y_pred = extras.supervisorMatchedLabels;
 end
