@@ -160,7 +160,28 @@ fprintf('Inhibitory fraction per chip: ');
 fprintf('%.2f ', ie_per_chip);
 fprintf('\n');
 
-%% 8 — E/I network analysis with EIAnalyzer
+%% 8 — Validation against ground truth  (optional — comment out to skip)
+%
+% Compare predicted test-set labels against an independent ground truth
+% (e.g. immunostaining markers, genetic labels, manually curated labels).
+% Specify the metadata field and class values that encode the ground truth.
+% Units with NaN ground truth are silently excluded.
+
+gt_field     = 'CellType';     % <-- metadata field carrying ground-truth labels
+gt_exc_value = 'PYR';          % <-- value indicating excitatory (class 1)
+gt_inh_value = 'PV';           % <-- value indicating inhibitory (class 2)
+
+gt_meta   = arrayfun(@(u) u.MEArecording.Metadata.(gt_field), ...
+    ctc.UnitList, 'UniformOutput', false);
+gt_labels = nan(1, length(ctc.UnitList));
+gt_labels(cellfun(@(v) isequal(v, gt_exc_value), gt_meta)) = 1;
+gt_labels(cellfun(@(v) isequal(v, gt_inh_value), gt_meta)) = 2;
+
+% Evaluate on test units only (training labels are known by construction)
+test_mask = ctc.TrainLabels.umap_test_idx;
+metrics   = validateClassification(ctc.UnitLabels(test_mask), gt_labels(test_mask));
+
+%% 9 — E/I network analysis with EIAnalyzer
 
 % old: generate_unit_spk_mat + create_activity_cutout + plot_EI_network_activity
 %      + generate_EI_burst_cutouts + calculate_correlations
@@ -195,7 +216,7 @@ eia.extractBurstCutouts();
 % old: results = calculate_correlations(results)
 eia.computeCorrelations();
 
-%% 9 — Visualise
+%% 10 — Visualise
 
 % Plot firing-rate trace coloured by burst state for the first culture.
 % old: plot_EI_network_activity(activity, threshold, smooth_window)
@@ -214,7 +235,7 @@ nexttile; plot(nanmean(norm_ie)); hold on; plot(nanmean(norm_bursts));
 nexttile; plot(gradient(nanmean(norm_bursts)));
           xlabel('Bin'); title('d/dt total activity', 'FontWeight', 'normal'); box off
 
-%% 10 — Save
+%% 11 — Save
 
 save_dir  = fullfile(deephys_root, 'Data', 'Classification');
 if ~isfolder(save_dir); mkdir(save_dir); end

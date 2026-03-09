@@ -174,7 +174,28 @@ fprintf('Inhibitory fraction per chip: ');
 fprintf('%.2f ', ie_per_chip);
 fprintf('\n');
 
-%% 7 — E/I network analysis
+%% 7 — Validation against ground truth  (optional — comment out to skip)
+%
+% Compare predicted test-set labels against an INDEPENDENT ground truth.
+% NOTE: use a different metadata field from label_field used for training,
+% otherwise you are comparing against the training signal itself.
+% Units with NaN ground truth are silently excluded.
+
+gt_field     = 'IndependentCellType'; % <-- different from label_field above
+gt_exc_value = 'PYR';                 % <-- value indicating excitatory (class 1)
+gt_inh_value = 'PV';                  % <-- value indicating inhibitory (class 2)
+
+gt_meta   = arrayfun(@(u) u.MEArecording.Metadata.(gt_field), ...
+    ctc.UnitList, 'UniformOutput', false);
+gt_labels = nan(1, length(ctc.UnitList));
+gt_labels(cellfun(@(v) isequal(v, gt_exc_value), gt_meta)) = 1;
+gt_labels(cellfun(@(v) isequal(v, gt_inh_value), gt_meta)) = 2;
+
+% Evaluate on test units only (training labels are known by construction)
+test_mask = ctc.TrainLabels.umap_test_idx;
+metrics   = validateClassification(ctc.UnitLabels(test_mask), gt_labels(test_mask));
+
+%% 8 — E/I network analysis
 
 eia_params = struct();
 eia_params.Activity.BinSize               = 0.01;
@@ -193,7 +214,7 @@ eia.detectBursts();
 eia.extractBurstCutouts();
 eia.computeCorrelations();
 
-%% 8 — Visualise
+%% 9 — Visualise
 
 eia.PlotNetworkActivity(1);
 
@@ -208,7 +229,7 @@ nexttile; plot(nanmean(norm_ie), 'r'); hold on; plot(nanmean(norm_bursts), 'k');
 nexttile; plot(gradient(nanmean(norm_bursts)));
           xlabel('Bin'); title('d/dt total activity', 'FontWeight', 'normal'); box off
 
-%% 9 — Save
+%% 10 — Save
 
 save_dir = fullfile(deephys_root, 'Data', 'Classification');
 if ~isfolder(save_dir); mkdir(save_dir); end

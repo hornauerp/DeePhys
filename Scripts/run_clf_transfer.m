@@ -152,7 +152,26 @@ nexttile; imagesc(sorted_exc_acgs); title('Excitatory ACGs',  'FontWeight', 'nor
 % Waveforms and ACGs split by cell type and training / test set
 plotCellTypeFeatures(ctc.UnitList, ctc.UnitLabels, ctc.TrainLabels);
 
-%% 6 — E/I network analysis
+%% 6 — Validation against ground truth  (optional — comment out to skip)
+%
+% Compare predicted test-set labels against an independent ground truth.
+% Units with NaN ground truth are silently excluded.
+
+gt_field     = 'CellType';     % <-- metadata field carrying ground-truth labels
+gt_exc_value = 'PYR';          % <-- value indicating excitatory (class 1)
+gt_inh_value = 'PV';           % <-- value indicating inhibitory (class 2)
+
+gt_meta   = arrayfun(@(u) u.MEArecording.Metadata.(gt_field), ...
+    ctc.UnitList, 'UniformOutput', false);
+gt_labels = nan(1, length(ctc.UnitList));
+gt_labels(cellfun(@(v) isequal(v, gt_exc_value), gt_meta)) = 1;
+gt_labels(cellfun(@(v) isequal(v, gt_inh_value), gt_meta)) = 2;
+
+% Evaluate on test units only (training labels are known by construction)
+test_mask = ctc.TrainLabels.umap_test_idx;
+metrics   = validateClassification(ctc.UnitLabels(test_mask), gt_labels(test_mask));
+
+%% 7 — E/I network analysis
 %
 % old: per-culture loop in clf_all_batches.m / clf_b1_w3.m lines 160–197
 %      (generate_unit_spk_mat → create_activity_cutout → plot_EI_network_activity
@@ -184,14 +203,14 @@ eia.extractBurstCutouts();
 % old: results = calculate_correlations(results)
 eia.computeCorrelations();
 
-%% 7 — Normalise burst cutouts
+%% 8 — Normalise burst cutouts
 %
 % old: clf_transfer.m lines 74–87 (mean per culture, row-normalise, extract burst_cutout)
 %      new: normalizeBurstCutouts returns the peak-to-end half-window, row-normalised
 
 [norm_bursts, norm_ie] = eia.normalizeBurstCutouts();
 
-%% 8 — Visualise (train / test split)
+%% 9 — Visualise (train / test split)
 %
 % old: clf_transfer.m lines 89–101
 %   imagesc(norm_ie([train_ids;test_ids],:))
@@ -225,7 +244,7 @@ plot(nanmean(norm_ie(test_culture_idx, :)), 'r'); hold on
 plot(nanmean(norm_bursts(test_culture_idx, :)), 'k');
 title('Test', 'FontWeight', 'normal'); box off
 
-%% 9 — Save
+%% 10 — Save
 %
 % old: save_results = rmfield(results,"binned_mat")  % strip large field
 %      save(save_path, "save_results", ...)
