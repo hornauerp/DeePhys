@@ -24,7 +24,6 @@ classdef EIAnalyzer < handle
         BurstState      % (1 x N_cultures) cell: binary burst-state vector per culture
         BurstCutouts    % (1 x N_cultures) struct: .total .i_mat .e_mat (selected variant)
         Correlations    % (1 x N_cultures) struct: .pop_corr .cell_id
-        BinnedMats      % (1 x N_cultures) cell: raw spike count matrices
     end
 
     methods

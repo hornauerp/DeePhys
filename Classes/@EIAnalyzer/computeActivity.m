@@ -7,7 +7,7 @@ function computeActivity(eia)
 % and a time axis.
 %
 % Requires eia.Classifier.UnitLabels to be set.
-% Sets: eia.Activity, eia.BinnedMats
+% Sets: eia.Activity
 
 arguments
     eia EIAnalyzer
@@ -20,13 +20,11 @@ p   = eia.Parameters.Activity;
 [cluster_idx, ~] = rg.combineMetadataIndices(ctc.UnitList, ["ChipID", "RecordingDate"]);
 n_cultures = length(rg.Cultures);
 
-activity    = repmat(struct('I',[],'E',[],'total',[],'ratio',[],'x',[]), 1, n_cultures);
-binned_mats = cell(1, n_cultures);
+activity = repmat(struct('I',[],'E',[],'total',[],'ratio',[],'x',[]), 1, n_cultures);
 
 for c = 1:n_cultures
     culture    = rg.Cultures(c);
     binned_mat = culture.getBinnedSpikeMat(p.BinSize, p.SecCutout);
-    binned_mats{c} = binned_mat;
 
     % Map ctc.UnitLabels (indexed into UnitList) onto culture.Units order
     culture_labels = ctc.UnitLabels(cluster_idx == c);
@@ -62,7 +60,6 @@ for c = 1:n_cultures
     activity(c).x     = (1:size(binned_mat,2)) * p.BinSize;
 end
 
-eia.Activity   = activity;
-eia.BinnedMats = binned_mats;
+eia.Activity = activity;
 fprintf('Computed E/I activity for %i cultures\n', n_cultures);
 end
