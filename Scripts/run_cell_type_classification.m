@@ -25,25 +25,24 @@
 
 %% 0 — Setup
 
-deephys_root = fileparts(fileparts(mfilename('fullpath')));
+deephys_root = "/home/phornauer/Git/DeePhysDev/DeePhys"; %fileparts(fileparts(mfilename('fullpath')));
 addpath(genpath(deephys_root));
+addpath("/home/phornauer/Git/Chemogenetics/Helpers")
 
 %% 1 — Load recordings and form RecordingGroup
-
+batch_ids = 1; 
+week_ids = 3;
 % Point to your sorting output directories (one per recording segment).
-% old: load_cortical_cultures(batch_ids, week_ids)
+full_rec_array = load_cortical_cultures(batch_ids, week_ids);
 %      OR recording_array_from_single_files(sorting_path_list, rm_con)
-sorting_path_list = {
-    '/path/to/sorting_output_1', ...
-    '/path/to/sorting_output_2', ...
-};
+%%
 
-rm_con       = false;    % set true to remove contaminated units
-full_rec_array = recording_array_from_single_files(sorting_path_list, rm_con);
+% rm_con       = false;    % set true to remove connectivity matrices to save memory
+% full_rec_array = recording_array_from_single_files(sorting_path_list, rm_con);
 
 % Filter to the recordings of interest.
-% Inclusion: must be cortical, AAV 0 (vehicle), 128 (DREADD-inhibitory), or 129 (control).
-% Exclusion: drop infinite-concentration entries.
+% Inclusion: must be cortical, AAV 0 (control), 128 (DREADD-excitatory), or 129 (DREADD-inhibitory).
+% Exclusion: drop infinite-concentration (washout) entries.
 rg_params.Selection.Inclusion = {{'Region','Cortex'}, {'AAV', 0, 128, 129}};
 rg_params.Selection.Exclusion = {{'Concentration', inf}};
 
@@ -54,9 +53,6 @@ rg = RecordingGroup(full_rec_array, rg_params);
 % new: Cultures is now a Culture array (not a cell array); rg.Cultures(c) not {c}
 rg.Cultures = rg.groupCultures('RecordingDate');
 
-fprintf('RecordingGroup: %i recordings, %i units, %i cultures\n', ...
-    length(rg.Recordings), length(rg.Units), length(rg.Cultures));
-
 %% 2 — Initialise CellTypeClassifier
 
 % All parameters below match the values used in clf_transfer.m /
@@ -65,7 +61,7 @@ parameters = struct();
 
 % Bootstrap firing-rate test (Step 3)
 parameters.Bootstrap.PreCutout  = [0, 1200];    % baseline window (s)
-parameters.Bootstrap.PostCutout = [6000, 7200]; % post-CNO window (s)
+parameters.Bootstrap.PostCutout = [6000, 7200]; % post-DCZ window (s)
 parameters.Bootstrap.BinSize    = 20;           % bin width (s)
 parameters.Bootstrap.NIter      = 1000;         % permutation iterations
 parameters.Bootstrap.Alpha      = 1e-10;        % two-tailed significance level
@@ -98,9 +94,7 @@ ctc = CellTypeClassifier(rg, parameters);
 
 ctc.identifyResponsiveUnits();
 
-fprintf('Inhibitory candidates: %i / %i units (%.1f%%)\n', ...
-    sum(ctc.ResponsiveUnitIdx), length(ctc.UnitList), ...
-    100 * mean(ctc.ResponsiveUnitIdx));
+
 
 %% 4 — Generate training labels
 %

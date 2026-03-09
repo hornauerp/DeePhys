@@ -48,5 +48,7 @@ end
 ctc.UnitList = unit_list;
 ctc.ResponsiveUnitIdx = false(1, length(unit_list));
 ctc.ResponsiveUnitIdx(responsive_idx) = true;
-fprintf('Identified %i / %i responsive units\n', sum(ctc.ResponsiveUnitIdx), length(unit_list));
+fprintf('Inhibitory candidates: %i / %i units (%.1f%%)\n', ...
+    sum(ctc.ResponsiveUnitIdx), length(ctc.UnitList), ...
+    100 * mean(ctc.ResponsiveUnitIdx));
 end

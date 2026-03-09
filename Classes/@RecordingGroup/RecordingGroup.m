@@ -27,8 +27,8 @@ classdef RecordingGroup < handle
             if isfield([rg.Recordings.Metadata],'ChipID')
                 rg.Cultures = rg.groupCultures();
             end
-            fprintf('Initialized RecordingGroup with %i recordings and %i units\n',...
-                length(rg.Recordings),length(rg.Units))
+            fprintf('RecordingGroup: %i recordings, %i units, %i cultures\n', ...
+            length(rg.Recordings), length(rg.Units), length(rg.Cultures));
         end
         
         function parseParameters(rg, parameters)
