@@ -66,9 +66,10 @@ classdef CellTypeClassifier < handle
             % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to
             % ensure DeePhys and external units are projected into the same feature space.
             % Change these to harmonize to a different ACG resolution or waveform rate.
-            defaultParams.Harmonization.WaveformTargetSamplingRate = 300000; % Hz — target rate after interpolation (must be integer multiple of recording SR)
+            defaultParams.Harmonization.WaveformTargetSamplingRate = 300000;  % Hz — target rate after interpolation (must be integer multiple of recording SR)
             defaultParams.Harmonization.ACGBinSize                 = 0.0005; % s — ACG bin width (0.5 ms)
             defaultParams.Harmonization.ACGLag                     = 0.1;    % s — one-sided ACG lag (100 ms → 401 bins)
+            defaultParams.Harmonization.ACGSource                  = "FullACG"; % "FullACG" or "ACG" — which DeePhys ACG property to use
 
             % Fallback parameters for fully external workflows (ctc.UnitList is empty).
             % When ctc.UnitList is non-empty, WaveformSamplingRate and WaveformNSamples

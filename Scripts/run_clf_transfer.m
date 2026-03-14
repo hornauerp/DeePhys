@@ -274,7 +274,32 @@ title('Test', 'FontWeight', 'normal'); box off
 % nexttile; histogram(categorical(ext_labels,[1 2],{'Excitatory','Inhibitory'}));
 %     ylabel('Count'); title('External unit types', 'FontWeight','normal'); box off
 
-%% 11 — Save
+%% 11 — Classify DeePhys units with external training data  (optional)
+%
+% Use labelled external data (e.g. patched or optogenetically identified units)
+% as the training set to classify all ctc.UnitList units.
+% Does not require generateTrainLabels() to have been run.
+%
+% ACG requirements (same as above):
+%   bin_size = ctc.Parameters.Harmonization.ACGBinSize  (default: 0.5 ms)
+%   lag      = ctc.Parameters.Harmonization.ACGLag       (default: 100 ms → 401 bins)
+
+% wf_train  = [];    % (N_samples × N_train) unnormalised waveforms
+% acg_train = [];    % (N_bins × N_train)   autocorrelograms (401 bins)
+% y_train   = [];    % (1 × N_train) labels: 1=excitatory, 2=inhibitory
+% sr_train  = 30000; % Hz — set to your acquisition sampling rate
+%
+% ctc.classifyUnitsWithExternalTrain(wf_train, acg_train, y_train, sr_train);
+%
+% figure('Color','w');
+% tiledlayout(1,2,'TileSpacing','compact','Padding','compact');
+% nexttile; scatter(ctc.Reduction.Test(:,1), ctc.Reduction.Test(:,2), ...
+%     6, ctc.UnitLabels, 'filled'); colorbar;
+%     xlabel('UMAP 1'); ylabel('UMAP 2'); title('DeePhys units — UMAP (ext. train)', 'FontWeight','normal');
+% nexttile; histogram(categorical(ctc.UnitLabels,[1 2],{'Excitatory','Inhibitory'}));
+%     ylabel('Count'); title('DeePhys unit types', 'FontWeight','normal'); box off
+
+%% 12 — Save
 %
 % old: save_results = rmfield(results,"binned_mat")  % strip large field
 %      save(save_path, "save_results", ...)

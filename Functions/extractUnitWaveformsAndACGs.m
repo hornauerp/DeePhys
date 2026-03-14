@@ -3,15 +3,13 @@ function [waveforms, acgs, sr_wf] = extractUnitWaveformsAndACGs(ctc, unit_list)
 %
 % Waveforms are taken from unit.ReferenceWaveform at the native recording SR.
 %
-% ACG strategy:
-%   - When ctc.Parameters.Harmonization ACG params match the pre-computed FullACG
-%     dimensions, unit.FullACG is used directly (no recomputation).
-%   - When they differ (e.g. to harmonize with external data at different params),
-%     units are grouped by parent MEArecording and one batch CCG() call is made
-%     per recording using already-in-memory spike times (no .npy re-reads).
-%
-% This preserves the ACG / FullACG distinction for DeePhys-only workflows:
-% unit.ACG and unit.FullACG remain separate features; FullACG is used here.
+% ACG strategy (controlled by ctc.Parameters.Harmonization.ACGSource):
+%   - "FullACG" (default): uses unit.FullACG (high-res, distinct from unit.ACG)
+%   - "ACG":               uses unit.ACG (standard-res, coarser params)
+%   In both cases, the cached value is used directly when its bin count matches
+%   the Harmonization params; otherwise units are grouped by parent MEArecording
+%   and one batch CCG() call is made per recording using already-in-memory spike
+%   times (no .npy re-reads).
 %
 % INPUTS:
 %   ctc       - CellTypeClassifier (provides Harmonization parameters)
@@ -57,26 +55,35 @@ else
     end
 end
 
-% ACG extraction: use pre-computed FullACG when harmonization params match its
-% dimensions; recompute per recording when they differ.
+% ACG extraction: use pre-computed ACG/FullACG when harmonization params match
+% its dimensions; recompute per recording (batch CCG) when they differ.
+acg_source  = ph.ACGSource;   % "FullACG" or "ACG"
 n_bins_harm = round(2 * ph.ACGLag / ph.ACGBinSize) + 1;
 acgs        = zeros(n_bins_harm, N);
 
 try
-    n_bins_full = length(unit_list(1).FullACG);
-    use_full    = (n_bins_full == n_bins_harm);
+    if acg_source == "FullACG"
+        n_bins_cached = length(unit_list(1).FullACG);
+    else
+        n_bins_cached = length(unit_list(1).ACG);
+    end
+    use_cached = (n_bins_cached == n_bins_harm);
 catch
-    use_full    = false;
-    n_bins_full = 0;
+    use_cached    = false;
+    n_bins_cached = 0;
 end
 
-if use_full
+if use_cached
     for u = 1:N
-        acgs(:, u) = unit_list(u).FullACG;
+        if acg_source == "FullACG"
+            acgs(:, u) = unit_list(u).FullACG;
+        else
+            acgs(:, u) = unit_list(u).ACG;
+        end
     end
 else
-    fprintf('Harmonization ACG params (%i bins) differ from FullACG (%i bins) — recomputing per recording\n', ...
-        n_bins_harm, n_bins_full);
+    fprintf('Harmonization ACG params (%i bins) differ from cached %s (%i bins) — recomputing per recording\n', ...
+        n_bins_harm, acg_source, n_bins_cached);
 
     % Group units by parent MEArecording for one batch CCG call per recording.
     % All spike times are already in memory — no .npy files are re-read.
