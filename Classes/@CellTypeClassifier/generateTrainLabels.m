@@ -105,7 +105,8 @@ dist_threshold = prctile(candidate_dists, p_outlr.DistancePercentile);
 
 far_idx_local = find(dists > dist_threshold);
 n_candidates = sum(~tf_forest);
-counterexample_idx_local = randsample(far_idx_local, min(n_candidates, length(far_idx_local)), false);
+n_counterexamples = p_outlr.CounterexampleRatio * n_candidates;
+counterexample_idx_local = randsample(far_idx_local, min(n_counterexamples, length(far_idx_local)), false);
 
 % ── Map local indices back to global UnitList indices ────────────────────────
 subset_global = find(subset_mask);  % global indices of subset units

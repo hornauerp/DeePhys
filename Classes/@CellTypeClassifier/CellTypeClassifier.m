@@ -64,6 +64,7 @@ classdef CellTypeClassifier < handle
             defaultParams.OutlierDetection.ContaminationFraction = 0.5;
             defaultParams.OutlierDetection.NObsPerLearner        = 50;
             defaultParams.OutlierDetection.DistancePercentile    = 80;
+            defaultParams.OutlierDetection.CounterexampleRatio   = 2;   % excitatory:inhibitory sampling ratio
 
             % Harmonization parameters — shared target spec for DeePhys and external data.
             % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to
