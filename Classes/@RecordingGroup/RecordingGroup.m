@@ -158,22 +158,42 @@ classdef RecordingGroup < handle
            defaultParams.Selection.Exclusion = {}; % Cell array of cell arrays with {fieldname, value} to exclude
        end
        
-       function aligned_wf = alignWaveforms(unit_array, interp_factor)
+       function aligned_wf = alignWaveforms(unit_array, target_sr)
+           % ALIGNWAVEFORMS  Interpolate and trough-align reference waveforms.
+           %
+           % INPUTS:
+           %   unit_array - (1 x N) Unit array
+           %   target_sr  - target sampling rate in Hz after interpolation
+           %                (default: actual recording rate × 10)
+           %                Must be an integer multiple of the recording rate;
+           %                a warning is issued and the factor is rounded if not.
            arguments
                unit_array Unit
-               interp_factor double = 10
+               target_sr  (1,1) double = 0  % 0 = auto: actual_sr × 10
            end
+
+           actual_sr = unit_array(1).MEArecording.RecordingInfo.SamplingRate;
+           if target_sr == 0
+               target_sr = actual_sr * 10;
+           end
+           interp_factor_raw = target_sr / actual_sr;
+           interp_factor     = round(interp_factor_raw);
+           if abs(interp_factor_raw - interp_factor) > 1e-9
+               warning('RecordingGroup:alignWaveforms', ...
+                   'target_sr (%g Hz) is not an integer multiple of the recording rate (%g Hz). ' ...
+                   'Rounding interpolation factor from %.6f to %i (effective rate: %g Hz).', ...
+                   target_sr, actual_sr, interp_factor_raw, interp_factor, actual_sr * interp_factor);
+           end
+
            ref_wf = [unit_array.ReferenceWaveform];
            ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
            [~,i] = min(ref_wf,[],1);
            peak_idx = mean(i);
            max_offset = round(peak_idx/2);
            x = max_offset:size(ref_wf,1)+max_offset-1;
-           % xq = (1:size(ref_wf,1)+2*max_offset) * interp_factor;
            buffer_wf = size(ref_wf,1)+2*max_offset;
            xq = linspace(1,buffer_wf,buffer_wf*interp_factor);
 
-           % interp_wf = interp1(x,ref_wf,xq,"linear",'extrap');
            interp_wf = interp1(x,ref_wf,xq,"makima");
            interp_wf = interp_wf((max_offset*interp_factor)+1:((buffer_wf-max_offset-1)*interp_factor),:);
            interp_wf = interp_wf./max(abs(interp_wf));
@@ -190,7 +210,6 @@ classdef RecordingGroup < handle
                end
            end
            shifts(rm_idx) = [];
-           % aligned_wf = aligned_wf(max(shifts):end+min(shifts),:);
            aligned_wf = aligned_wf((5*interp_factor):(end-5*interp_factor),:);
        end
        

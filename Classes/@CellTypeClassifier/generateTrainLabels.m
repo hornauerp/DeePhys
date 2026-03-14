@@ -6,6 +6,9 @@ function generateTrainLabels(ctc)
 % counterexamples (non-responsive units far from the responsive cluster centroid)
 % to form a balanced training set (class 1 = excitatory, class 2 = inhibitory).
 %
+% Feature extraction uses ctc.Parameters.Harmonization so DeePhys ACGs are
+% recomputed at the configured bin size and lag (default: 0.5 ms / 100 ms).
+%
 % Requires ctc.ResponsiveUnitIdx to be set (run identifyResponsiveUnits first).
 % Sets: ctc.TrainLabels, ctc.UMAP
 
@@ -18,19 +21,20 @@ assert(~isempty(ctc.ResponsiveUnitIdx), ...
 
 p_umap  = ctc.Parameters.UMAP;
 p_outlr = ctc.Parameters.OutlierDetection;
-rg      = ctc.RecordingGroup;
 
-% Aggregate feature table across all cultures at the grouping values
-[input_table, ~] = aggregateCultureFeatureTables(rg, "Unit", ...
-    p_umap.GroupingVar, p_umap.GroupingValues, 0, [], p_umap.UnitFeatures, [], false);
+% ── Extract features via harmonized path ─────────────────────────────────────
+[wf, acg, sr] = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[X_raw, ~]    = buildFeatureMatrix(ctc, wf, acg, sr);
 
-% Build normalised input matrix for all units
-all_train_idx = ones(1, size(input_table,1));
-all_test_idx  = zeros(1, size(input_table,1));
-[X_all, ~, feature_names] = prepareInputMatrix(rg, input_table, ctc.UnitList, ...
-    p_umap.NormalizationVar, logical(all_train_idx), logical(all_test_idx));
+% ── Normalise: joint z-score all units, scale by column max ──────────────────
+[X_norm, ~, ~] = normalize(X_raw, 1, 'zscore');
+nan_cols = any(isnan(X_norm), 1);
+X_norm(:, nan_cols) = [];
+scale = max(abs(X_norm), [], 1);
+scale(scale == 0) = 1;
+X_all = X_norm ./ scale;
 
-% UMAP embedding of all units
+% ── UMAP embedding of all units (unsupervised) ───────────────────────────────
 template_file = fullfile(p_umap.TemplateDir, 'ctc_umap_template.mat');
 [reduction, umap_model, ~, ~] = run_umap(X_all, ...
     'n_components',  p_umap.NDims, ...

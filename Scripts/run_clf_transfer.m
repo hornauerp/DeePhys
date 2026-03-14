@@ -246,7 +246,35 @@ plot(nanmean(norm_ie(test_culture_idx, :)), 'r'); hold on
 plot(nanmean(norm_bursts(test_culture_idx, :)), 'k');
 title('Test', 'FontWeight', 'normal'); box off
 
-%% 10 — Save
+%% 10 — Classify external units  (optional — fill in wf_ext / acg_ext to enable)
+%
+% Classify units from outside the DeePhys pipeline (e.g. sorted by another tool
+% or acquired at a different sampling rate). ACGs must use the same bin size
+% and lag as ctc.Parameters.Harmonization; waveforms are resampled automatically.
+%
+% ACG requirements:
+%   bin_size = ctc.Parameters.Harmonization.ACGBinSize  (default: 0.5 ms)
+%   lag      = ctc.Parameters.Harmonization.ACGLag       (default: 100 ms → 401 bins)
+%
+% Waveform requirements:
+%   Any sampling rate — set sr_ext to your acquisition rate; resampled automatically.
+%   Window should cover the same duration as DeePhys reference waveforms (~2.73 ms).
+
+% wf_ext  = [];    % (N_samples × N_units) unnormalised waveforms
+% acg_ext = [];    % (N_bins × N_units)   autocorrelograms (401 bins)
+% sr_ext  = 30000; % Hz — set to your acquisition sampling rate
+%
+% ext_labels = ctc.classifyExternalUnits(wf_ext, acg_ext, sr_ext);
+%
+% figure('Color','w');
+% tiledlayout(1,2,'TileSpacing','compact','Padding','compact');
+% nexttile; scatter(ctc.Reduction.External(:,1), ctc.Reduction.External(:,2), ...
+%     6, ext_labels, 'filled'); colorbar;
+%     xlabel('UMAP 1'); ylabel('UMAP 2'); title('External units — UMAP', 'FontWeight','normal');
+% nexttile; histogram(categorical(ext_labels,[1 2],{'Excitatory','Inhibitory'}));
+%     ylabel('Count'); title('External unit types', 'FontWeight','normal'); box off
+
+%% 11 — Save
 %
 % old: save_results = rmfield(results,"binned_mat")  % strip large field
 %      save(save_path, "save_results", ...)

@@ -19,11 +19,12 @@ classdef CellTypeClassifier < handle
         TrainLabels             % struct: .sorted_train_ids, .sorted_y_train, .umap_train_idx, .umap_test_idx
         UnitLabels              % (1 x N) double — 1=excitatory, 2=inhibitory, NaN=unclassified
         UMAP                    % trained UMAP model returned by run_umap
-        Reduction = struct('Unsupervised', [], 'Train', [], 'Test', [])
-                                % struct storing UMAP embeddings for sanity-check plots:
+        Reduction = struct('Unsupervised', [], 'Train', [], 'Test', [], 'External', [])
+                                % struct storing UMAP embeddings:
                                 %   .Unsupervised — (N x D) from generateTrainLabels (all units, unsupervised)
                                 %   .Train        — (N_train x D) from classifyUnits (supervised training embedding)
                                 %   .Test         — (N_test  x D) from classifyUnits (supervised test projection)
+                                %   .External     — (N_ext  x D) from classifyExternalUnits
     end
 
     methods
@@ -60,6 +61,20 @@ classdef CellTypeClassifier < handle
             defaultParams.OutlierDetection.ContaminationFraction = 0.5;
             defaultParams.OutlierDetection.NObsPerLearner        = 50;
             defaultParams.OutlierDetection.DistancePercentile    = 95;
+
+            % Harmonization parameters — shared target spec for DeePhys and external data.
+            % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to
+            % ensure DeePhys and external units are projected into the same feature space.
+            % Change these to harmonize to a different ACG resolution or waveform rate.
+            defaultParams.Harmonization.WaveformTargetSamplingRate = 300000; % Hz — target rate after interpolation (must be integer multiple of recording SR)
+            defaultParams.Harmonization.ACGBinSize                 = 0.0005; % s — ACG bin width (0.5 ms)
+            defaultParams.Harmonization.ACGLag                     = 0.1;    % s — one-sided ACG lag (100 ms → 401 bins)
+
+            % Fallback parameters for fully external workflows (ctc.UnitList is empty).
+            % When ctc.UnitList is non-empty, WaveformSamplingRate and WaveformNSamples
+            % are inferred from the actual DeePhys units instead.
+            defaultParams.External.WaveformSamplingRate = 30000;  % Hz — native recording rate
+            defaultParams.External.WaveformNSamples     = 82;     % samples at WaveformSamplingRate (~2.73 ms)
         end
     end
 end
