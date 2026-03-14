@@ -48,19 +48,22 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.NIter       = 1000;         % bootstrap iterations
             defaultParams.Bootstrap.Alpha       = 1e-10;        % significance level
 
-            defaultParams.UMAP.NDims            = 2;            % UMAP output dimensions
-            defaultParams.UMAP.NNeighbors       = 100;
+            defaultParams.UMAP.NDims            = 10;           % unsupervised UMAP output dimensions (label generation)
+            defaultParams.UMAP.NNeighbors       = 50;           % unsupervised UMAP n_neighbors
             defaultParams.UMAP.MinDist          = 0.1;
             defaultParams.UMAP.Spread           = 1;
+            defaultParams.UMAP.SupervisedNDims      = 2;        % supervised UMAP output dimensions (classification)
+            defaultParams.UMAP.SupervisedNNeighbors = 100;      % supervised UMAP n_neighbors
             defaultParams.UMAP.UnitFeatures     = ["FullACG","ReferenceWaveform"]; % feature groups to use
             defaultParams.UMAP.NormalizationVar = "ChipID";     % metadata field for within-group normalisation
             defaultParams.UMAP.GroupingVar      = "Concentration"; % metadata field grouping recordings (e.g. dose)
             defaultParams.UMAP.GroupingValues   = 0;            % value(s) of GroupingVar to use (0 = baseline)
+            defaultParams.UMAP.TrainingCultureIdx = [];         % culture indices for label generation UMAP (empty = all)
             defaultParams.UMAP.TemplateDir      = tempdir;      % directory for UMAP template .mat file
 
             defaultParams.OutlierDetection.ContaminationFraction = 0.5;
             defaultParams.OutlierDetection.NObsPerLearner        = 50;
-            defaultParams.OutlierDetection.DistancePercentile    = 95;
+            defaultParams.OutlierDetection.DistancePercentile    = 80;
 
             % Harmonization parameters — shared target spec for DeePhys and external data.
             % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to

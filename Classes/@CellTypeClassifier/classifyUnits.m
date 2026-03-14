@@ -7,6 +7,11 @@ function classifyUnits(ctc)
 % Feature extraction uses ctc.Parameters.Harmonization so DeePhys ACGs are
 % recomputed at the configured bin size and lag (default: 0.5 ms / 100 ms).
 %
+% Normalisation matches the main-branch pipeline:
+%   1. Z-score within each NormalizationVar group (e.g. ChipID)
+%   2. Global z-score: fit on train, apply train stats to test
+%   3. Remove NaN columns, scale by max(abs(train))
+%
 % Requires ctc.TrainLabels to be set (run generateTrainLabels first).
 % Sets: ctc.UnitLabels  (1 = excitatory, 2 = inhibitory, NaN = unclassified)
 
@@ -18,16 +23,51 @@ assert(~isempty(ctc.TrainLabels), ...
     'Run generateTrainLabels() before classifyUnits()');
 
 labels = ctc.TrainLabels;
+p_umap = ctc.Parameters.UMAP;
+rg     = ctc.RecordingGroup;
 
 % ── Extract features via harmonized path ─────────────────────────────────────
 [wf, acg, sr]       = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
 [X_raw, feat_names] = buildFeatureMatrix(ctc, wf, acg, sr);
 
-X_train_raw = X_raw(labels.umap_train_idx, :);
-X_test_raw  = X_raw(labels.umap_test_idx,  :);
+% ── Chip-level normalisation (matching main branch prepareInputMatrix) ───────
+X_raw(isnan(X_raw)) = 0;
 
-[Y_pred, train_reduction, test_reduction] = classifyWithFeatureMatrices(ctc, ...
-    X_train_raw, labels.sorted_y_train, X_test_raw, feat_names);
+% Step 1: z-score within each NormalizationVar group (all units per group)
+[iG, G] = rg.combineMetadataIndices(ctc.UnitList, p_umap.NormalizationVar);
+g_idx = unique(iG);
+for g = 1:length(g_idx)
+    mask = (iG == g_idx(g));
+    X_raw(mask, :) = normalize(X_raw(mask, :));
+end
+
+train_idx = logical(labels.umap_train_idx);
+test_idx  = logical(labels.umap_test_idx);
+
+% Step 2: global z-score — fit on train, apply train stats to test
+if length(G) > 1
+    [X_train, mu, sigma] = normalize(X_raw(train_idx, :));
+    X_test = normalize(X_raw(test_idx, :), 'center', mu, 'scale', sigma);
+else
+    X_train = X_raw(train_idx, :);
+    X_test  = X_raw(test_idx, :);
+end
+
+% Step 3: remove NaN columns (from train or test)
+nan_cols = any(isnan(X_train), 1) | any(isnan(X_test), 1);
+X_train(:, nan_cols)   = [];
+X_test(:, nan_cols)    = [];
+feat_names(nan_cols)   = [];
+
+% Step 4: scale by max(abs(train))
+scale = max(abs(X_train), [], 1);
+scale(scale == 0) = 1;
+X_train = X_train ./ scale;
+X_test  = X_test  ./ scale;
+
+% ── Supervised UMAP classification ───────────────────────────────────────────
+[Y_pred, ~, ~, test_reduction, train_reduction] = supervisedUMAP(ctc, ...
+    X_train, labels.sorted_y_train, feat_names, X_test);
 
 ctc.Reduction.Train = train_reduction;
 ctc.Reduction.Test  = test_reduction;

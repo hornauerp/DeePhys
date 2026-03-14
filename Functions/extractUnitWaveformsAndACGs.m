@@ -85,6 +85,16 @@ else
     fprintf('Harmonization ACG params (%i bins) differ from cached %s (%i bins) — recomputing per recording\n', ...
         n_bins_harm, acg_source, n_bins_cached);
 
+    % Ensure CCGHeart MEX is compiled (required by CCG).
+    % Check for the binary directly — which('CCGHeart') would find a .m stub
+    % and return non-empty even when the MEX is missing.
+    func_dir = fileparts(mfilename('fullpath'));
+    if ~isfile(fullfile(func_dir, ['CCGHeart.' mexext()]))
+        prev_dir = cd(func_dir);
+        cleanup  = onCleanup(@() cd(prev_dir));
+        mex('CCGHeart.c');
+    end
+
     % Group units by parent MEArecording for one batch CCG call per recording.
     % All spike times are already in memory — no .npy files are re-read.
     rec_list   = {};

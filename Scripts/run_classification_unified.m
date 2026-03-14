@@ -62,10 +62,13 @@ parameters.UMAP.UnitFeatures    = ["FullACG", "ReferenceWaveform"];
 parameters.UMAP.NormalizationVar= "ChipID";
 parameters.UMAP.GroupingVar     = "Concentration";
 parameters.UMAP.GroupingValues  = 0;            % baseline recordings only
-parameters.UMAP.NNeighbors      = 100;
+parameters.UMAP.NNeighbors      = 50;           % unsupervised UMAP (label generation)
 parameters.UMAP.MinDist         = 0.1;
 parameters.UMAP.Spread          = 1;
-parameters.UMAP.NDims           = 10;
+parameters.UMAP.NDims           = 10;           % unsupervised UMAP dimensions
+% parameters.UMAP.SupervisedNDims      = 2;     % supervised UMAP (default: 2)
+% parameters.UMAP.SupervisedNNeighbors = 100;   % supervised UMAP (default: 100)
+% parameters.UMAP.TrainingCultureIdx   = [];    % culture indices for label UMAP (empty = all)
 
 % Outlier detection (DeePhys train only)
 parameters.OutlierDetection.ContaminationFraction = 0.5;
