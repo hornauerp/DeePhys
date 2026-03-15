@@ -3,6 +3,11 @@
             obj MEArecording
             ccg_type string = "CCG" %or "FullCCG"
            end
+           % Ensure the raw CCG is computed before attempting connection detection
+           if ~isfield(obj.Connectivity,ccg_type) || ~isfield(obj.Connectivity.(ccg_type),'CCGs')
+               fh = str2func("calculate" + ccg_type);
+               fh(obj);
+           end
            fh = str2func("calculate" + ccg_type);
            [ccgR1,tR] = fh(obj);
            if size(ccgR1,2) < length(obj.Units) %Pad if the last unit(s) have no spikes

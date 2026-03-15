@@ -322,79 +322,7 @@ classdef MEArecording < handle
            obj.Spikes.Units = spike_units_sorted';
         end
         
-        function Burst = detectBurstsISIN(obj, N, ISI_N)
-            %Adapted from Bakkum et al., 2014
-            if N == 0
-                Burst.T_start = [];
-                Burst.T_end = [];
-            else
-                [spike_times, ~] = obj.removeTonic();
-                dT = zeros(N,length(spike_times))+inf;
-                for j = 0:N-1
-                    dT(j+1,N:length(spike_times)-(N-1)) = spike_times( (N:end-(N-1))+j ) - ...
-                        spike_times( (1:end-(N-1)*2)+j );
-                end
-                Criteria = zeros(size(spike_times)); % Initialize to zero
-                Criteria( min(dT)<=ISI_N ) = 1; % Spike passes condition if it is
-                % included in a set of N spikes
-                % with ISI_N <= threshold.
-                % %% Assign burst numbers to each spike
-                SpikeBurstNumber = zeros(size(spike_times)) - 1; % Initialize to '-1'
-                INBURST = 0; % In a burst (1) or not (0)
-                NUM_ = 0; % Burst Number iterator
-                NUMBER = -1; % Burst Number assigned
-                BL = 0; % Burst Length
-                for i = N:length(spike_times)
-                    if INBURST == 0 % Was not in burst.
-                        if Criteria(i) % Criteria met, now in new burst.
-                            INBURST = 1; % Update.
-                            NUM_ = NUM_ + 1;
-                            NUMBER = NUM_;
-                            BL = 1;
-                        else % Still not in burst, continue.
-                            continue
-                        end
-                    else % Was in burst.
-                        if ~ Criteria(i) % Criteria no longer met.
-                            INBURST = 0; % Update.
-                            if BL<N % Erase if not big enough.
-                                SpikeBurstNumber(SpikeBurstNumber==NUMBER) = -1;
-                                NUM_ = NUM_ - 1;
-                            end
-                            NUMBER = -1;
-                        elseif diff(spike_times([i-(N-1) i])) > ISI_N && BL >= N
-                            % This conditional statement is necessary to split apart
-                            % consecutive bursts that are not interspersed by a tonic spike
-                            % (i.e. Criteria == 0). Occasionally in this case, the second
-                            % burst has fewer than 'N' spikes and is therefore deleted in
-                            % the above conditional statement (i.e. 'if BL<N').
-                            %
-                            % Skip this if at the start of a new burst (i.e. 'BL>=N'
-                            % requirement).
-                            %
-                            NUM_ = NUM_ + 1; % New burst, update number.
-                            NUMBER = NUM_;
-                            BL = 1; % Reset burst length.
-                        else % Criteria still met.
-                            BL = BL + 1; % Update burst length.
-                        end
-                    end
-                    SpikeBurstNumber(i) = NUMBER; % Assign a burst number to
-                    % each spike.
-                end
-                % %% Assign Burst information
-                MaxBurstNumber = max(SpikeBurstNumber);
-                Burst.T_start = zeros(1,MaxBurstNumber); % Burst start time [sec]
-                Burst.T_end = zeros(1,MaxBurstNumber); % Burst end time [sec]
-                for i = 1:MaxBurstNumber
-                    ID = find( SpikeBurstNumber==i );
-                    Burst.T_start(i) = spike_times(ID(1));
-                    Burst.T_end(i) = spike_times(ID(end));
-                end
-                fprintf('Detected %i bursts using %0.2f minutes of spike data.\n', ...
-                    MaxBurstNumber, diff(spike_times([1 end]))/60);
-            end
-        end
+        % detectBurstsISIN: see detectBurstsISIN.m
         
         function empirical_sttc = empiricalSTTCmatrix(obj)
             empirical_sttc = zeros(length(obj.Units));
@@ -412,7 +340,7 @@ classdef MEArecording < handle
             silent_units = find(arrayfun(@(x) isempty(x.SpikeTimes), obj.Units));
             spks_data = convert2asdf2(obj.Spikes.Times, obj.Spikes.Units, obj.RecordingInfo.SamplingRate);
             
-            for su = silent_units %Add empty units in case of concatenated recordings
+            for su = fliplr(silent_units) %Add empty units in reverse order to preserve indices
                 spks_data.raster = [spks_data.raster(1:su-1); cell(1,1); spks_data.raster(su:end)];
             end
             spks_data.nchannels = length(spks_data.raster);
@@ -622,58 +550,7 @@ classdef MEArecording < handle
        % Analyses
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        
-       function unit_array = generateUnits(obj)
-           [max_amplitudes, reference_electrode, norm_wf_matrix] = obj.generateWaveformMatrix();
-           [firing_rates, unit_spike_times] = obj.calculateFiringRates(length(max_amplitudes));
-           
-           
-           if isempty(obj.Parameters.QC.GoodUnits)
-               good_units = performUnitQC(obj, max_amplitudes, firing_rates', unit_spike_times', norm_wf_matrix);
-               obj.Parameters.QC.GoodUnits = good_units;
-           else
-               good_units = obj.Parameters.QC.GoodUnits;
-               if length(good_units) ~= length(firing_rates)
-                   error("Good unit IDs do not match. Did you use the correct ones?")
-               end
-               fprintf('Kept the %i good units provided\n', sum(good_units))
-           end
-           
-           if sum(good_units) >= obj.Parameters.QC.N_Units
-               good_amplitudes = max_amplitudes(good_units);
-               good_unit_spike_times = unit_spike_times(good_units);
-               good_wf_matrix = norm_wf_matrix(:,good_units);
-               waveform_features = obj.inferWaveformFeatures(good_amplitudes, good_wf_matrix);
-               good_template_ids = find(good_units);
-               good_reference_electrodes = reference_electrode(good_units);
-               unit_array = Unit();
-               for u = 1:length(waveform_features)
-                   unit_array(u) = Unit(obj, good_wf_matrix(:,u), good_reference_electrodes(u), good_unit_spike_times{u}, waveform_features{u});
-                   unit_array(u).TemplateID = good_template_ids(u);
-               end
-               no_act_idx = arrayfun(@(x) isempty(x.ActivityFeatures),unit_array);
-               %If activity features were not computed (too few spikes), fill with zeros to prevent issues when tracking units
-               act_features = Unit.returnFeatureNames("act");
-                empty_act_table = array2table(zeros(1,length(act_features)),'VariableNames',act_features);
-               [unit_array(no_act_idx).ActivityFeatures] = deal(empty_act_table);
-               if obj.Parameters.Analyses.Regularity
-                   no_reg_idx = arrayfun(@(x) isempty(x.RegularityFeatures),unit_array);
-                   reg_features = Unit.returnFeatureNames("reg");
-                   empty_reg_table = array2table(zeros(1,length(reg_features)),'VariableNames',reg_features);
-                   [unit_array(no_reg_idx).RegularityFeatures] = deal(empty_reg_table);
-               end
-               if obj.Parameters.Analyses.Catch22
-                   no_c22_idx = arrayfun(@(x) isempty(x.Catch22),unit_array);
-                   c22_features = Unit.returnFeatureNames("c22");
-                   empty_c22_table = array2table(zeros(1,length(c22_features)),'VariableNames',"SC_" + c22_features);
-                   [unit_array(no_c22_idx).Catch22] = deal(empty_c22_table);
-               end
-               
-               obj.Units = unit_array;
-               obj.updateSpikeTimes();
-           else
-               warning("Not enough good units found")
-           end
-       end
+       % generateUnits: see generateUnits.m
        
        function catch_22_table = runCatch22(obj, spike_train, bin_size)
             arguments
@@ -843,7 +720,7 @@ classdef MEArecording < handle
            for ni = 1:length(N_array)
                i = 0; max_i = max([1, floor(length(SpikeTimes)/N_spikes)]); ISI_N = -1;
 
-               while min(ISI_N) > min_isis(ni) || max(ISI_N) < min_isis(ni) && i<max_i %iterate through the spike times to find suitable cutout
+               while (min(ISI_N) > min_isis(ni) || max(ISI_N) < min_isis(ni)) && i<max_i %iterate through the spike times to find suitable cutout
                    spike_cutout = SpikeTimes((i*N_spikes)+1:min([(i+1)*N_spikes,length(SpikeTimes)]));
                    ISI_N = 1e3 * (spike_cutout(N_array(ni):end) - spike_cutout(1:end-(N_array(ni)-1)));
                    i = i+1;
@@ -854,7 +731,7 @@ classdef MEArecording < handle
                else
                    idx = ones(size(ISI_N));
                    idx(ISI_N>min_isis(ni)) = 2;
-                   distM=squareform(pdist(ISI_N));
+                   distM=squareform(pdist(ISI_N(:)));
                    dunns_coeffs(ni) = dunns(2, distM, idx);
                end
            end
@@ -953,101 +830,7 @@ classdef MEArecording < handle
            obj.Bursts.T_end = pruned.T_end;
        end
 
-       function [inburst_activity, inburst_units] =  getBurstStatistics(obj, ops)
-           arguments
-               obj MEArecording
-               ops.binning = 0.01
-           end
-           if isempty(obj.Bursts) %Burst detection was not performed
-               detectBursts(obj, merge_factor=obj.Parameters.Bursts.MergeFactor);
-           end
-           if length(obj.Bursts.T_start) < 3 %Not enough bursts were detected
-               Burst.MeanInterBurstInterval = 0;
-               Burst.BurstDuration = 0;
-               Burst.RiseTime = 0;
-               Burst.FallTime = 0;
-               Burst.PeakFR = 0;
-               Burst.StdFR = 0;
-               Burst.StdBurstDuration = 0;
-               Burst.StdInterBurstInterval = 0;
-               Burst.IntraFiringRate = 0;
-               Burst.InterFiringRate = 0;
-           else
-               IBIs = obj.Bursts.T_start(2:end) - obj.Bursts.T_end(1:end-1);
-               BDs = obj.Bursts.T_end - obj.Bursts.T_start;
-               
-               [RiseTime, FallTime, PeakFR, StdFR] = deal(nan(1,length(BDs)));
-               Fs = round(1/ops.binning);
-               inburst_activity = cell(1,length(BDs));
-               inburst_units = cell(1,length(BDs));
-               for iburst = 1:length(BDs)
-                   try
-                       burst_activity = obj.Spikes.Times(obj.Spikes.Times <= obj.Bursts.T_end(iburst) & obj.Spikes.Times >= obj.Bursts.T_start(iburst));
-                       binned_activity = histcounts(burst_activity,'BinWidth',ops.binning);
-                       [max_binned, imax_binned] = max(binned_activity);
-                       norm_activity = smoothdata(binned_activity/max_binned,'lowess');
-                       RiseTime(iburst) = imax_binned * ops.binning;
-                       FallTime(iburst) = (length(binned_activity) - imax_binned) * ops.binning;
-                       %%% Old approch, but seems too unreliable %%%
-
-                       % if length(norm_activity) < 4
-                       %     [peak_1,peak_1_idx] = max(norm_activity);
-                       %     peak_2 = peak_1; peak_2_idx = peak_1_idx;
-                       % else
-                       %     [peak_1,peak_1_idx] = findpeaks(norm_activity,"MinPeakProminence",0.3,NPeaks=1);
-                       %     [peak_2,peak_2_idx] = findpeaks(norm_activity(end:-1:1),"MinPeakProminence",0.3,NPeaks=1);
-                       %     peak_2_idx = length(norm_activity) - peak_2_idx + 1;
-                       % end
-                       % if isempty(peak_1)
-                       %     [peak_1,peak_1_idx] = max(norm_activity);
-                       % end
-                       % if isempty(peak_2)
-                       %     [peak_2,peak_2_idx] = max(norm_activity);
-                       % end
-                       % 
-                       % pre_lower_level = min(norm_activity(1:peak_1_idx));
-                       % post_lower_level = min(norm_activity(peak_2_idx:end));
-                       % % Using mean to account for the rare case where rise/fall is split
-                       % RiseTime(iburst) = mean(risetime([ones(1,Fs)*pre_lower_level norm_activity(1:peak_1_idx) ones(1,Fs)*peak_1],Fs));
-                       % FallTime(iburst) = mean(falltime([ones(1,Fs)*peak_2 norm_activity(peak_2_idx:end) ones(1,Fs)*post_lower_level],Fs));
-
-                       %%% Old approch, but seems too unreliable %%%
-
-                       PeakFR(iburst) = max_binned./length(obj.Units) * Fs;
-                       StdFR(iburst) = std(norm_activity);
-                   catch ME
-                       warning(ME.message)
-                   end
-                   
-               end
-               [inburst, outburst] = obj.getBurstSpikes();
-               inter_spikes = cellfun(@length, outburst.spikes);
-               inter_fr = inter_spikes(2:end-1) ./ (IBIs * length(obj.Units));
-               intra_spikes = cellfun(@length, inburst.spikes);
-               intra_fr = intra_spikes ./ (BDs * length(obj.Units));
-
-               cellfun_input = {IBIs, BDs, RiseTime, FallTime, PeakFR, StdFR};
-               
-               % Perform outlier removal if method is specified
-               if ~isempty(obj.Parameters.Outlier.Method)
-                   cellfun_input = cellfun(@(x) rmoutliers(x,obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),...
-                       cellfun_input,'un',0);
-               end
-               feature_means = cellfun(@nanmedian, cellfun_input,'un',0);
-               
-               [Burst.MeanInterBurstInterval,...
-                   Burst.BurstDuration,...
-                   Burst.RiseTime,...
-                   Burst.FallTime,...
-                   Burst.PeakFR,...
-                   Burst.StdFR] = feature_means{:};
-               Burst.StdBurstDuration = std(BDs);
-               Burst.StdInterBurstInterval = std(IBIs);
-               Burst.IntraFiringRate = median(intra_fr);
-               Burst.InterFiringRate = median(inter_fr);
-           end
-           obj.NetworkFeatures.Burst = struct2table(Burst);
-       end
+       % getBurstStatistics: see getBurstStatistics.m
 
        function [inburst, outburst] = getBurstSpikes(obj)
            inburst.spikes = cell(1,length(obj.Bursts.T_start));
@@ -1136,7 +919,7 @@ classdef MEArecording < handle
 
        function PlotFOOOFresults(obj)
            if ~isfield(obj.Bursts,'PowerSpectrum')
-               obj.inferPowerSpetrum();
+               obj.inferPowerSpectrum();
            end
            ib = obj.Bursts.PowerSpectrum.Inburst;
            ob = obj.Bursts.PowerSpectrum.Outburst;
@@ -1226,7 +1009,8 @@ classdef MEArecording < handle
        end
 
        function results = inferConnectivityGLM(obj)
-           addpath(genpath('/home/phornauer/Git/extended-GLM-for-synapse-detection'))
+           % Requires extended-GLM-for-synapse-detection on the MATLAB path
+           % addpath(genpath('/path/to/extended-GLM-for-synapse-detection'))
            hyperparameter = obj.Parameters.GLM;
            try
                ccgs = obj.Connectivity.FullCCG.CCGs;
@@ -1266,138 +1050,7 @@ classdef MEArecording < handle
            obj.Connectivity.concatenated.GLM = results;
        end
 
-       function inferConnectivityCCG(obj,ccg_type)
-           arguments
-            obj MEArecording
-            ccg_type string = "CCG" %or "FullCCG"
-           end
-           if ~isfield(obj.Connectivity,ccg_type) || ~isfield(obj.Connectivity.(ccg_type),'CCGs')
-               fh = str2func("calculate" + ccg_type);
-               fh(obj);
-           end
-           [ccgR1,tR] = obj.calculateCCG();
-           if size(ccgR1,2) < length(obj.Units) %Pad if the last unit(s) have no spikes
-               padded_ccg = zeros(size(ccgR1,1),length(obj.Units),length(obj.Units));
-               padded_ccg(:,1:size(ccgR1,2),1:size(ccgR1,2)) = ccgR1;
-               ccgR1 = padded_ccg;
-           end
-           binSize = obj.Parameters.CCG.BinSize; %.5ms
-           conv_w = obj.Parameters.CCG.Conv_w;  % 10ms window
-           alpha = obj.Parameters.CCG.Alpha; %high frequency cut off, must be .001 for causal p-value matrix
-%            Fs = 1/obj.RecordingInfo.SamplingRate;
-           
-           nCel=size(ccgR1,2);
-           
-           ccgR = nan(size(ccgR1,1),nCel,nCel);
-           ccgR(:,1:size(ccgR1,2),1:size(ccgR1,2)) = ccgR1;
-           
-           % get  CI for each CCG
-           Pval=nan(length(tR),nCel,nCel);
-           Pred=zeros(length(tR),nCel,nCel);
-           Bounds=zeros(size(ccgR,1),nCel,nCel);
-           sig_con = [];
-           sig_con_inh = [];
-           
-           for refcellID=1:max(nCel)
-               for cell2ID=1:max(nCel)
-                   
-                   if(refcellID==cell2ID)
-                       continue;
-                   end
-                   
-                   cch=ccgR(:,refcellID,cell2ID);			% extract corresponding cross-correlation histogram vector
-                   
-                   [pvals,pred,~]=bz_cch_conv(cch,conv_w);
-                   % Store predicted values and pvalues for subsequent plotting
-                   Pred(:,refcellID,cell2ID)=pred;
-                   Pval(:,refcellID,cell2ID)=pvals(:);
-                   Pred(:,cell2ID,refcellID)=flipud(pred(:));
-                   Pval(:,cell2ID,refcellID)=flipud(pvals(:));
-                   
-                   % Calculate upper and lower limits with bonferonni correction
-                   % monosynaptic connection will be +/- 4 ms
-                   
-                   nBonf = round(.005/binSize)*2;
-                   hiBound=poissinv(1-alpha/nBonf,pred);
-                   loBound=poissinv(alpha/nBonf, pred);
-                   Bounds(:,refcellID,cell2ID,1)=hiBound;
-                   Bounds(:,refcellID,cell2ID,2)=loBound;
-                   
-                   Bounds(:,cell2ID,refcellID,1)=flipud(hiBound(:));
-                   Bounds(:,cell2ID,refcellID,2)=flipud(loBound(:));
-                   
-                   sig = cch>hiBound;
-                   sig_inh= cch < loBound;
-                   
-                   % Find if significant periods falls in monosynaptic window +/- 4ms
-                   prebins = round(length(cch)/2 - .0032/binSize):round(length(cch)/2);
-                   postbins = round(length(cch)/2 + .0008/binSize):round(length(cch)/2 + .004/binSize);
-                   cchud  = flipud(cch);
-                   sigud  = flipud(sig);
-                   sigud_inh=flipud(sig_inh);
-                   
-                   sigpost=max(cch(postbins))>poissinv(1-alpha,max(cch(prebins)));
-                   sigpre=max(cchud(postbins))>poissinv(1-alpha,max(cchud(prebins)));
-                   
-                   sigpost_inh=min(cch(postbins))<poissinv(alpha,mean(cch(prebins)));
-                   sigpre_inh=min(cchud(postbins))<poissinv(alpha,mean(cchud(prebins)));
-                   %check which is bigger
-                   if (any(sigud(prebins)) && sigpre)
-                       %test if causal is bigger than anti causal
-                       sig_con = [sig_con;cell2ID refcellID];
-                   end
-                   
-                   if (any(sig(postbins)) && sigpost)
-                       sig_con = [sig_con;refcellID cell2ID];
-                   end
-                   
-                   if (any(sigud_inh(prebins)) && sigpre_inh)
-                       %test if causal is bigger than anti causal
-                       sig_con_inh = [sig_con_inh;cell2ID refcellID];
-                   end
-                   if (any(sig_inh(postbins)) && sigpost_inh)
-                       sig_con_inh = [sig_con_inh;refcellID cell2ID];
-                   end
-               end
-               
-           end
-           
-           sig_con=unique(sig_con,'rows');
-           sig_con_inh=unique(sig_con_inh, 'rows');
-           
-           if(~isempty(sig_con))
-               ccg_vec=[];
-               for jj=1:size(sig_con,1)
-                   ccg_vec=[ccg_vec ccgR(:,sig_con(jj,1),sig_con(jj,2))];
-               end
-           else
-               ccg_vec=[];
-           end
-           
-           if(~isempty(sig_con_inh))
-               ccg_vec_inh=[];
-               for jj=1:size(sig_con_inh,1)
-                   ccg_vec_inh=[ccg_vec_inh ccgR(:,sig_con_inh(jj,1),sig_con_inh(jj,2))];
-               end
-           else
-               ccg_vec_inh=[];
-           end
-           fprintf('Found %i excitatory and %i inhibitory connections\n', size(sig_con,1), size(sig_con_inh,1))
-           con_mat = zeros(size(ccgR,[2,3]));
-           for e = 1:size(sig_con,1)
-               con_mat(sig_con(e,1),sig_con(e,2)) = 1;
-           end
-           for i = 1:size(sig_con_inh,1)
-               con_mat(sig_con_inh(i,1),sig_con_inh(i,2)) = -1;
-           end
-           
-%            silent_units = find(arrayfun(@(x) isempty(x.SpikeTimes),obj.Units));
-           
-           obj.Connectivity.(ccg_type).ExcitatoryConnection = sig_con;
-           obj.Connectivity.(ccg_type).InhibitoryConnection = sig_con_inh;
-           obj.Connectivity.(ccg_type).bd = con_mat;
-           obj.Connectivity.(ccg_type).CCGs = ccgR;
-       end
+       % inferConnectivityCCG: see inferConnectivityCCG.m
        
        function inferConnectivityDDC(obj)%[Cov,precision,B,dCov]
            %{
@@ -1448,84 +1101,8 @@ classdef MEArecording < handle
        end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       % Graph features
+       % Graph features (see inferGraphFeatures.m)
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-       
-       function inferGraphFeatures(obj, alg)
-          arguments
-             obj MEArecording
-             alg (1,:) string = [] %Connectivity inference algorithms to compute graphs for
-          end
-          
-          if isempty(alg) %Compute features for all available inferred graphs
-              alg = string(fields(obj.Connectivity));
-              assert(~isempty(alg),"No connectivity inference results found")
-          end
-          
-          full_nw_table = table();
-          full_unit_table = table();
-          for a = 1:length(alg)
-             assert(isfield(obj.Connectivity,alg(a)),"No connectivity inference results found")
-             if isfield(obj.Connectivity.(alg(a)),"bd") %Binary directed graphs
-                 con_mat = obj.Connectivity.(alg(a)).bd;
-                 density = density_dir(con_mat);
-                 clustering_coef = clustering_coef_bd(con_mat);
-                 assortativity = assortativity_bin(con_mat,1);
-%                  rich_club = rich_club_bd(con_mat,5);
-                 nw_feat = ["Density","Assortativity"];%,"RichClub" + (1:5)];
-                 nw_val = [density, assortativity];%, rich_club];
-                 
-             elseif isfield(obj.Connectivity.(alg(a)),"bu") %Binary undirected graphs
-                 con_mat = obj.Connectivity.(alg(a)).bu;
-                 density = density_und(con_mat);
-%                  XY = obj.RecordingInfo.ElectrodeCoordinates([obj.Units.ReferenceElectrode],:);
-%                  n = 1000;
-%                  tol = 1e-6;
-%                  [N,E] = rentian_scaling_2d(con_mat,XY,n,tol);
-%                  rm_idx = N == 0 | E == 0;
-%                  N(rm_idx) = []; E(rm_idx) = [];
-%                  try
-%                      [b,~] = robustfit(log10(N),log10(E));
-%                      rents_exponent = b(2,1);
-%                  catch
-rents_exponent = 0; 
-%                  end
-                 clustering_coef = clustering_coef_bu(con_mat);
-                 assortativity = assortativity_bin(con_mat,0);
-%                  rich_club = rich_club_bu(con_mat,5);
-                 nw_feat = ["Density","RentExponent","Assortativity"];%,"RichClub" + (1:5)];
-                 nw_val = [density, rents_exponent, assortativity];%, rich_club];
-                 
-             else 
-                 disp("No binary connectivity matrix available")
-             end
-             
-             global_efficiency = efficiency_bin(con_mat);
-             local_efficiency = efficiency_bin(con_mat,1);
-%              [s,S] = motif3struct_bin(con_mat);
-%              s = s./nchoosek(length(con_mat),3); %Normalize
-%              S = S./(nchoosek(length(con_mat),3) - nchoosek(length(con_mat) - 1,3)); %Normalize
-%              [f,F] = motif3funct_bin(con_mat);
-%              f = f./nchoosek(length(con_mat),3); %Normalize
-%              F = F./(nchoosek(length(con_mat),3) - nchoosek(length(con_mat) - 1,3)); %Normalize
-             eigen_centrality = eigenvector_centrality_und(double(con_mat));
-             betweenness = betweenness_bin(con_mat);
-             nw_feat = [nw_feat, "GlobalEfficiency"] + "_" + alg(a);%, "StructuralMotif" + (1:13), "FunctionalMotif" + (1:13)] + "_" + alg(a);
-             nw_val = [nw_val, global_efficiency];%, s', f'];
-             nw_val(isnan(nw_val) | isinf(nw_val)) = 0;
-             nw_table = array2table(nw_val,"VariableNames",nw_feat);
-             unit_feat = ["ClusteringCoefficient","LocalEfficiency","EigenCentrality","Betweenness"] + "_" + alg(a);%,"UnitStructuralMotif" + (1:13), "UnitFunctionalMotif" + (1:13)];
-             unit_val = [clustering_coef, local_efficiency, eigen_centrality, betweenness'];%, S', F'];
-             unit_val(isnan(unit_val) | isinf(unit_val)) = 0;
-             unit_table = array2table(unit_val,"VariableNames",unit_feat);
-             full_nw_table = [full_nw_table nw_table];
-             full_unit_table = [full_unit_table unit_table];
-          end
-          obj.NetworkFeatures.GraphFeatures = full_nw_table;
-          for u = 1:size(full_unit_table,1)
-              obj.Units(u).GraphFeatures = full_unit_table(u,:);
-          end
-       end
        
        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
        % Feature value retrieval

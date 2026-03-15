@@ -28,6 +28,7 @@ arguments
 end
 
 p = ctc.Parameters.UMAP;
+rng(ctc.Parameters.RNGSeed, 'twister');
 tdir = p.TemplateDir;
 uid           = char(java.util.UUID.randomUUID);
 template_file = fullfile(tdir, ['ctc_supervised_umap_template', uid,'.mat']);

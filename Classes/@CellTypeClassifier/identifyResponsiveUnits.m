@@ -27,10 +27,8 @@ unit_list = Unit.empty;
 for c = 1:length(rg.Cultures)
     culture = rg.Cultures(c);
 
-    % Bootstrap test: bin spike matrix and compare pre vs post windows
-    pre_mat  = culture.getBinnedSpikeMat(p.BinSize, p.PreCutout);
-    post_mat = culture.getBinnedSpikeMat(p.BinSize, p.PostCutout);
-    response = bootstrapFiringRateResponse(pre_mat, post_mat, p.NIter, p.Alpha);
+    % Bootstrap test via Culture wrapper
+    response = culture.bootstrapResponse(p.PreCutout, p.PostCutout, p.BinSize, p.NIter, p.Alpha);
 
     % Apply optional metadata filter — only count increases from matching cultures
     if ~isempty(metadata_filter) && isfield(culture.Metadata, metadata_filter{1})

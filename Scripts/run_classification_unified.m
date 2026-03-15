@@ -18,7 +18,7 @@
 
 %% 0 — Paths
 
-deephys_root = "/home/phornauer/Git/DeePhysDev/DeePhys";
+deephys_root = fileparts(fileparts(mfilename('fullpath')));
 addpath(genpath(deephys_root));
 
 %% 1 — Configuration  (edit only this section)

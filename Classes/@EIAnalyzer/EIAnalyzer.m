@@ -51,7 +51,13 @@ classdef EIAnalyzer < handle
             defaultParams.BurstDetection.PeakHeight      = 0.1;   % minimum peak height
             defaultParams.BurstDetection.PeakProminence  = 0.1;   % minimum peak prominence
             defaultParams.BurstDetection.MinPeakDistance = 6;     % minimum bins between detected burst peaks
+            defaultParams.BurstDetection.MaskPeaks       = false; % true: peak detection only in burst-state bins (z==2)
+                                                                   % false: peak detection on full activity trace (main-branch default)
             defaultParams.BurstDetection.SelectedVariant = 4;     % burst variant: 1=all, 2=cluster1, 3=cluster2, 4=both-aligned
+            defaultParams.BurstDetection.BurstFiltering  = "correlation"; % "tsne" | "correlation" | "none"
+            defaultParams.BurstDetection.CorrelationThreshold = 0.8;  % min Pearson r with mean template (for "correlation" filtering)
+            defaultParams.BurstDetection.MaxFilterIter        = 5;    % max refinement iterations (for "correlation" filtering)
+            defaultParams.BurstDetection.RNGSeed              = 42;   % seed for t-SNE + kmedoids reproducibility
         end
     end
 end

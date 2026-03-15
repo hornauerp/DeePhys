@@ -31,10 +31,12 @@ function [norm_train, norm_test, feature_names] = prepareInputMatrix(rg, input_t
                 nan_idx = any(isnan(norm_train)) | any(isnan(norm_test),1);
                 norm_train(:,nan_idx) = [];
                 feature_names(nan_idx) = [];
-                norm_train = norm_train./max(abs(norm_train)); %Scale data
+                scale_factor = max(abs(norm_train)); %Compute scale factor before applying
+                scale_factor(scale_factor == 0) = 1;
+                norm_train = norm_train./scale_factor; %Scale data
                 if sum(test_idx) > 0
                     norm_test(:,nan_idx) = [];%Remove peak NaNs
-                    norm_test = norm_test./max(abs(norm_train)); %Scale data
+                    norm_test = norm_test./scale_factor; %Scale data using same factor
                 else
                     norm_test = [];
                 end
@@ -71,13 +73,16 @@ function [norm_train_data, norm_test_data] = normalizeByGroup(rg, feat_mat, obje
             [iG, G] = rg.combineMetadataIndices(object_group, grouping_var);
             g_idx = unique(iG);
             for g = 1:length(g_idx)
-                iBatch_train = (iG == g_idx(g));% & train_idx';
-                [norm_mat, batch_mean, batch_sd] = normalize(feat_mat(iBatch_train,:));
-                feat_mat(iBatch_train,:) = norm_mat;%./max(abs(norm_mat)); %Check
-                % if any(test_idx)
-                %     iBatch_test = iG == g & test_idx';
-                %     feat_mat(iBatch_test,:) = normalize(feat_mat(iBatch_test,:),'center',batch_mean,'scale',batch_sd);
-                % end
+                iBatch = (iG == g_idx(g));
+                iBatch_train = iBatch & train_idx(:);
+                iBatch_test  = iBatch & test_idx(:);
+                % Fit normalization on training data within this group only
+                [norm_train_batch, batch_mean, batch_sd] = normalize(feat_mat(iBatch_train,:));
+                feat_mat(iBatch_train,:) = norm_train_batch;
+                % Apply training group stats to test data in the same group
+                if any(iBatch_test)
+                    feat_mat(iBatch_test,:) = normalize(feat_mat(iBatch_test,:),'center',batch_mean,'scale',batch_sd);
+                end
             end
             if length(G) > 1 %Only normalize again if more than 1 group exists
                 [norm_train_data, train_mean, train_sd] = normalize(feat_mat(train_idx,:));

@@ -35,30 +35,19 @@ function result = regressionByFeatureGroups(rg, level, regression_var, stratific
                 cv = cvpartition(rec_group_idx,'KFold',K_fold);
                 t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
 
+                % Compute regression values once before the fold loop
+                [reg_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, regression_var, pooling_vals);
+                true_value = group_labels_comb(reg_group_idx);
+                if isstring(true_value)
+                    true_value = str2double(true_value);
+                end
+
                 for k = 1:K_fold
                     if level == "Unit"
                         error('Not yet implemented')
-%                         train_table = object_group(cv.training(k)).getUnitFeatures(unit_features);
-%                         test_table = object_group(cv.test(k)).getUnitFeatures(unit_features);
-%                         train_idx = logical([ones(1, size(train_table,1)) zeros(1, size(test_table,1))]);
-%                         test_idx = ~train_idx;
-%                         input_group = [object_group(cv.training(k)).Units, object_group(cv.test(k)).Units];
-%                         input_table = [train_table;test_table];
-%                         unit_recordings = [object_group.MEArecording];
-%                         metadata = [unit_recordings.Metadata];
-%                         true_value = [metadata.(regression_var)];
-%                         Y_train = true_value(train_idx);
-%                         Y_test = true_value(test_idx);
                     else
-                        %                         input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
-                        [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
                         train_idx = cv.training(k);
                         test_idx = cv.test(k);
-                        [reg_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, regression_var, pooling_vals);
-                        true_value = group_labels_comb(reg_group_idx);
-                        if isstring(true_value)
-                           true_value = str2double(true_value);
-                        end
                         input_group = object_group;
                         Y_train = true_value(train_idx);
                         Y_test = true_value(test_idx);

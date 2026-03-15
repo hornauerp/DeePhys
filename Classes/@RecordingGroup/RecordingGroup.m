@@ -472,7 +472,9 @@ classdef RecordingGroup < handle
                 for iGV = 1:length(grouping_value_list)
                     result = classifyByFeatureGroups(rg, level, alg, classification_var, pooling_vals, all_network_features{iNW}, unit_features, [], useClustered,...
                         grouping_var, grouping_value_list(iGV), normalization, normalization_var, N_hyper, K_fold, tolerance);
-                    [train_acc(iNW, iGV), test_acc(iNW, iGV), avg_score(iNW, iGV)] = assessClassifier(rg, result);
+                    [metrics, train_acc(iNW, iGV)] = assessClassifier(rg, result);
+                    test_acc(iNW, iGV) = metrics.F1_score;
+                    avg_score(iNW, iGV) = metrics.Accuracy;
                 end
             end
             
@@ -482,7 +484,9 @@ classdef RecordingGroup < handle
                 for iGV = 1:length(grouping_value_list)
                     result = classifyByFeatureGroups(rg, level, alg, classification_var, pooling_vals, network_features, all_unit_features{iU}, [], useClustered,...
                         grouping_var, grouping_value_list(iGV), normalization, normalization_var, N_hyper, K_fold, tolerance);
-                    [train_acc(iU + iNW, iGV), test_acc(iU + iNW, iGV), avg_score(iU + iNW, iGV)] = assessClassifier(rg, result);
+                    [metrics, train_acc(iU + iNW, iGV)] = assessClassifier(rg, result);
+                    test_acc(iU + iNW, iGV) = metrics.F1_score;
+                    avg_score(iU + iNW, iGV) = metrics.Accuracy;
                 end
             end
             
@@ -492,7 +496,9 @@ classdef RecordingGroup < handle
             for iGV = 1:length(grouping_value_list)
                 result = classifyByFeatureGroups(rg, level, alg, classification_var, pooling_vals, network_features, unit_features, [], useClustered,...
                     grouping_var, grouping_value_list(iGV), normalization, normalization_var, N_hyper, K_fold, tolerance);
-                [train_acc(end, iGV), test_acc(end, iGV), avg_score(end, iGV)] = assessClassifier(rg, result);
+                [metrics, train_acc(end, iGV)] = assessClassifier(rg, result);
+                test_acc(end, iGV) = metrics.F1_score;
+                avg_score(end, iGV) = metrics.Accuracy;
             end
             rg.Classification.FeatureGroupsByGroupingVar.TrainAcc = train_acc;
             rg.Classification.FeatureGroupsByGroupingVar.TestAcc = test_acc;

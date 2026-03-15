@@ -66,6 +66,8 @@ classdef CellTypeClassifier < handle
             defaultParams.OutlierDetection.DistancePercentile    = 80;
             defaultParams.OutlierDetection.CounterexampleRatio   = 2;   % excitatory:inhibitory sampling ratio
 
+            defaultParams.RNGSeed = 42;  % seed for reproducible label generation & classification
+
             % Harmonization parameters — shared target spec for DeePhys and external data.
             % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to
             % ensure DeePhys and external units are projected into the same feature space.

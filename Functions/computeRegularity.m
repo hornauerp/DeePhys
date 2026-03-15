@@ -21,7 +21,7 @@ NFFT = length(binned_signal);
 F = (0 : 1/NFFT : 1/2-1/NFFT) * (1/binning);
 TEMP = fft(binned_signal, NFFT);
 TEMP(1) = 0;
-freq_domain = abs(TEMP(1:NFFT/2));
+freq_domain = abs(TEMP(1:floor(NFFT/2)));
 
 [magnitude, freq_idx] = max(freq_domain);
 frequency = F(freq_idx);

@@ -19,7 +19,8 @@ arguments
     params = struct()
     parallel logical = true
 end
-warning('off')
+prev_warn_state = warning('off', 'MATLAB:table:ModifiedAndSavedVarnames');
+cleanup_warnings = onCleanup(@() warning(prev_warn_state));
 failed_sortings = [];
 
 if parallel

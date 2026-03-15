@@ -57,11 +57,30 @@ else
 end
 
 % ── Input orientation: enforce (N_samples × N_units) and (N_bins × N_units) ─
+% The expected waveform sample count is known from the reference sampling rate
+% and the standard Kilosort template width (82 samples at 30 kHz). Using this
+% avoids the ambiguous heuristic when N_units > N_samples.
 [r_wf, c_wf]   = size(waveforms);
 [r_acg, c_acg] = size(acgs);
 
-if c_wf > r_wf,   waveforms = waveforms'; [~, c_wf]  = size(waveforms);  end
-if c_acg > r_acg, acgs      = acgs';      [~, c_acg] = size(acgs);       end
+expected_wf_samples = n_ref;  % from ctc.Parameters or the DeePhys default
+if r_wf ~= expected_wf_samples && c_wf == expected_wf_samples
+    waveforms = waveforms'; [~, c_wf] = size(waveforms);
+elseif r_wf ~= expected_wf_samples && c_wf ~= expected_wf_samples
+    % Fallback: use the heuristic but warn
+    warning('buildFeatureMatrix:orient', ...
+        'Neither waveform dimension matches expected %i samples — using size heuristic.', expected_wf_samples);
+    if c_wf > r_wf, waveforms = waveforms'; [~, c_wf] = size(waveforms); end
+end
+% ACG orientation: use the expected bin count
+n_bins_expected_orient = round(2 * acg_lag / acg_bin_size) + 1;
+if r_acg ~= n_bins_expected_orient && c_acg == n_bins_expected_orient
+    acgs = acgs'; [~, c_acg] = size(acgs);
+elseif r_acg ~= n_bins_expected_orient && c_acg ~= n_bins_expected_orient
+    warning('buildFeatureMatrix:orient', ...
+        'Neither ACG dimension matches expected %i bins — using size heuristic.', n_bins_expected_orient);
+    if c_acg > r_acg, acgs = acgs'; [~, c_acg] = size(acgs); end
+end
 
 assert(c_wf == c_acg, ...
     'Inconsistent number of units: waveforms has %i, acgs has %i (after auto-orient).', ...

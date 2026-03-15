@@ -21,9 +21,8 @@
 
 %% 0 — Setup
 
-deephys_root = "/home/phornauer/Git/DeePhysDev/DeePhys";
+deephys_root = fileparts(fileparts(mfilename('fullpath')));
 addpath(genpath(deephys_root));
-addpath("/home/phornauer/Git/Chemogenetics/Helpers");
 
 %% 1 — Load recordings and classify  (guarded — skipped on re-runs)
 %

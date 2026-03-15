@@ -18,7 +18,6 @@ classdef Unit < handle
     end
 
     properties (Dependent)
-        unitID
         FullACG
     end
 
@@ -26,6 +25,7 @@ classdef Unit < handle
         RecordingDuration    % copied from MEArecording.RecordingInfo.Duration
         SamplingRate         % copied from MEArecording.RecordingInfo.SamplingRate
         UnitParams           % copied subset of MEArecording.Parameters (Regularity, Catch22, CCG, Analyses)
+        CachedUnitID         % cached unit index in MEArecording.Units
     end
 
     methods (Static)
@@ -72,12 +72,15 @@ classdef Unit < handle
             unit.inferActivityFeatures();
         end
 
-        function unit = set.ACG(unit, params)
+        function computeACG(unit, params)
+        % COMPUTEACG  Compute and store the autocorrelogram.
+        %   unit.computeACG()         — use default CCG params or extract from connectivity
+        %   unit.computeACG(params)   — params struct with .BinSize, .Duration fields
             arguments
                 unit Unit
                 params struct = struct()
             end
-            if isempty(params)
+            if isempty(fieldnames(params))
                 try
                     acg = unit.MEArecording.Connectivity.CCG.CCGs(:, unit.unitID, unit.unitID);
                 catch
@@ -95,13 +98,16 @@ classdef Unit < handle
             unit.ACG = double(acg);
         end
 
-        function unit_id = get.unitID(unit)
-            unit_id = find(unit.MEArecording.Units == unit);
+        function uid = get.unitID(unit)
+            % Return cached ID; recompute only if cache is empty
+            if isempty(unit.CachedUnitID) && ~isempty(unit.MEArecording)
+                unit.CachedUnitID = find(unit.MEArecording.Units == unit, 1);
+            end
+            uid = unit.CachedUnitID;
         end
 
         function acg = get.FullACG(unit)
             acg = unit.MEArecording.Connectivity.FullCCG.CCGs(:, unit.unitID, unit.unitID);
         end
-
     end
 end

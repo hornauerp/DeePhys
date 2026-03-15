@@ -6,7 +6,7 @@ if nargin < 1 || isempty(doCatch24)
 end
 %-------------------------------------------------------------------------------
 
-featureList = fullfile("/home/phornauer/Git/DeePhys","Toolboxes","catch22","featureList.txt"); %Quick fix
+featureList = fullfile(fileparts(fileparts(mfilename('fullpath'))),"featureList.txt");
 fid = fopen(featureList,'r');
 i = 1;
 tline = fgetl(fid);

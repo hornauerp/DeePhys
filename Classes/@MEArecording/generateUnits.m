@@ -47,6 +47,8 @@
                obj.Units = unit_array;
                obj.updateSpikeTimes();
            else
-               warning("Not enough good units found")
+               warning("Not enough good units found (%d passed QC, %d required)", ...
+                   sum(good_units), obj.Parameters.QC.N_Units)
+               unit_array = Unit.empty(0,0);
            end
        end
