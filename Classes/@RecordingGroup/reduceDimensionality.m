@@ -77,10 +77,24 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
             end
             reduction = reduction(:,1:n_dims);
 
+            % Build result object
+            dr_result = DimReductionResult( ...
+                'Reduction', reduction, ...
+                'ObjectGroup', object_group, ...
+                'Method', method, ...
+                'UnitFeatures', unit_features, ...
+                'NetworkFeatures', network_features, ...
+                'Parameters', struct('n_dims', n_dims, 'normalization_var', normalization_var, ...
+                    'grouping_var', grouping_var, 'grouping_values', grouping_values));
+
+            if method == "UMAP"
+                dr_result.Graph = rg.DimensionalityReduction.(level).(method).Graph;
+            end
+
+            % Backward compat: still store on rg
             rg.DimensionalityReduction.(level).(method).Reduction = reduction;
             rg.DimensionalityReduction.(level).(method).GroupingVariable = grouping_var;
             rg.DimensionalityReduction.(level).(method).UnitFeatures = unit_features;
             rg.DimensionalityReduction.(level).(method).NetworkFeatures = network_features;
             rg.DimensionalityReduction.(level).ObjectGroup = object_group;
-%             rg.plot_dimensionality_reduction(reduction);
 end

@@ -1,5 +1,9 @@
 classdef MEArecording < handle
-    
+
+    properties (Constant, Hidden)
+        ClassVersion = 1  % Increment on each schema change
+    end
+
     properties
         Metadata
         RecordingInfo
@@ -155,15 +159,23 @@ classdef MEArecording < handle
                 else
                     save_path = fullfile(obj.Parameters.Save.Path, 'MEArecording.mat');
                 end
-                
+
                 if exist(save_path,'file') && ~obj.Parameters.Save.Overwrite
                     return
                 else
-                    save(save_path, "obj")
+                    format_version = obj.ClassVersion; %#ok<NASGU>
+                    save(save_path, "obj", "format_version")
                 end
             end
         end
-        
+
+        function s = saveobj(obj)
+        % SAVEOBJ  Serialize MEArecording for save().
+        %   Currently returns the object as-is. Future versions may convert
+        %   to a struct for format-independent storage.
+            s = obj;
+        end
+
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
         % Quality control
         %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -361,7 +373,9 @@ classdef MEArecording < handle
     end
     
     methods (Static)
-        
+
+        obj = loadobj(s)  % defined in loadobj.m
+
         function ParentPath = getParentPath() %% Does not work when parallelized (e.g. parfor)
             ParentPath = fileparts(fileparts(which('MEArecording')));
         end
@@ -489,37 +503,13 @@ classdef MEArecording < handle
         end
 
         function feat_table = getUnitFeatures(obj, unit_features)
+        % GETUNITFEATURES  Build table of per-unit features.
+        %   Delegates to FeatureAssembly.unitFeatures for the actual logic.
             arguments
                 obj
-                unit_features string = ["ReferenceWaveform","ActivityFeatures"] %Alternatively WaveformFeatures
+                unit_features string = ["ReferenceWaveform","ActivityFeatures"]
             end
-            if unit_features == "all"
-                unit_features = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22","GraphFeatures"];
-            end
-            if class(obj) == "MEArecording"
-                unit_array = [obj.Units];
-            elseif class(obj) == "Unit"
-                unit_array = obj;
-            end
-            feature_tables = {};
-            for f = 1:length(unit_features)
-
-                if unit_features(f) == "ReferenceWaveform"
-                    aligned_wf = RecordingGroup.alignWaveforms(unit_array);
-                    var_names = "Waveform" + (1:size(aligned_wf,1));
-                    feature_tables{f} = array2table(aligned_wf',"VariableNames",var_names);
-
-                elseif ismember(unit_features(f),["ACG","FullACG"])
-                    acgs = [unit_array.(unit_features(f))];
-                    norm_acgs = (acgs)./max(acgs);
-                    norm_acgs(isnan(norm_acgs)) = 0;
-                    var_names = unit_features(f) + (1:size(norm_acgs,1));
-                    feature_tables{f} = array2table(norm_acgs',"VariableNames",var_names);
-                else
-                    feature_tables{f} = vertcat(unit_array.(unit_features(f)));
-                end
-            end
-            feat_table = [feature_tables{:}];
+            feat_table = FeatureAssembly.unitFeatures(obj, unit_features);
         end
     end
     
@@ -1144,70 +1134,16 @@ classdef MEArecording < handle
            end
        end
        
-       function feat_table = getRecordingFeatures(obj,network_features, unit_features, useClustered) %Usable for unit and network features
+       function feat_table = getRecordingFeatures(obj, network_features, unit_features, useClustered)
+       % GETRECORDINGFEATURES  Build table of per-recording features.
+       %   Delegates to FeatureAssembly.recordingFeatures for the actual logic.
            arguments
                obj MEArecording
-               network_features string = "all" %"all" or []
-               unit_features string = "all" %"ActivityFeatures","WaveformFeatures" or "all"
+               network_features string = "all"
+               unit_features string = "all"
                useClustered logical = false
            end
-           if ~isempty(network_features)
-               fname_array = arrayfun(@(x) fieldnames(x.NetworkFeatures), obj,'un',0);
-               [gc, fnames] = groupcounts(vertcat(fname_array{:}));%groupcounts shuffles fieldnames so we have to extract the original order again
-               rm_field = string(fnames{gc ~= length(fname_array)});
-               fnames = fnames(gc == length(fname_array));
-               % fnames = fieldnames([obj.NetworkFeatures]);
-               for i = 1:length(obj)
-                   network_struct = obj(i).NetworkFeatures;
-                   if isfield(network_struct, rm_field)
-                    network_struct = rmfield(network_struct, rm_field);
-                   end
-                   network_array(i) = network_struct;
-               end
-                fnames = fieldnames(network_array);
-               if network_features == "all"
-                   nw_idx = 1:length(fnames);
-               else
-                   nw_idx = find(contains(fnames,network_features));
-               end
-               
-               network_cell = squeeze(struct2cell(network_array));
-               network_cell = reshape(network_cell,[],length(obj)); %Ensure correct orientation of cell array
-               for i = 1:size(network_cell,2)
-                  network_table(i,:) = [network_cell{nw_idx,i}]; 
-               end
-           else
-               network_table = table();
-           end
-           
-           if ~isempty(unit_features)
-               if useClustered
-                   unit_table = concatenateClusteredFeatures(obj, 0, unit_features);
-               else
-                   % fname_array = arrayfun(@(x) fieldnames(x.UnitFeatures), obj,'un',0);
-                   % [gc, fnames] = groupcounts(vertcat(fname_array{:}));
-                   % fnames = fnames(gc == length(fname_array));
-                   fnames = fieldnames([obj.UnitFeatures]);
-                   
-                   if unit_features == "all"
-                       feat_idx = 1:length(fnames);
-                   else
-                       feat_idx = find(contains(fnames, unit_features));
-                       if length(feat_idx) ~= length(unit_features)
-                           error(join('Could not find: ' + unit_features(~contains(unit_features,fnames))))
-                       end
-                   end
-                   unit_cell = squeeze(struct2cell([obj.UnitFeatures]));
-                   unit_cell = reshape(unit_cell,[],length(obj)); %Ensure correct orientation of cell array
-                   for i = 1:size(unit_cell,2)
-                       unit_table(i,:) = [unit_cell{feat_idx,i}];
-                   end
-               end
-           else
-               unit_table = table();
-           end
-           
-           feat_table = [network_table unit_table];
+           feat_table = FeatureAssembly.recordingFeatures(obj, network_features, unit_features, useClustered);
        end
        
       

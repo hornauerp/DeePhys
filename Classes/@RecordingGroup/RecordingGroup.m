@@ -159,134 +159,28 @@ classdef RecordingGroup < handle
        end
        
        function aligned_wf = alignWaveforms(unit_array, target_sr)
-           % ALIGNWAVEFORMS  Interpolate and trough-align reference waveforms.
-           %
-           % INPUTS:
-           %   unit_array - (1 x N) Unit array
-           %   target_sr  - target sampling rate in Hz after interpolation
-           %                (default: actual recording rate × 10)
-           %                Must be an integer multiple of the recording rate;
-           %                a warning is issued and the factor is rounded if not.
+       % ALIGNWAVEFORMS  Interpolate and trough-align reference waveforms.
+       %   Delegates to FeatureAssembly.alignWaveforms for the actual logic.
            arguments
                unit_array Unit
-               target_sr  (1,1) double = 0  % 0 = auto: actual_sr × 10
+               target_sr  (1,1) double = 0
            end
-
-           actual_sr = unit_array(1).MEArecording.RecordingInfo.SamplingRate;
-           if target_sr == 0
-               target_sr = actual_sr * 10;
-           end
-           interp_factor_raw = target_sr / actual_sr;
-           interp_factor     = round(interp_factor_raw);
-           if abs(interp_factor_raw - interp_factor) > 1e-9
-               warning('RecordingGroup:alignWaveforms', ...
-                   'target_sr (%g Hz) is not an integer multiple of the recording rate (%g Hz). ' ...
-                   'Rounding interpolation factor from %.6f to %i (effective rate: %g Hz).', ...
-                   target_sr, actual_sr, interp_factor_raw, interp_factor, actual_sr * interp_factor);
-           end
-
-           ref_wf = [unit_array.ReferenceWaveform];
-           ref_wf = ref_wf(sum(ref_wf,2)~=0,:);
-           [~,i] = min(ref_wf,[],1);
-           peak_idx = mean(i);
-           max_offset = round(peak_idx/2);
-           x = max_offset:size(ref_wf,1)+max_offset-1;
-           buffer_wf = size(ref_wf,1)+2*max_offset;
-           xq = linspace(1,buffer_wf,buffer_wf*interp_factor);
-
-           interp_wf = interp1(x,ref_wf,xq,"makima");
-           interp_wf = interp_wf((max_offset*interp_factor)+1:((buffer_wf-max_offset-1)*interp_factor),:);
-           interp_wf = interp_wf./max(abs(interp_wf));
-           rm_idx = find(ceil(abs(peak_idx - i)) >= max_offset);
-           [~, minIndices] = min(interp_wf);
-           shifts = round(peak_idx*interp_factor) - minIndices;
-
-           aligned_wf = zeros(size(interp_wf));
-           for j = 1:size(interp_wf, 2)
-               if j == rm_idx
-                   aligned_wf(:, j) = interp_wf(:, j);
-               else
-                   aligned_wf(:, j) = circshift(interp_wf(:, j), [shifts(j), 0]);
-               end
-           end
-           shifts(rm_idx) = [];
-           aligned_wf = aligned_wf((5*interp_factor):(end-5*interp_factor),:);
+           aligned_wf = FeatureAssembly.alignWaveforms(unit_array, target_sr);
        end
        
-       function [clf,train_acc] = create_classifier(X_train,Y_train,alg,N_hyper)
-           if N_hyper > 0
-               switch alg
-                   case 'svm'
-                       clf = fitcsvm(X_train,Y_train,'OptimizeHyperparameters','all','HyperparameterOptimizationOptions',...
-                           struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
-                           'Verbose',0));
-                   case 'cnb'
-                       clf = fitcnb(X_train,Y_train,'OptimizeHyperparameters','all','HyperparameterOptimizationOptions',...
-                           struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
-                           'Verbose',0));
-                   case 'knn'
-                       clf = fitcknn(X_train,Y_train,'OptimizeHyperparameters','all','HyperparameterOptimizationOptions',...
-                           struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
-                           'Verbose',0));
-                   case 'rf'
-                       hyperparams = {'NumLearningCycles','MinLeafSize','MaxNumSplits','SplitCriterion','NumVariablesToSample'};
-                       t = templateTree('Reproducible',true);
-                       clf = fitcensemble(X_train,Y_train,'Method','Bag','OptimizeHyperparameters',hyperparams,'Learners',t, ...
-                           'HyperparameterOptimizationOptions',struct('AcquisitionFunctionName','expected-improvement-plus','MaxObjectiveEvaluations',N_hyper,'ShowPlots',false,...
-                           'Verbose',0));
-               end
-               train_acc = clf.HyperparameterOptimizationResults.MinObjective;
-           else
-               switch alg
-                   case 'svm'
-                       clf = fitcsvm(X_train,Y_train);
-                   case 'cnb'
-                       clf = fitcnb(X_train,Y_train);
-                   case 'knn'
-                       clf = fitcknn(X_train,Y_train);
-                   case 'rf'
-                       t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all','Reproducible',true);
-                       clf = fitcensemble(X_train,Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset("UseParallel",true));
-               end
-               train_acc = 1-resubLoss(clf,'LossFun','classerror');
-           end
+       function [clf, train_acc] = create_classifier(X_train, Y_train, alg, N_hyper)
+       % CREATE_CLASSIFIER  Train a classifier. Delegates to MLPipeline.createClassifier.
+           [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, alg, N_hyper);
        end
        
        function [Y_train, Y_test, train_idx, test_idx] = cv_split(Y, cv, k)
-          arguments
-             Y
-             cv cvpartition
-             k double
-          end
-          
-           if iscell(Y)
-               Y_train = [Y{cv.training(k)}];
-               Y_test = [Y{cv.test(k)}];
-               k_train = cv.training(k);
-               train_idx = arrayfun(@(x) ones(size(Y{x})) * k_train(x),1:length(Y),'un',0);
-               train_idx = [train_idx{:}];
-               test_idx = ~train_idx;
-               
-           else
-               Y_train = Y(cv.training(k));
-               Y_test = Y(cv.test(k));
-               train_idx = cv.training(k);
-               test_idx = cv.test(k);
-           end
+       % CV_SPLIT  Extract train/test split for fold k. Delegates to MLPipeline.cvSplit.
+           [Y_train, Y_test, train_idx, test_idx] = MLPipeline.cvSplit(Y, cv, k);
        end
-       
-       function [new_group_idx,new_group_labels] = poolMetadataValues(group_idx, group_labels, classification_val)
-           arguments
-               group_idx double %Original group idx, corresponding to group_labels
-               group_labels string
-               classification_val string %Value(s) that are to be pooled (against)
-           end
-           clf_group_idx = find(contains(group_labels, classification_val));
-           new_group_idx = ismember(group_idx,clf_group_idx) * 1;%(group_idx == clf_group_idx) * 1;
-           new_group_labels(1) = join(group_labels(clf_group_idx),'/');
-           clf_group_idx = find(~ismember(group_labels, classification_val));
-           new_group_idx(new_group_idx == 0) = 2;
-           new_group_labels(2) = join(group_labels(clf_group_idx),'/');
+
+       function [new_group_idx, new_group_labels] = poolMetadataValues(group_idx, group_labels, classification_val)
+       % POOLMETADATAVALUES  Pool metadata values. Delegates to MLPipeline.poolMetadataValues.
+           [new_group_idx, new_group_labels] = MLPipeline.poolMetadataValues(group_idx, group_labels, classification_val);
        end
        
        function [reduction, cmap] = plot_cluster_outlines(reduction, cluster_idx, ax, plot_centroid, nodeSz, mapSz, sigma, cmap)
