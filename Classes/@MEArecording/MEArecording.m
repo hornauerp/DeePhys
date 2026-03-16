@@ -65,13 +65,14 @@ classdef MEArecording < handle
                obj MEArecording
                metadata struct
             end
-            
-            if isempty(fieldnames(metadata)) %Check if any metadata is provided
+
+            if isempty(fieldnames(metadata))
                 error("No metadata provided, cannot continue");
             elseif ~isfield(metadata,"InputPath")
                 error("Metadata does not provide InputPath, cannot continue");
-            elseif isfield(metadata,"LookupPath") && ~isempty(metadata.LookupPath)
-                if ~isfile(metadata.LookupPath)
+            elseif (isfield(metadata,"LookupPath") && ~isempty(metadata.LookupPath)) || ...
+                   (isfield(metadata,"MetadataTable") && istable(metadata.MetadataTable))
+                if isfield(metadata,"LookupPath") && ~isempty(metadata.LookupPath) && ~isfile(metadata.LookupPath)
                     error("LookUpPath does not link to a valid file path")
                 end
                 obj.Metadata = obj.retrieveMetadata(metadata);
@@ -80,9 +81,20 @@ classdef MEArecording < handle
                 obj.Metadata = metadata;
                 warning("Using provided metadata directly (no file import)")
             end
-            
-            if isfield(obj.Metadata,"RecordingDate") && ~isempty(obj.Metadata.RecordingDate) && isfield(obj.Metadata,"PlatingDate") && ~isempty(obj.Metadata.PlatingDate)
-               obj.Metadata.DIV = days(datetime(obj.Metadata.RecordingDate,"InputFormat","yyMMdd") - datetime(num2str(obj.Metadata.PlatingDate),"InputFormat","yyMMdd"));
+
+            % Compute DIV from dates if not already present
+            if isfield(obj.Metadata, 'DIV') && ~isempty(obj.Metadata.DIV) && ~ismissing(obj.Metadata.DIV)
+                return % DIV already set (e.g., from per-recording table)
+            end
+            if isfield(obj.Metadata,"RecordingDate") && ~isempty(obj.Metadata.RecordingDate) && ...
+               isfield(obj.Metadata,"PlatingDate") && ~isempty(obj.Metadata.PlatingDate)
+                rec_dt = parseDateRobust(obj.Metadata.RecordingDate);
+                plat_dt = parseDateRobust(obj.Metadata.PlatingDate);
+                if ~isnat(rec_dt) && ~isnat(plat_dt)
+                    obj.Metadata.DIV = days(rec_dt - plat_dt);
+                else
+                    warning('DeePhys:DIVComputation', 'Could not compute DIV from dates');
+                end
             end
         end
         
@@ -523,54 +535,183 @@ classdef MEArecording < handle
         end
         
         function metadata_struct = retrieveMetadata(metadata)
+        % RETRIEVEMETADATA  Look up metadata from a per-recording or condition-level table.
+        %
+        %   Supports two table formats (auto-detected):
+        %     Per-recording: has 'InputPath' column, one row per sorting path.
+        %     Condition-level (legacy): has 'Chip_IDs' column with comma-separated IDs.
+        %
+        %   Pass metadata.MetadataTable (a MATLAB table) to avoid re-reading
+        %   the xlsx on every call (recommended for parfor loops).
             arguments
                 metadata struct
-                % Needs to contain indices for the path part that represents (in that order) 
-                % metadata.PathPartIndex = [recording_date, plate_id, well_id]
             end
-            
-            metadata_struct = metadata;
-            path_parts = strsplit(metadata.InputPath,"/");
-            if ~isfield(metadata_struct,'RecordingDate')
-                recording_date = path_parts(metadata.PathPartIndex(1));
-                assert(~isnan(str2double(recording_date)),'Wrong PathPartIndex(1) / RecordingDate') %Check if recording date is a number
-                metadata_struct.RecordingDate = recording_date;
-            end
-            
-            if ~isfield(metadata_struct,'PlateID')
-                plate_id = path_parts(metadata.PathPartIndex(2));
-                plate_number = char(plate_id); 
-                plate_number = plate_number(end-2:end);
-                assert(~isnan(str2double(plate_number)),'Wrong PathPartIndex(2) / PlateID') %Check if recording date is a number
-            else
-                plate_id = metadata.PlateID;
-            end
-            
-            well_id = char(path_parts(metadata.PathPartIndex(3)));
-            well_id = well_id(end-1:end);
-            assert(~isnan(str2double(well_id)),'Wrong PathPartIndex(3) / WellID')
-            chip_id = plate_id + "_" + well_id;
-            metadata_struct.PlateID = plate_id;
-            metadata_struct.WellID = well_id;
-            metadata_struct.ChipID = chip_id;
 
-            info_table = readtable(metadata.LookupPath,"ReadVariableNames",true);
-            for ids = 1:size(info_table,1)
-                chip_ids = strtrim(string(strsplit(info_table.Chip_IDs{ids},",")));
-                if contains(chip_id,chip_ids)
-                    metadata_vars = string(info_table.Properties.VariableNames); 
-                    metadata_vars = metadata_vars(~contains(metadata_vars,"Chip_IDs"));%Exclude Chip_IDs
-                    for m = metadata_vars
-                        try
-                            metadata_struct.(m) = string(info_table.(m){ids});
-                        catch
-                            metadata_struct.(m) = info_table.(m)(ids);
+            metadata_struct = metadata;
+
+            % Read or reuse the lookup table
+            if isfield(metadata, 'MetadataTable') && istable(metadata.MetadataTable)
+                info_table = metadata.MetadataTable;
+            else
+                info_table = readtable(metadata.LookupPath, ...
+                    "ReadVariableNames", true, "TextType", "string");
+            end
+
+            col_names = string(info_table.Properties.VariableNames);
+            has_input_path = any(col_names == "InputPath");
+            has_chip_ids = any(col_names == "Chip_IDs");
+
+            if has_input_path
+                % === Per-recording format ===
+                % Normalize slashes for cross-platform matching
+                query_path = strrep(string(metadata.InputPath), "\", "/");
+                table_paths = strrep(string(info_table.InputPath), "\", "/");
+
+                row_idx = find(table_paths == query_path, 1);
+                if isempty(row_idx)
+                    % Fallback: try matching on trailing path segments
+                    for r = 1:height(info_table)
+                        if endsWith(query_path, table_paths(r)) || endsWith(table_paths(r), query_path)
+                            row_idx = r;
+                            break
                         end
                     end
-                    break
+                end
+
+                if isempty(row_idx)
+                    warning('DeePhys:noMetadataMatch', ...
+                        'No metadata row found for: %s', metadata.InputPath);
+                    return
+                end
+
+                % Copy all columns to metadata struct
+                for c = col_names
+                    if c == "InputPath"; continue; end
+                    val = info_table.(c)(row_idx);
+                    if iscell(val); val = val{1}; end
+                    metadata_struct.(c) = val;
+                end
+
+                % Derive ChipID from PlateID + WellID if not in table
+                if ~isfield(metadata_struct, 'ChipID') || metadata_struct.ChipID == ""
+                    if isfield(metadata_struct, 'PlateID') && isfield(metadata_struct, 'WellID')
+                        metadata_struct.ChipID = string(metadata_struct.PlateID) + "_" + string(metadata_struct.WellID);
+                    elseif isfield(metadata, 'PathPartIndex') && ~isempty(metadata.PathPartIndex)
+                        ids = MEArecording.extractPathIdentifiers(metadata.InputPath, metadata.PathPartIndex);
+                        metadata_struct.PlateID = ids.PlateID;
+                        metadata_struct.WellID = ids.WellID;
+                        metadata_struct.ChipID = ids.ChipID;
+                        if ~isfield(metadata_struct, 'RecordingDate') || metadata_struct.RecordingDate == ""
+                            metadata_struct.RecordingDate = ids.RecordingDate;
+                        end
+                    end
+                end
+
+            elseif has_chip_ids
+                % === Legacy condition-level format ===
+                if ~isfield(metadata, 'PathPartIndex') || isempty(metadata.PathPartIndex)
+                    error('DeePhys:missingPathPartIndex', ...
+                        'Condition-level lookup requires metadata.PathPartIndex = [date_idx, plate_idx, well_idx]');
+                end
+
+                ids = MEArecording.extractPathIdentifiers(metadata.InputPath, metadata.PathPartIndex);
+                metadata_struct.RecordingDate = ids.RecordingDate;
+                metadata_struct.PlateID = ids.PlateID;
+                metadata_struct.WellID = ids.WellID;
+                metadata_struct.ChipID = ids.ChipID;
+
+                % Find matching row by exact ChipID match in comma-separated list
+                match_row = [];
+                for r = 1:height(info_table)
+                    row_chips = strtrim(strsplit(string(info_table.Chip_IDs(r)), ","));
+                    if ismember(ids.ChipID, row_chips)
+                        if ~isempty(match_row)
+                            warning('DeePhys:multipleMetadataMatches', ...
+                                'ChipID "%s" matches multiple rows (rows %d and %d). Using first.', ...
+                                ids.ChipID, match_row, r);
+                        else
+                            match_row = r;
+                        end
+                    end
+                end
+
+                if isempty(match_row)
+                    warning('DeePhys:noMetadataMatch', ...
+                        'ChipID "%s" not found in lookup table.', ids.ChipID);
+                    return
+                end
+
+                % Copy all columns except Chip_IDs
+                for c = col_names(col_names ~= "Chip_IDs")
+                    val = info_table.(c)(match_row);
+                    if iscell(val); val = val{1}; end
+                    if isstring(val)
+                        metadata_struct.(c) = val;
+                    else
+                        metadata_struct.(c) = val;
+                    end
+                end
+            else
+                error('DeePhys:invalidLookupFormat', ...
+                    'Lookup table must have either an "InputPath" column (per-recording) or a "Chip_IDs" column (condition-level).');
+            end
+
+            % Remove internal-only fields from final metadata
+            internal_fields = ["MetadataTable"];
+            for f = internal_fields
+                if isfield(metadata_struct, f)
+                    metadata_struct = rmfield(metadata_struct, f);
                 end
             end
-            
+        end
+
+        function ids = extractPathIdentifiers(input_path, PathPartIndex)
+        % EXTRACTPATHIDENTIFIERS  Derive RecordingDate, PlateID, WellID, ChipID from a sorting path.
+        %
+        %   ids = MEArecording.extractPathIdentifiers(path, [date_idx, plate_idx, well_idx])
+        %
+        %   PathPartIndex values are 1-based indices into the path after splitting on '/'.
+        %   PlateID uses the full path segment. WellID extracts the last 2 characters.
+        %   ChipID = PlateID + "_" + WellID.
+            norm_path = strrep(string(input_path), "\", "/");
+            path_parts = strsplit(norm_path, "/");
+
+            % Recording date
+            if PathPartIndex(1) > length(path_parts)
+                error('DeePhys:badPathPartIndex', ...
+                    'PathPartIndex(1)=%d exceeds path depth (%d segments) for: %s', ...
+                    PathPartIndex(1), length(path_parts), input_path);
+            end
+            rec_date = string(path_parts(PathPartIndex(1)));
+            if isnan(str2double(rec_date))
+                error('DeePhys:badRecordingDate', ...
+                    'Path segment "%s" at index %d is not numeric (expected recording date) for: %s', ...
+                    rec_date, PathPartIndex(1), input_path);
+            end
+
+            % Plate ID
+            if PathPartIndex(2) > length(path_parts)
+                error('DeePhys:badPathPartIndex', ...
+                    'PathPartIndex(2)=%d exceeds path depth for: %s', PathPartIndex(2), input_path);
+            end
+            plate_id = string(path_parts(PathPartIndex(2)));
+
+            % Well ID — last 2 characters of the path segment
+            if PathPartIndex(3) > length(path_parts)
+                error('DeePhys:badPathPartIndex', ...
+                    'PathPartIndex(3)=%d exceeds path depth for: %s', PathPartIndex(3), input_path);
+            end
+            well_segment = char(path_parts(PathPartIndex(3)));
+            if length(well_segment) < 2
+                error('DeePhys:badWellID', ...
+                    'Well path segment "%s" is too short (need >= 2 chars) for: %s', well_segment, input_path);
+            end
+            well_id = string(well_segment(end-1:end));
+
+            ids.RecordingDate = rec_date;
+            ids.PlateID = plate_id;
+            ids.WellID = well_id;
+            ids.ChipID = plate_id + "_" + well_id;
         end
         
         function defaultParams = returnDefaultParams()

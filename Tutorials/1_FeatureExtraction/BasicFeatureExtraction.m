@@ -1,129 +1,143 @@
-% This tutorial shows how to perform the feature extraction from a list of
-% sortings that are stored in a phy-compatible format
+% BasicFeatureExtraction.m
+%
+% This tutorial shows how to perform feature extraction from a list of
+% Kilosort sorting outputs stored in phy-compatible format
 % (https://github.com/cortex-lab/phy).
+%
+% The pipeline reads spike_times.npy, spike_templates.npy, templates.npy,
+% channel_positions.npy, and params.py from each sorting directory, then
+% runs: QC -> unit generation -> activity/waveform features -> regularity ->
+% Catch22 -> burst detection -> connectivity (CCG + STTC) -> graph features.
+%
+% WHAT CHANGED (2026 refactor):
+%   - Metadata is now handled via a per-recording table instead of the old
+%     condition-level lookup with PathPartIndex path parsing. Use
+%     generateMetadataTable() to convert old-style lookup sheets.
+%   - The MetadataTable is pre-read once and passed via metadata struct,
+%     so parfor workers don't each re-read the xlsx from disk.
+%   - retrieveMetadata() now supports BOTH formats: per-recording
+%     (InputPath column) and legacy condition-level (Chip_IDs column).
+%   - Burst detection now supports 'logISI' method (Pasquale et al., 2010)
+%     in addition to the default 'ISIN' method.
+%   - New activity features: CV2, LV, LvR, Fano factor.
+%   - New waveform feature: HalfWidth.
+%   - New graph features: Modularity, SmallWorldness, rich club re-enabled.
+%   - Bombcell QC and Kilosort label filtering are available via parameters.
+%   - If the Database Toolbox is available, recordings are automatically
+%     registered in the RecordingDatabase during construction.
+%
+% OLD APPROACH (pre-refactor):
+%   metadata.LookupPath = 'cellline_lookup.xlsx';
+%   metadata.PathPartIndex = [8, 9, 10]; % indices into path segments
+%   % This relied on a specific folder naming convention where path
+%   % segments at fixed positions encoded RecordingDate, PlateID, WellID.
+%   % The lookup xlsx had one row per condition with a comma-separated
+%   % Chip_IDs column. This was fragile and error-prone.
 
+%% 0 - Setup
+% Add DeePhys to the path
+addpath(genpath("/path/to/DeePhys")) % CHANGE to your DeePhys root
 
-% This tutorial assumes that you are working with the dataset provided at
-% Zenodo (...). You will need to change paths etc. accordingly to work with
-% your own data.
+%% 1 - Generate sorting path list
+% Specify where your Kilosort outputs live. The path_logic uses wildcards
+% to match the subfolder structure.
 
-% This step will take some time, so if you want to play around with the
-% data immediately you can make use of the existing files and skip to the
-% next tutorials.
-
-% I would recommend to copy these scripts into a separate folder, where you
-% can change them without being overwritten if you pull a newer version of
-% DeePhys.
-
-% Specify the DeePhys root path
-addpath(genpath("/home/phornauer/Git/DeePhys"))
-
-% Or if your working directory is 1_FeatureExtraction we can also use a
-% relative path
-addpath(genpath("../../Functions"))
-addpath(genpath("../../Classes"))
-addpath(genpath("../../Toolboxes"))
-
-%% Generate sorting_path_list 
-% Next we need to specify the list of sortings for which we want to perform
-% the feature extraction. Ideally, you have stored your data in a way that
-% can make use of the 'generate_sorting_path_list' function. 
-
-% The idea of this function is to find all folders that contain spike sorting
-% output from a specified 'root_path'.
-root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/network/240610"; % INSERT YOUR OWN PATH HERE
-
-% The path_logic is then used to selectively include certain subfolders.
-% Each element in the cell array hereby represents one level in the folder
-% structure (i.e., one subfolder). 
-% Often, you will have similar folders with only slight differences
-% (e.g. recording dates or chip ids), which can be found in one
-% go by using the wildcard character *. 
-path_logic = {'T00*','Network','w*','sorter_output'}; 
+root_path = "/path/to/your/data"; % CHANGE
+path_logic = {'T00*', 'Network', 'w*', 'sorter_output'};
 
 sorting_path_list = generate_sorting_path_list(root_path, path_logic);
-fprintf("Generated %i sorting paths\n",length(sorting_path_list))
+fprintf("Generated %i sorting paths\n", length(sorting_path_list))
 
-% If your data is stored differently, you can also manually provide the
-% sorting_path_list as a list of strings.
+% If your data is stored differently, you can also provide sorting_path_list
+% as a plain string array:
+%   sorting_path_list = ["/path/to/sort1", "/path/to/sort2"];
 
-%% Set parameter values
-% Next, we need to specify the relevant parameters. The default values
-% should be a pretty good starting point, but you can adjust them here. To
-% get a description of all parameter values look at the
-% 'returnDefaultParams' function in the 'MEArecording' class.
+%% 2 - Prepare metadata
+% RECOMMENDED: per-recording metadata table (new approach).
+%
+% If you have an existing condition-level lookup sheet (one row per
+% genotype/treatment, Chip_IDs column), convert it first:
+
+condition_lookup = "/path/to/cellline_lookup.xlsx"; % CHANGE
+PathPartIndex = [6, 7, 9]; % [RecordingDate, PlateID, WellID] indices
+
+metadata_table = generateMetadataTable(sorting_path_list, condition_lookup, ...
+    PathPartIndex, 'OutputPath', 'recording_metadata.xlsx');
+
+% This creates recording_metadata.xlsx with one row per sorting path,
+% including all columns from the condition lookup plus InputPath,
+% RecordingDate, PlateID, WellID, ChipID, DIV.
+%
+% You can also create this table manually in Excel -- just make sure it has
+% an 'InputPath' column matching your sorting paths.
+
+% Point the metadata struct at the per-recording table
+metadata = struct();
+metadata.LookupPath = "recording_metadata.xlsx";
+
+% ALTERNATIVE: legacy approach (still supported, not recommended)
+%   metadata.LookupPath = condition_lookup;
+%   metadata.PathPartIndex = PathPartIndex;
+
+%% 3 - Set parameters
+% Default parameters work well for most cases. Here are the most commonly
+% adjusted ones. See MEArecording.returnDefaultParams() for the full list.
 
 emptyRec = MEArecording();
 params = emptyRec.returnDefaultParams();
 
-% Since we extract a variety of different features, we have a lot of
-% parameters. Several of those are, however, the defaults used by the
-% authors and should not need changing. Feel free to tinker with those as
-% well, also if they are not explicitly listed here.
+% QC thresholds
+params.QC.Amplitude             = [];         % [min max] uV, empty = skip
+params.QC.FiringRate            = [0.01 100]; % [min max] Hz
+params.QC.Axon                  = 0.8;        % amplitude ratio for axonal detection
+params.QC.Noise                 = 8;          % sign changes in waveform derivative
+params.QC.N_Units               = 10;         % minimum good units to proceed
 
-params.QC.Amplitude             = [];
-params.QC.FiringRate            = [0.01 100];
-params.QC.Axon                  = 0.8;
-params.QC.Noise                 = 8;
-params.QC.N_Units               = 10;
-params.Analyses.SingleCell      = 1;
-params.Analyses.Regularity      = 1;
-params.Analyses.Catch22         = 1;
-params.Analyses.Bursts          = 0; %For this tutorial we dont perform burst detection, as the cultures did not display network-wide synchronization
-% As the automated burst detection tries to find optimal parameters for the
-% burst detection even if none are present, performing burst analyses
-% without bursts being present MIGHT result in errors, so be careful!
-params.Analyses.Connectivity    = ["STTC","CCG"]; % Takes a LONG time if you have a lot of units
-params.Outlier.Method           = []; %No outlier removal
-params.Save.Flag                = 1; %Save individual MEArecordings to prevent data loss if the execution is interrupted
-params.Save.Overwrite           = true; 
+% Optional: Kilosort label pre-filter
+% params.QC.KSLabel.Enable      = true;
+% params.QC.KSLabel.AcceptedLabels = "good";  % or ["good", "mua"]
 
-%% Set up metadata
-metadata = struct();
+% Optional: Bombcell template-based QC
+% params.QC.Bombcell.Enable     = true;
+% params.QC.Bombcell.Path       = "/path/to/bombcell"; % if not on MATLAB path
 
-% This file provides the metadata necessary to identify/pool data later
-% during analysis. The files in the 'metadata' folder can serve as a
-% template, where you can add any other metadata information as a new
-% column. 
+% Analyses to run
+params.Analyses.SingleCell      = true;
+params.Analyses.Regularity      = true;
+params.Analyses.Catch22         = true;
+params.Analyses.Bursts          = true;        % set false if cultures dont burst
+params.Analyses.Connectivity    = ["STTC", "CCG"]; % takes a long time with many units
 
-% DONT CHANGE THE PlatingDate and Chip_IDs column headers when creating
-% your own metadata lookup file! All other names can be chosen freely.
-metadata.LookupPath = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Maxtwo/phornauer/iNeurons_dataset/metadata/iNeurons_batch1.xlsx"; % INSERT YOUR OWN PATH HERE
+% Outlier handling
+params.Outlier.Method           = [];          % [] = no outlier removal, "median" for robust
 
-% The 'path_part_idx' variable exists to extract important metadata from the sorting path.
-% Similarly to the previous function, this assumes that the sortings were
-% saved in a systematic fashion and that the file paths contain the
-% indicated information. The values should indicate the inidices after
-% splitting the sorting_path at every '/'. 
+% Saving
+params.Save.Flag                = true;        % save MEArecording.mat per sorting
+params.Save.Overwrite           = true;
 
-% To give you an example:
-path_parts = strsplit("/home/phornauer/iNeurons_dataset/network/240610/T002513/Network/well000/sorter_output",'/')
-% Now we only have to select the correct indices, in this example this would
-% be 6 for the recording date, 7 for the plate ID and 9 for the well ID.
+%% 4 - Run feature extraction
 
-%%
-% If this approach is not applicable for your data, you can also specify these
-% information separately for each recording by writing your own function or by doing it after the feature extraction.
-% However, I would strongly recommend to store your data in a way that
-% allows for this approach to work (also for a general ease of use).
+parallel = true; % uses parfor -- requires Parallel Computing Toolbox
 
-metadata.PathPartIndex = [];%insert indices you chose above [recording_date, plate_id, well_id]
-metadata.min_N_units = params.QC.N_Units; %Minimum number of spike-sorted units to perform feature extraction
-parallel = true; %Perform feature extraction in parallel, HIGHLY RECOMMENDED IF YOUR SERVER/MACHINE HAS ENOUGH RAM
+failed_sortings = generate_MEArecordings_from_sorting_list( ...
+    sorting_path_list, metadata, params, parallel);
 
-%% Run full loop
+fprintf("Failed: %d/%d sortings\n", length(failed_sortings), length(sorting_path_list))
 
-% This function performs the actual feature extraction and returns a list
-% of sortings for which it did not work. You can then run those again
-% without parallelization to obtain proper error messages/use breakpoints
-% to find out where things went wrong.
+%% 5 - Debug failed sortings (optional)
+% Re-runs failed sortings without parallelisation for proper error messages
+if ~isempty(failed_sortings)
+    check_failed_analysis(failed_sortings, metadata, params);
+end
 
-failed_sortings = generate_MEArecordings_from_sorting_list(sorting_path_list, metadata, params, parallel);
+%% 6 - Database registration (optional)
+% If you have the Database Toolbox, recordings are auto-registered during
+% construction. To backfill older recordings:
 
-%% (Hopefully) Optional: Find source of failed feature extractions
-check_failed_analysis(sorting_path_list, metadata, params);
+if RecordingDatabase.isAvailable()
+    db = RecordingDatabase.instance();
+    db.getSummary();
 
-% This is just a convenience functions that iterates through all failed
-% sortings to narrow down the source of the error.
-% Play around with inserting breakpoints in the MEArecording code and
-% hopefully you'll figure out the reason. 
+    % Or migrate existing recordings processed before the database existed:
+    % n = migrateExistingRecordings(sorting_path_list);
+end

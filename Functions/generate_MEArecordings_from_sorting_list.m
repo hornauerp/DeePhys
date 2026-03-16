@@ -23,6 +23,13 @@ prev_warn_state = warning('off', 'MATLAB:table:ModifiedAndSavedVarnames');
 cleanup_warnings = onCleanup(@() warning(prev_warn_state));
 failed_sortings = [];
 
+% Pre-read the lookup table once to avoid N redundant xlsx reads in parfor
+if isfield(metadata, 'LookupPath') && ~isempty(metadata.LookupPath) && ...
+   ~isfield(metadata, 'MetadataTable')
+    metadata.MetadataTable = readtable(metadata.LookupPath, ...
+        "ReadVariableNames", true, "TextType", "string");
+end
+
 if parallel
     parfor iPath = 1:length(sorting_path_list)
         md = metadata;
