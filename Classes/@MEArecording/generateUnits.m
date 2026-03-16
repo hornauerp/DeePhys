@@ -106,20 +106,20 @@
                end
 
                no_act_idx = arrayfun(@(x) isempty(x.ActivityFeatures),unit_array);
-               %If activity features were not computed (too few spikes), fill with zeros to prevent issues when tracking units
+               % Fill missing activity features with NaN (not 0) — downstream median imputation handles these
                act_features = Unit.returnFeatureNames("act");
-                empty_act_table = array2table(zeros(1,length(act_features)),'VariableNames',act_features);
+                empty_act_table = array2table(NaN(1,length(act_features)),'VariableNames',act_features);
                [unit_array(no_act_idx).ActivityFeatures] = deal(empty_act_table);
                if obj.Parameters.Analyses.Regularity
                    no_reg_idx = arrayfun(@(x) isempty(x.RegularityFeatures),unit_array);
                    reg_features = Unit.returnFeatureNames("reg");
-                   empty_reg_table = array2table(zeros(1,length(reg_features)),'VariableNames',reg_features);
+                   empty_reg_table = array2table(NaN(1,length(reg_features)),'VariableNames',reg_features);
                    [unit_array(no_reg_idx).RegularityFeatures] = deal(empty_reg_table);
                end
                if obj.Parameters.Analyses.Catch22
                    no_c22_idx = arrayfun(@(x) isempty(x.Catch22),unit_array);
                    c22_features = Unit.returnFeatureNames("c22");
-                   empty_c22_table = array2table(zeros(1,length(c22_features)),'VariableNames',"SC_" + c22_features);
+                   empty_c22_table = array2table(NaN(1,length(c22_features)),'VariableNames',"SC_" + c22_features);
                    [unit_array(no_c22_idx).Catch22] = deal(empty_c22_table);
                end
 

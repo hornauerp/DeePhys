@@ -94,7 +94,7 @@ classdef MLPipeline < handle
                             'OptimizeHyperparameters', hyperparams, 'Learners', t, ...
                             'HyperparameterOptimizationOptions', opt_opts);
                 end
-                train_acc = clf.HyperparameterOptimizationResults.MinObjective;
+                train_acc = 1 - clf.HyperparameterOptimizationResults.MinObjective;  % MinObjective is error rate → convert to accuracy
             else
                 switch alg
                     case 'svm'

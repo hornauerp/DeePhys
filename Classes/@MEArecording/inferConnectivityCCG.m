@@ -89,12 +89,13 @@
                    end
 
                    % --- Inhibitory connections ---
-                   sigpost_inh = min(cch(postbins)) < poissinv(alpha, mean(cch(prebins)));
+                   % Use max(prebins) as baseline, consistent with excitatory detection
+                   sigpost_inh = min(cch(postbins)) < poissinv(alpha, max(cch(prebins)));
                    if any(sig_inh(postbins)) && sigpost_inh
                        n_inh = n_inh + 1;
                        sig_con_inh(n_inh, :) = [refcellID, cell2ID];
                    end
-                   sigpre_inh = min(cchud(postbins)) < poissinv(alpha, mean(cchud(prebins)));
+                   sigpre_inh = min(cchud(postbins)) < poissinv(alpha, max(cchud(prebins)));
                    if any(sigud_inh(prebins)) && sigpre_inh
                        n_inh = n_inh + 1;
                        sig_con_inh(n_inh, :) = [cell2ID, refcellID];

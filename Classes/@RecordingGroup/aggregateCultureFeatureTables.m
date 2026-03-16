@@ -62,10 +62,13 @@ function [feature_table, culture_array, values] = aggregateCultureFeatureTables(
                             rec_table_array{iR} = iR_table;
                         end
                         if normalization == "baseline"
-                            norm_mat = arrayfun(@(x) rec_table_array{x}.Variables./rec_table_array{1}.Variables,1:length(rec_table_array),'un',0);
+                            baseline = rec_table_array{1}.Variables;
+                            % Replace zero baseline with NaN to avoid Inf on division
+                            baseline(baseline == 0) = NaN;
+                            norm_mat = arrayfun(@(x) rec_table_array{x}.Variables ./ baseline, 1:length(rec_table_array), 'un', 0);
                             norm_mat = [norm_mat{2:end}]; %2:end to omit initial 1
-                            norm_mat(isnan(norm_mat)) = 0;
-                            norm_mat(isinf(norm_mat)) = max(norm_mat(norm_mat < Inf),[],'all');
+                            % Leave NaN for downstream median imputation instead of replacing with arbitrary values
+                            norm_mat(isinf(norm_mat)) = NaN;
 
                             norm_table = [rec_table_array{2:end}]; %2:end to omit initial 1
                             norm_vars = norm_table.Properties.VariableNames;

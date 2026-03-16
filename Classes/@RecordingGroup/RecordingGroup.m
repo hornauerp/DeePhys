@@ -157,6 +157,77 @@ classdef RecordingGroup < handle
            defaultParams.Selection.Inclusion = {}; % Cell array of cell arrays with {fieldname, value}; empty = include all recordings
            defaultParams.Selection.Exclusion = {}; % Cell array of cell arrays with {fieldname, value} to exclude
        end
+
+       function rg = fromDatabase(filters, parameters)
+       % FROMDATABASE  Build a RecordingGroup by querying the recording database.
+       %
+       %   rg = RecordingGroup.fromDatabase()
+       %   rg = RecordingGroup.fromDatabase(struct('Mutation','WT'))
+       %   rg = RecordingGroup.fromDatabase(struct('Mutation','WT','DIV',[14 21]))
+       %
+       %   Queries the RecordingDatabase for recordings matching the given
+       %   filters, loads each MAT file, and constructs a RecordingGroup.
+       %   Filter fields correspond to queryRecordings name-value pairs:
+       %   Mutation, ChipID, PlateID, WellID, DIV, RecordingDate, Status, Analysis.
+           arguments
+               filters struct = struct()
+               parameters struct = struct()
+           end
+
+           if ~RecordingDatabase.isAvailable()
+               error('RecordingGroup:fromDatabase', ...
+                   'Database Toolbox is required for fromDatabase.');
+           end
+
+           db = RecordingDatabase.instance();
+
+           % Build name-value args from filter struct
+           query_args = {};
+           filter_fields = fieldnames(filters);
+           for i = 1:length(filter_fields)
+               query_args = [query_args, {filter_fields{i}, filters.(filter_fields{i})}]; %#ok<AGROW>
+           end
+
+           T = db.queryRecordings(query_args{:});
+
+           if isempty(T) || height(T) == 0
+               error('RecordingGroup:fromDatabase', ...
+                   'No recordings found matching the given filters.');
+           end
+
+           % Load MEArecording objects from their saved MAT files
+           rec_array = MEArecording.empty;
+           for i = 1:height(T)
+               input_path = char(T.input_path{i});
+               mat_candidates = {
+                   fullfile(input_path, 'MEArecording.mat')
+               };
+               loaded = false;
+               for c = 1:length(mat_candidates)
+                   if exist(mat_candidates{c}, 'file') == 2
+                       data = load(mat_candidates{c});
+                       if isfield(data, 'obj')
+                           rec_array(end+1) = data.obj; %#ok<AGROW>
+                           loaded = true;
+                           break
+                       end
+                   end
+               end
+               if ~loaded
+                   warning('RecordingGroup:fromDatabase', ...
+                       'Could not load MAT file for: %s', input_path);
+               end
+           end
+
+           if isempty(rec_array)
+               error('RecordingGroup:fromDatabase', ...
+                   'No recordings could be loaded from database results.');
+           end
+
+           rg = RecordingGroup(rec_array, parameters);
+           fprintf('fromDatabase: loaded %d/%d recordings from database query.\n', ...
+               length(rec_array), height(T));
+       end
        
        function aligned_wf = alignWaveforms(unit_array, target_sr)
        % ALIGNWAVEFORMS  Interpolate and trough-align reference waveforms.

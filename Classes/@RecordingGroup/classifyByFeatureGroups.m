@@ -17,7 +17,7 @@ function result = classifyByFeatureGroups(rg, level, alg, classification_var, po
                 N_hyper (1,1) double = 0 %If >0 do hyperparameter optimization
                 K_fold (1,1) double = -1 % number of K-fold CV
                 tolerance double = 1
-                cv_grouping string = "none" % "none" (standard), "recording", or "culture" — GroupedCV split level
+                cv_grouping string = "recording" % "none" (standard), "recording", or "culture" — GroupedCV split level
             end
 
             t_start = tic;

@@ -23,7 +23,7 @@ function result = regressionByFeatureGroups(rg, level, regression_var, stratific
                 error('Regression data missing')
             end
 
-            [~, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+            [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
             [rec_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, stratification_var, pooling_vals);
 
             if isempty(stratification_values)
@@ -33,7 +33,7 @@ function result = regressionByFeatureGroups(rg, level, regression_var, stratific
                     K_fold = length(rec_group_idx);
                 end
                 cv = cvpartition(rec_group_idx,'KFold',K_fold);
-                t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
+                t = templateTree('Surrogate','on','MinLeafSize',5,'NumVariablesToSample','auto');
 
                 % Compute regression values once before the fold loop
                 [reg_group_idx, group_labels_comb] = combineMetadataIndices(rg, object_group, regression_var, pooling_vals);
@@ -42,13 +42,14 @@ function result = regressionByFeatureGroups(rg, level, regression_var, stratific
                     true_value = str2double(true_value);
                 end
 
+                input_group = object_group;
+
                 for k = 1:K_fold
                     if level == "Unit"
                         error('Not yet implemented')
                     else
                         train_idx = cv.training(k);
                         test_idx = cv.test(k);
-                        input_group = object_group;
                         Y_train = true_value(train_idx);
                         Y_test = true_value(test_idx);
                     end
@@ -96,7 +97,7 @@ function result = regressionByFeatureGroups(rg, level, regression_var, stratific
                 [X_train, X_test] = prepareInputMatrix(rg, input_table, object_group, normalization_var, train_idx, test_idx);
                 Y_train = true_value(train_idx);
                 Y_test = true_value(test_idx);
-                t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all');
+                t = templateTree('Surrogate','on','MinLeafSize',5,'NumVariablesToSample','auto');
                 clf = fitrensemble(X_train, Y_train,'Method','Bag','NumLearningCycles',500,'Learners',t,'Options',statset('UseParallel',true));
                 Y_pred = predict(clf,X_test);
                 predImp = [];

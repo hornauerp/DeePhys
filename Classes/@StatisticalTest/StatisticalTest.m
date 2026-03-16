@@ -50,8 +50,8 @@ classdef StatisticalTest
             % Automatic test selection
             if options.test == "auto"
                 if length(g1) >= 8 && length(g2) >= 8
-                    [~, p_norm1] = kstest((g1 - mean(g1)) / std(g1));
-                    [~, p_norm2] = kstest((g2 - mean(g2)) / std(g2));
+                    [~, p_norm1] = lillietest(g1);
+                    [~, p_norm2] = lillietest(g2);
                     if p_norm1 > 0.05 && p_norm2 > 0.05
                         test_name = "ttest";
                     else
@@ -127,7 +127,7 @@ classdef StatisticalTest
                 for g = 1:n_groups
                     gv = values(group_labels == groups(g));
                     if length(gv) >= 8
-                        [~, p_ks] = kstest((gv - mean(gv)) / std(gv));
+                        [~, p_ks] = lillietest(gv);
                         if p_ks <= 0.05
                             all_normal = false;
                             break;
@@ -137,11 +137,10 @@ classdef StatisticalTest
                         break;
                     end
                 end
-                test_name = string(all_normal * "anova" + ~all_normal * "kruskalwallis");
-                if test_name == "0"
-                    test_name = "kruskalwallis";
-                elseif test_name == "1"
+                if all_normal
                     test_name = "anova";
+                else
+                    test_name = "kruskalwallis";
                 end
             else
                 test_name = options.test;
@@ -168,7 +167,12 @@ classdef StatisticalTest
                     idx = idx + 1;
                     g1 = values(group_labels == groups(i));
                     g2 = values(group_labels == groups(j));
-                    raw_ps(idx) = ranksum(g1, g2);
+                    % Match post-hoc test to omnibus: parametric ↔ parametric
+                    if test_name == "anova"
+                        [~, raw_ps(idx)] = ttest2(g1, g2);
+                    else
+                        raw_ps(idx) = ranksum(g1, g2);
+                    end
                     posthoc.Group1(idx) = string(groups(i));
                     posthoc.Group2(idx) = string(groups(j));
                     posthoc.p_raw(idx) = raw_ps(idx);
@@ -219,15 +223,38 @@ classdef StatisticalTest
                 options.alpha (1,1) double = 0.05
             end
 
+            % If pair_ids provided, align pre and post by matching IDs
+            if ~isempty(pair_ids)
+                assert(size(pair_ids, 1) == length(pre_values) || length(pair_ids) == 2*length(pre_values), ...
+                    'pair_ids must match the length of pre/post values or be [pre_ids; post_ids].');
+                % pair_ids is a column of identifiers for each pre/post observation
+                % Ensure ordering: match pre to post by shared ID
+                [unique_ids, ~, ic] = unique(pair_ids(1:length(pre_values)));
+                aligned_pre = NaN(length(unique_ids), 1);
+                aligned_post = NaN(length(unique_ids), 1);
+                for ip = 1:length(unique_ids)
+                    pre_match = find(pair_ids(1:length(pre_values)) == unique_ids(ip), 1);
+                    post_match = find(pair_ids(1:length(post_values)) == unique_ids(ip), 1);
+                    if ~isempty(pre_match) && ~isempty(post_match)
+                        aligned_pre(ip) = pre_values(pre_match);
+                        aligned_post(ip) = post_values(post_match);
+                    end
+                end
+                valid = ~isnan(aligned_pre) & ~isnan(aligned_post);
+                pre_values = aligned_pre(valid);
+                post_values = aligned_post(valid);
+            end
+
             assert(length(pre_values) == length(post_values), 'Pre and post must have same length.');
             diffs = post_values - pre_values;
 
             if options.test == "auto"
                 if length(diffs) >= 8
-                    [~, p_norm] = kstest((diffs - mean(diffs)) / std(diffs));
-                    test_name = string(p_norm > 0.05) * "ttest" + string(p_norm <= 0.05) * "signrank";
-                    if test_name == "1" || test_name == "0"
-                        test_name = "signrank"; % fallback
+                    [~, p_norm] = lillietest(diffs);
+                    if p_norm > 0.05
+                        test_name = "ttest";  % Normal distribution → parametric test
+                    else
+                        test_name = "signrank";  % Non-normal → non-parametric
                     end
                 else
                     test_name = "signrank";
@@ -287,8 +314,24 @@ classdef StatisticalTest
             result.lme = lme;
             result.anova_table = anova(lme);
             result.coefficients = lme.Coefficients;
-            result.R2_conditional = lme.Rsquared.Ordinary;
-            result.R2_marginal = lme.Rsquared.Adjusted;
+
+            % Nakagawa & Schielzeth (2013) R2 for mixed models
+            % Marginal R2: variance explained by fixed effects only
+            % Conditional R2: variance explained by fixed + random effects
+            vc = lme.covarianceParameters;
+            sigma2_resid = lme.MSE;  % residual variance
+            % Sum random-effect variances (each cell is a covariance matrix)
+            sigma2_random = 0;
+            for ivc = 1:length(vc)
+                sigma2_random = sigma2_random + sum(diag(vc{ivc}));
+            end
+            % Fixed-effect variance: var(X * beta)
+            X_fixed = designMatrix(lme, 'Fixed');
+            beta = fixedEffects(lme);
+            sigma2_fixed = var(X_fixed * beta);
+            sigma2_total = sigma2_fixed + sigma2_random + sigma2_resid;
+            result.R2_marginal = sigma2_fixed / sigma2_total;
+            result.R2_conditional = (sigma2_fixed + sigma2_random) / sigma2_total;
             result.formula = formula;
         end
 

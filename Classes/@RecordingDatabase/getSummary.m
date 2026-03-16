@@ -1,0 +1,102 @@
+function summary = getSummary(db)
+% GETSUMMARY  Print and return a summary of the recording registry.
+%
+%   summary = db.getSummary()
+%
+%   Prints to console:
+%     - Total recordings, total units
+%     - Recordings by mutation
+%     - Processing status breakdown
+%     - QC pass rates
+%
+%   Returns a struct with the aggregate data.
+
+    arguments
+        db RecordingDatabase
+    end
+
+    summary = struct();
+    if ~db.IsConnected
+        fprintf('RecordingDatabase: not connected.\n');
+        return
+    end
+
+    try
+        db.ensureConnected();
+
+        % Total recordings
+        row = fetch(db.Connection, "SELECT COUNT(*) AS cnt FROM recordings");
+        summary.TotalRecordings = row.cnt(1);
+
+        % Total units
+        row = fetch(db.Connection, "SELECT COUNT(*) AS cnt FROM units");
+        summary.TotalUnits = row.cnt(1);
+
+        % Total good units per recording (avg)
+        row = fetch(db.Connection, ...
+            "SELECT AVG(n_good_units) AS avg_units FROM recordings WHERE n_good_units > 0");
+        if ~isempty(row) && height(row) > 0
+            summary.AvgGoodUnits = row.avg_units(1);
+        else
+            summary.AvgGoodUnits = 0;
+        end
+
+        % By mutation
+        mut_table = fetch(db.Connection, ...
+            "SELECT mutation, COUNT(*) AS cnt FROM recordings GROUP BY mutation ORDER BY cnt DESC");
+        summary.ByMutation = mut_table;
+
+        % Processing status
+        status_table = fetch(db.Connection, [...
+            "SELECT analysis_name, status, COUNT(*) AS cnt " ...
+            "FROM processing_status GROUP BY analysis_name, status " ...
+            "ORDER BY analysis_name, status"]);
+        summary.ProcessingStatus = status_table;
+
+        % QC summary
+        qc_table = fetch(db.Connection, [...
+            "SELECT AVG(CAST(n_good_units AS REAL) / NULLIF(n_total_templates, 0)) AS avg_pass_rate, " ...
+            "AVG(n_good_units) AS avg_good, AVG(n_total_templates) AS avg_total " ...
+            "FROM qc_results"]);
+        summary.QCSummary = qc_table;
+
+        % Print
+        fprintf('\n=== RecordingDatabase Summary ===\n');
+        fprintf('  Database: %s\n', db.DBPath);
+        fprintf('  Recordings: %d\n', summary.TotalRecordings);
+        fprintf('  Units: %d\n', summary.TotalUnits);
+        fprintf('  Avg good units/recording: %.1f\n', summary.AvgGoodUnits);
+
+        if ~isempty(mut_table) && height(mut_table) > 0
+            fprintf('\n  By mutation:\n');
+            for i = 1:height(mut_table)
+                mut_name = mut_table.mutation{i};
+                if isempty(mut_name); mut_name = '<unset>'; end
+                fprintf('    %-20s %d\n', mut_name, mut_table.cnt(i));
+            end
+        end
+
+        if ~isempty(status_table) && height(status_table) > 0
+            fprintf('\n  Processing status:\n');
+            for i = 1:height(status_table)
+                fprintf('    %-25s %-12s %d\n', ...
+                    char(status_table.analysis_name(i)), ...
+                    char(status_table.status(i)), ...
+                    status_table.cnt(i));
+            end
+        end
+
+        if ~isempty(qc_table) && height(qc_table) > 0 && ~isnan(qc_table.avg_pass_rate(1))
+            fprintf('\n  QC pass rate: %.1f%% (avg %.0f/%0.f units)\n', ...
+                qc_table.avg_pass_rate(1) * 100, ...
+                qc_table.avg_good(1), ...
+                qc_table.avg_total(1));
+        end
+
+        fprintf('================================\n\n');
+
+    catch ME
+        warning('RecordingDatabase:summaryFailed', ...
+            'Could not generate summary: %s', ME.message);
+    end
+end

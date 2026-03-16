@@ -22,8 +22,10 @@ function [mlm_result_array, p_G, p_GxT, features] = runMLM(rg, network_features,
             p_G = nan(size(features));
             p_GxT = nan(size(features));
             for f = 1:length(features)
-                y = feat_mat(:,f); y(isnan(y) | isinf(y)) = 0;
-                tbl = table(y, str2double(grouping_val),subject_val,separation_val,'VariableNames',["y","Week","Subject",comparison_var]);
+                y = feat_mat(:,f); y(isinf(y)) = NaN;
+                % Remove rows with NaN for this feature (fitlme cannot handle NaN)
+                valid = ~isnan(y);
+                tbl = table(y(valid), str2double(grouping_val(valid)),subject_val(valid),separation_val(valid),'VariableNames',["y","Week","Subject",comparison_var]);
                 formula = ['y~ Week*', char(comparison_var), ' + (1|Subject)'];
                 lme = fitlme(tbl,formula,'FitMethod','REML','DummyVarCoding','effects');
                 mlm_result_array{f} = anova(lme,'DFMethod','satterthwaite');

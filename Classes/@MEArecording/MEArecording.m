@@ -46,7 +46,15 @@ classdef MEArecording < handle
             obj.parseMetadata(metadata);
             obj.parseRecordingInfo();
             obj.parseParameters(parameters);
+
+            % Register in database (after metadata + recording info are available)
+            obj.dbRegister();
+
             obj.performAnalyses();
+
+            % Post-analysis database updates (units, QC)
+            obj.dbPostAnalysis();
+
             obj.validate();
             obj.saveObject();
         end
@@ -166,29 +174,33 @@ classdef MEArecording < handle
         
         function performAnalyses(obj)
             if obj.Parameters.Analyses.SingleCell
-                obj.generateUnits();
+                obj.runTrackedAnalysis('generateUnits', @() obj.generateUnits());
                 if isempty(obj.Units)
                     return
                 end
-                obj.UnitFeatures = obj.aggregateSingleCellFeatures(obj.Units);
+                uf = obj.runTrackedAnalysis('aggregateSingleCellFeatures', ...
+                    @() obj.aggregateSingleCellFeatures(obj.Units));
+                obj.UnitFeatures = uf;
             end
-            
+
             if obj.Parameters.Analyses.Regularity
-                obj.getRegularity();
+                obj.runTrackedAnalysis('getRegularity', @() obj.getRegularity());
             end
-            
+
             if obj.Parameters.Analyses.Catch22
-                obj.NetworkFeatures.Catch22 = obj.runCatch22();
+                c22 = obj.runTrackedAnalysis('runCatch22', @() obj.runCatch22());
+                obj.NetworkFeatures.Catch22 = c22;
             end
-            
+
             if obj.Parameters.Analyses.Bursts
-                obj.getBurstStatistics();
+                obj.runTrackedAnalysis('getBurstStatistics', @() obj.getBurstStatistics());
             end
-            
+
             if ~isempty(obj.Parameters.Analyses.Connectivity)
-                obj.inferConnectivity(obj.Parameters.Analyses.Connectivity);
+                obj.runTrackedAnalysis('inferConnectivity', ...
+                    @() obj.inferConnectivity(obj.Parameters.Analyses.Connectivity));
                 if ~isempty(fields(obj.Connectivity))
-                    obj.inferGraphFeatures();
+                    obj.runTrackedAnalysis('inferGraphFeatures', @() obj.inferGraphFeatures());
                 end
             end
 
@@ -196,6 +208,72 @@ classdef MEArecording < handle
             obj.clearTemplateCache();
         end
         
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        % Database integration helpers
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+        function dbRegister(obj)
+        % DBREGISTER  Register this recording in the database (non-blocking).
+            try
+                if RecordingDatabase.isAvailable()
+                    db = RecordingDatabase.instance();
+                    db.registerRecording(obj);
+                end
+            catch ME
+                warning('MEArecording:dbRegister', '%s', ME.message);
+            end
+        end
+
+        function dbPostAnalysis(obj)
+        % DBPOSTANALYSIS  Update database after all analyses complete.
+            try
+                if RecordingDatabase.isAvailable()
+                    db = RecordingDatabase.instance();
+                    db.registerRecording(obj);  % Update unit counts
+                    db.updateQCResults(obj);
+                    db.registerUnits(obj);
+                end
+            catch ME
+                warning('MEArecording:dbPostAnalysis', '%s', ME.message);
+            end
+        end
+
+        function varargout = runTrackedAnalysis(obj, name, func)
+        % RUNTRACKEDANALYSIS  Execute an analysis step with database status tracking.
+        %   Wraps func() with 'running'/'completed'/'failed' status updates.
+        %   If the Database Toolbox is not available, simply runs the function.
+            db = [];
+            try
+                if RecordingDatabase.isAvailable()
+                    db = RecordingDatabase.instance();
+                end
+            catch
+            end
+
+            if ~isempty(db)
+                db.updateProcessingStatus(obj, name, 'running');
+            end
+
+            t0 = tic;
+            try
+                if nargout > 0
+                    [varargout{1:nargout}] = func();
+                else
+                    func();
+                end
+                elapsed = toc(t0);
+                if ~isempty(db)
+                    db.updateProcessingStatus(obj, name, 'completed', elapsed);
+                end
+            catch ME
+                elapsed = toc(t0);
+                if ~isempty(db)
+                    db.updateProcessingStatus(obj, name, 'failed', elapsed, string(ME.message));
+                end
+                rethrow(ME);
+            end
+        end
+
         function saveObject(obj)
             if obj.Parameters.Save.Flag
                 if isempty(obj.Parameters.Save.Path)
@@ -596,6 +674,10 @@ classdef MEArecording < handle
         end
 
         function acgs = get.ACGs(obj)
+            if ~isfield(obj.Connectivity, 'CCG') || ~isfield(obj.Connectivity.CCG, 'CCGs')
+                acgs = [];
+                return
+            end
             ccgs = obj.Connectivity.CCG.CCGs;
             acgs = nan(size(ccgs, [1 2]));
             for i = 1:size(ccgs, 2)
@@ -604,6 +686,10 @@ classdef MEArecording < handle
         end
 
         function acgs = get.FullACGs(obj)
+            if ~isfield(obj.Connectivity, 'FullCCG') || ~isfield(obj.Connectivity.FullCCG, 'CCGs')
+                acgs = [];
+                return
+            end
             ccgs = obj.Connectivity.FullCCG.CCGs;
             acgs = nan(size(ccgs, [1 2]));
             for i = 1:size(ccgs, 2)
@@ -681,42 +767,58 @@ classdef MEArecording < handle
        function Burst = detectBursts(obj, ops)
            arguments
                obj MEArecording
+               ops.method string = "ISIN"  % "ISIN" (Bakkum 2014) or "logISI" (Pasquale 2010)
                ops.N double = []
                ops.ISI_N double = []
                ops.merge_factor double = 0.5
                ops.plot_idx = false
            end
-           if isempty(ops.N) | isempty(ops.ISI_N)
-               if ~(isfield(obj.Bursts,'best_N') && isfield(obj.Bursts,'best_ISI_N'))
-                   try
-                       inferOptimalBurstParameters(obj, ops.plot_idx);
-                   catch
-                       obj.Bursts.best_N = NaN;
-                       obj.Bursts.best_ISI_N = NaN;
-                   end
-                   if isnan(obj.Bursts.best_N) %If no good parameters could be inferred
-                       obj.Bursts.T_start = [];
-                       obj.Bursts.T_end = [];
-                       return
-                   end
-               end
-               N = obj.Bursts.best_N;
-               ISI_N = obj.Bursts.best_ISI_N;
-           else
-               N = ops.N;
-               obj.Bursts.best_N = ops.N;
 
-               ISI_N = ops.ISI_N;
-               obj.Bursts.best_ISI_N = ISI_N;
+           if ops.method == "logISI"
+               % LogISI method: data-driven threshold from GMM on log(ISI)
+               Burst = detectBurstsLogISI(obj);
+               obj.Bursts.T_start = Burst.T_start;
+               obj.Bursts.T_end = Burst.T_end;
+               obj.Bursts.Method = "logISI";
+           else
+               % ISIN method (default): N spikes within ISI_N threshold
+               if isempty(ops.N) | isempty(ops.ISI_N)
+                   if ~(isfield(obj.Bursts,'best_N') && isfield(obj.Bursts,'best_ISI_N'))
+                       try
+                           inferOptimalBurstParameters(obj, ops.plot_idx);
+                       catch
+                           obj.Bursts.best_N = NaN;
+                           obj.Bursts.best_ISI_N = NaN;
+                       end
+                       if isnan(obj.Bursts.best_N)
+                           obj.Bursts.T_start = [];
+                           obj.Bursts.T_end = [];
+                           return
+                       end
+                   end
+                   N = obj.Bursts.best_N;
+                   ISI_N = obj.Bursts.best_ISI_N;
+               else
+                   N = ops.N;
+                   obj.Bursts.best_N = ops.N;
+                   ISI_N = ops.ISI_N;
+                   obj.Bursts.best_ISI_N = ISI_N;
+               end
+               Burst = detectBurstsISIN(obj, N, ISI_N);
+               obj.Bursts.T_start = Burst.T_start;
+               obj.Bursts.T_end = Burst.T_end;
+               obj.Bursts.Method = "ISIN";
            end
-           Burst = detectBurstsISIN(obj, N, ISI_N);
-           obj.Bursts.T_start = Burst.T_start;
-           obj.Bursts.T_end = Burst.T_end;
+
            obj.pruneBursts();
            obj.mergeBursts(ops.merge_factor);
-           
+
            if ops.plot_idx
-               obj.PlotBurstCheck(); title(sprintf("N=%i; ISI_N=%.3f, Units=%i",N,ISI_N,length(obj.Units)))
+               if ops.method == "logISI"
+                   obj.PlotBurstCheck(); title(sprintf("logISI, Units=%i", length(obj.Units)))
+               else
+                   obj.PlotBurstCheck(); title(sprintf("N=%i; ISI_N=%.3f, Units=%i", N, ISI_N, length(obj.Units)))
+               end
            end
        end
 
@@ -736,10 +838,11 @@ classdef MEArecording < handle
            N_bursts = length(Burst.T_start);
            IBI_merge = merge_factor * obj.Bursts.best_ISI_N;
            if N_bursts > 1
-               %            Merge bursts with too short IBIs (< IBI_merge)
-               short_burst_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1)> IBI_merge);
-               obj.Bursts.T_start = Burst.T_start([1 short_burst_idx+1]);
-               obj.Bursts.T_end = Burst.T_end([short_burst_idx length(Burst.T_end)]);
+               % Merge bursts separated by short IBIs (< IBI_merge).
+               % Indices where the inter-burst interval is long enough to keep bursts separate:
+               keep_separate_idx = find(Burst.T_start(2:end) - Burst.T_end(1:end-1) > IBI_merge);
+               obj.Bursts.T_start = Burst.T_start([1, keep_separate_idx + 1]);
+               obj.Bursts.T_end = Burst.T_end([keep_separate_idx, length(Burst.T_end)]);
                fprintf('Merged %i bursts\n', N_bursts - length(obj.Bursts.T_start))
            end
 
@@ -751,7 +854,7 @@ classdef MEArecording < handle
                ops.plot_s = 10
                ops.plot_idx = false
            end
-           act_table = obj.getUnitFeatures(obj.Units,"ActivityFeatures");
+           act_table = obj.getUnitFeatures("ActivityFeatures");
            tonic_ids = find((isoutlier(act_table.FiringRate,"ThresholdFactor",1) & act_table.FiringRate > median(act_table.FiringRate)) & ...
                act_table.CVInterSpikeInterval < mean(act_table.CVInterSpikeInterval));
            spike_times = obj.Spikes.Times;

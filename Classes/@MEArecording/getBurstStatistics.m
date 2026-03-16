@@ -6,17 +6,17 @@
            if isempty(obj.Bursts) %Burst detection was not performed
                detectBursts(obj, merge_factor=obj.Parameters.Bursts.MergeFactor);
            end
-           if length(obj.Bursts.T_start) < 3 %Not enough bursts were detected
-               Burst.MeanInterBurstInterval = 0;
-               Burst.BurstDuration = 0;
-               Burst.RiseTime = 0;
-               Burst.FallTime = 0;
-               Burst.PeakFR = 0;
-               Burst.StdFR = 0;
-               Burst.StdBurstDuration = 0;
-               Burst.StdInterBurstInterval = 0;
-               Burst.IntraFiringRate = 0;
-               Burst.InterFiringRate = 0;
+           if length(obj.Bursts.T_start) < 3 %Not enough bursts were detected — use NaN, not 0
+               Burst.MeanInterBurstInterval = NaN;
+               Burst.BurstDuration = NaN;
+               Burst.RiseTime = NaN;
+               Burst.FallTime = NaN;
+               Burst.PeakFR = NaN;
+               Burst.StdFR = NaN;
+               Burst.StdBurstDuration = NaN;
+               Burst.StdInterBurstInterval = NaN;
+               Burst.IntraFiringRate = NaN;
+               Burst.InterFiringRate = NaN;
            else
                IBIs = obj.Bursts.T_start(2:end) - obj.Bursts.T_end(1:end-1);
                BDs = obj.Bursts.T_end - obj.Bursts.T_start;
@@ -78,7 +78,7 @@
                    cellfun_input = cellfun(@(x) rmoutliers(x,obj.Parameters.Outlier.Method,'ThresholdFactor',obj.Parameters.Outlier.ThresholdFactor),...
                        cellfun_input,'un',0);
                end
-               feature_means = cellfun(@nanmedian, cellfun_input,'un',0);
+               feature_means = cellfun(@(x) median(x,'omitnan'), cellfun_input,'un',0);
 
                [Burst.MeanInterBurstInterval,...
                    Burst.BurstDuration,...

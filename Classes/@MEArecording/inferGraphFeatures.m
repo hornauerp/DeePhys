@@ -18,30 +18,18 @@
                  density = density_dir(con_mat);
                  clustering_coef = clustering_coef_bd(con_mat);
                  assortativity = assortativity_bin(con_mat,1);
-%                  rich_club = rich_club_bd(con_mat,5);
-                 nw_feat = ["Density","Assortativity"];%,"RichClub" + (1:5)];
-                 nw_val = [density, assortativity];%, rich_club];
+                 rich_club = rich_club_bd(con_mat, min(5, max(sum(con_mat ~= 0))));
+                 nw_feat = ["Density","Assortativity","RichClub" + (1:length(rich_club))];
+                 nw_val = [density, assortativity, rich_club];
 
              elseif isfield(obj.Connectivity.(alg(a)),"bu") %Binary undirected graphs
                  con_mat = obj.Connectivity.(alg(a)).bu;
                  density = density_und(con_mat);
-%                  XY = obj.RecordingInfo.ElectrodeCoordinates([obj.Units.ReferenceElectrode],:);
-%                  n = 1000;
-%                  tol = 1e-6;
-%                  [N,E] = rentian_scaling_2d(con_mat,XY,n,tol);
-%                  rm_idx = N == 0 | E == 0;
-%                  N(rm_idx) = []; E(rm_idx) = [];
-%                  try
-%                      [b,~] = robustfit(log10(N),log10(E));
-%                      rents_exponent = b(2,1);
-%                  catch
-rents_exponent = 0; % Placeholder: rentian_scaling_2d computation disabled above
-%                  end
                  clustering_coef = clustering_coef_bu(con_mat);
                  assortativity = assortativity_bin(con_mat,0);
-%                  rich_club = rich_club_bu(con_mat,5);
-                 nw_feat = ["Density","RentExponent","Assortativity"];%,"RichClub" + (1:5)];
-                 nw_val = [density, rents_exponent, assortativity];%, rich_club];
+                 rich_club = rich_club_bu(con_mat, min(5, max(sum(con_mat))));
+                 nw_feat = ["Density","Assortativity","RichClub" + (1:length(rich_club))];
+                 nw_val = [density, assortativity, rich_club];
 
              else
                  warning('MEArecording:inferGraphFeatures', ...
@@ -51,21 +39,48 @@ rents_exponent = 0; % Placeholder: rentian_scaling_2d computation disabled above
 
              global_efficiency = efficiency_bin(con_mat);
              local_efficiency = efficiency_bin(con_mat,1);
-%              [s,S] = motif3struct_bin(con_mat);
-%              s = s./nchoosek(length(con_mat),3); %Normalize
-%              S = S./(nchoosek(length(con_mat),3) - nchoosek(length(con_mat) - 1,3)); %Normalize
-%              [f,F] = motif3funct_bin(con_mat);
-%              f = f./nchoosek(length(con_mat),3); %Normalize
-%              F = F./(nchoosek(length(con_mat),3) - nchoosek(length(con_mat) - 1,3)); %Normalize
-             eigen_centrality = eigenvector_centrality_und(double(con_mat));
+
+             % Modularity (Louvain community detection)
+             try
+                 [~, Q_modularity] = community_louvain(con_mat);
+             catch
+                 Q_modularity = NaN;
+             end
+
+             % Small-worldness: sigma = (C/C_rand) / (L/L_rand)
+             % Using 20 random rewirings for comparison
+             n_rand = 20;
+             n_nodes = size(con_mat, 1);
+             if density > 0 && n_nodes >= 4
+                 C_real = mean(clustering_coef);
+                 L_real = charpath(distance_bin(con_mat));
+                 C_rand_vals = zeros(1, n_rand);
+                 L_rand_vals = zeros(1, n_rand);
+                 for ir = 1:n_rand
+                     rand_mat = randmio_und(double(con_mat ~= 0), 5);
+                     C_rand_vals(ir) = mean(clustering_coef_bu(rand_mat));
+                     L_rand_vals(ir) = charpath(distance_bin(rand_mat));
+                 end
+                 C_rand = mean(C_rand_vals);
+                 L_rand = mean(L_rand_vals);
+                 if C_rand > 0 && L_rand > 0
+                     small_worldness = (C_real / C_rand) / (L_real / L_rand);
+                 else
+                     small_worldness = NaN;
+                 end
+             else
+                 small_worldness = NaN;
+             end
+
+             eigen_centrality = eigenvector_centrality_und(double(con_mat ~= 0));
              betweenness = betweenness_bin(con_mat);
-             nw_feat = [nw_feat, "GlobalEfficiency"] + "_" + alg(a);%, "StructuralMotif" + (1:13), "FunctionalMotif" + (1:13)] + "_" + alg(a);
-             nw_val = [nw_val, global_efficiency];%, s', f'];
-             nw_val(isnan(nw_val) | isinf(nw_val)) = 0;
+             nw_feat = [nw_feat, "GlobalEfficiency", "Modularity", "SmallWorldness"] + "_" + alg(a);
+             nw_val = [nw_val, global_efficiency, Q_modularity, small_worldness];
+             nw_val(isinf(nw_val)) = NaN;
              nw_table = array2table(nw_val,"VariableNames",nw_feat);
              unit_feat = ["ClusteringCoefficient","LocalEfficiency","EigenCentrality","Betweenness"] + "_" + alg(a);%,"UnitStructuralMotif" + (1:13), "UnitFunctionalMotif" + (1:13)];
              unit_val = [clustering_coef, local_efficiency, eigen_centrality, betweenness'];%, S', F'];
-             unit_val(isnan(unit_val) | isinf(unit_val)) = 0;
+             unit_val(isinf(unit_val)) = NaN;
              unit_table = array2table(unit_val,"VariableNames",unit_feat);
              full_nw_table = [full_nw_table nw_table];
              full_unit_table = [full_unit_table unit_table];

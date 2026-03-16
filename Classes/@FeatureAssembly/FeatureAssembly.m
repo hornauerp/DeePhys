@@ -187,7 +187,7 @@ classdef FeatureAssembly
 
             aligned_wf = zeros(size(interp_wf));
             for j = 1:size(interp_wf, 2)
-                if j == rm_idx
+                if ismember(j, rm_idx)
                     aligned_wf(:, j) = interp_wf(:, j);
                 else
                     aligned_wf(:, j) = circshift(interp_wf(:, j), [shifts(j), 0]);

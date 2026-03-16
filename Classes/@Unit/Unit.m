@@ -46,7 +46,8 @@ classdef Unit < handle
         function feature_names = returnFeatureNames(feature_group)
             switch feature_group
                 case "act"
-                    feature_names = ["FiringRate","MeanInterSpikeInterval","VarianceInterSpikeInterval","CVInterSpikeInterval","PartialAutocorrelation"];
+                    feature_names = ["FiringRate","MeanInterSpikeInterval","VarianceInterSpikeInterval","CVInterSpikeInterval", ...
+                        "CV2InterSpikeInterval","LocalVariation","RevisedLocalVariation","FanoFactor","PartialAutocorrelation"];
                 case "reg"
                     feature_names = ["RegularityFrequency","RegularityMagnitude","RegularityFit"];
                 case "c22"
@@ -110,6 +111,7 @@ classdef Unit < handle
             unit.UnitParams.Catch22 = mearec.Parameters.Catch22;
             unit.UnitParams.CCG = mearec.Parameters.CCG;
             unit.UnitParams.Analyses = mearec.Parameters.Analyses;
+            unit.UnitParams.QC.RefractoryPeriod = mearec.Parameters.QC.RefractoryPeriod;
             unit.generateStableID();
             unit.inferActivityFeatures();
         end
@@ -172,6 +174,10 @@ classdef Unit < handle
         end
 
         function acg = get.FullACG(unit)
+            if isempty(unit.MEArecording) || ~isfield(unit.MEArecording.Connectivity, 'FullCCG')
+                acg = [];
+                return
+            end
             acg = unit.MEArecording.Connectivity.FullCCG.CCGs(:, unit.unitID, unit.unitID);
         end
 

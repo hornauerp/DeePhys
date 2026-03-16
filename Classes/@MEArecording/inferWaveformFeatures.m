@@ -57,6 +57,18 @@
                 decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout), 1, 'first'));
                 padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
                 unit_features.Decay = mean(slewrate(padded_decay,interpolation_factor));
+                % Half-width: duration at half-maximum trough amplitude (in ms)
+                half_amp = unit_trough_value(u) / 2;  % half of trough (negative)
+                wf = interp_wf_matrix(:, u);
+                above_half = wf < half_amp;  % samples below (more negative than) half-amplitude
+                if any(above_half)
+                    half_start = find(above_half, 1, 'first');
+                    half_end = find(above_half, 1, 'last');
+                    unit_features.HalfWidth = (half_end - half_start) / (obj.RecordingInfo.SamplingRate * interpolation_factor / 1000); % in ms
+                else
+                    unit_features.HalfWidth = NaN;
+                end
+
                 unit_features.Asymmetry = asymmetry_u;
                 unit_features.T2Pdelay = t2pdelay_u;
                 unit_features.T2Pratio = t2pratio_u;

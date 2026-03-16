@@ -14,6 +14,9 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
                grouping_values {isnumeric} = [7,14,21,28] %Only relevant for DimensionalityReduction on the culture level
                normalization string = [] %"scaled" or "baseline" or []
                tolerance {isnumeric} = 1 %Gives tolerance for culture selection by age (e.g. age=7 tolerance=1 allows DIVs 6-8)
+               umap_min_dist (1,1) double = 0.1 %UMAP min_dist parameter (default: 0.1)
+               umap_spread (1,1) double = 1.0 %UMAP spread parameter (default: 1.0)
+               umap_n_neighbors (1,1) double = 0 %UMAP n_neighbors (0 = auto-select based on level)
             end
 
             t_start = tic;
@@ -28,10 +31,10 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
                 if level == "Unit"
                     input_table = MEArecording.getUnitFeatures(object_group,unit_features);
                     object_group = [rg.Units];
-                    n_neighbors = 100;
+                    n_neighbors_auto = 15;
                 elseif level == "Recording"
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
-                    n_neighbors = 100;
+                    n_neighbors_auto = 15;
                 else
                     error('Unknown level')
                 end
@@ -39,10 +42,16 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
                 if level == "Unit"
                     object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);
                     object_group = [object_group{:}];
-                    n_neighbors = 100;
+                    n_neighbors_auto = 15;
                 else
-                    n_neighbors = 10;
+                    n_neighbors_auto = 10;
                 end
+            end
+            % Use user-specified n_neighbors if provided, otherwise auto-select
+            if umap_n_neighbors > 0
+                n_neighbors = umap_n_neighbors;
+            else
+                n_neighbors = n_neighbors_auto;
             end
 
             if ~isempty(feature_names)
@@ -57,8 +66,11 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
                 case "UMAP"
 
                     color_file = fullfile(rg.Recordings(1).getParentPath(),'umap','colorsByName.properties');
-                    [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data,'n_components',n_dims,'n_neighbors',n_neighbors,'min_dist',1,'cluster_detail','adaptive','spread',5,'sgd_tasks',20,...
-                        'verbose','none','color_file',color_file); %Torsten
+                    [reduction, umap, clusterIdentifiers, extras] = run_umap(norm_data, ...
+                        'n_components', n_dims, 'n_neighbors', n_neighbors, ...
+                        'min_dist', umap_min_dist, 'spread', umap_spread, ...
+                        'cluster_detail', 'adaptive', 'sgd_tasks', 20, ...
+                        'verbose', 'none', 'color_file', color_file);
                     rg.DimensionalityReduction.(level).(method).Graph = umap.search_graph;
 %                     [M,Q] = community_louvain(umap.search_graph, 0.2);
 %                     t = templateTree('Surrogate','on','MinLeafSize',1,'NumVariablesToSample','all','Reproducible',true);

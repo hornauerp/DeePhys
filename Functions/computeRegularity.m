@@ -19,6 +19,9 @@ function [frequency, magnitude, fit_coeff] = computeRegularity(binned_signal, bi
 
 NFFT = length(binned_signal);
 F = (0 : 1/NFFT : 1/2-1/NFFT) * (1/binning);
+% Apply Hanning window to reduce spectral leakage
+win = hanning(NFFT)';
+binned_signal = binned_signal .* win;
 TEMP = fft(binned_signal, NFFT);
 TEMP(1) = 0;
 freq_domain = abs(TEMP(1:floor(NFFT/2)));

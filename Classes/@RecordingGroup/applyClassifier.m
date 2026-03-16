@@ -34,9 +34,7 @@ function result = applyClassifier(rg, level, alg, classification_var, clf_poolin
                if level == "Unit"
                    object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);
                    object_group = [object_group{:}];
-               elseif level == "Recording"
-                   [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
-               else
+               elseif level ~= "Recording"
                    error('Unknown level')
                end
            end
