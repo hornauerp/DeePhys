@@ -3,129 +3,135 @@
             obj MEArecording
             ccg_type string = "CCG" %or "FullCCG"
            end
-           % Ensure the raw CCG is computed before attempting connection detection
-           if ~isfield(obj.Connectivity,ccg_type) || ~isfield(obj.Connectivity.(ccg_type),'CCGs')
-               fh = str2func("calculate" + ccg_type);
-               fh(obj);
-           end
+           % Compute CCG (single call — calculateCCG does not cache its results)
            fh = str2func("calculate" + ccg_type);
-           [ccgR1,tR] = fh(obj);
-           if size(ccgR1,2) < length(obj.Units) %Pad if the last unit(s) have no spikes
-               padded_ccg = zeros(size(ccgR1,1),length(obj.Units),length(obj.Units));
-               padded_ccg(:,1:size(ccgR1,2),1:size(ccgR1,2)) = ccgR1;
-               ccgR1 = padded_ccg;
-           end
-           binSize = obj.Parameters.CCG.BinSize; %.5ms
-           conv_w = obj.Parameters.CCG.Conv_w;  % 10ms window
-           alpha = obj.Parameters.CCG.Alpha; %high frequency cut off, must be .001 for causal p-value matrix
-%            Fs = 1/obj.RecordingInfo.SamplingRate;
+           [ccgR,tR] = fh(obj);
 
-           nCel=size(ccgR1,2);
-
-           ccgR = nan(size(ccgR1,1),nCel,nCel);
-           ccgR(:,1:size(ccgR1,2),1:size(ccgR1,2)) = ccgR1;
-
-           % get  CI for each CCG
-           Pval=nan(length(tR),nCel,nCel);
-           Pred=zeros(length(tR),nCel,nCel);
-           Bounds=zeros(size(ccgR,1),nCel,nCel);
-           sig_con = [];
-           sig_con_inh = [];
-
-           for refcellID=1:max(nCel)
-               for cell2ID=1:max(nCel)
-
-                   if(refcellID==cell2ID)
-                       continue;
-                   end
-
-                   cch=ccgR(:,refcellID,cell2ID);			% extract corresponding cross-correlation histogram vector
-
-                   [pvals,pred,~]=bz_cch_conv(cch,conv_w);
-                   % Store predicted values and pvalues for subsequent plotting
-                   Pred(:,refcellID,cell2ID)=pred;
-                   Pval(:,refcellID,cell2ID)=pvals(:);
-                   Pred(:,cell2ID,refcellID)=flipud(pred(:));
-                   Pval(:,cell2ID,refcellID)=flipud(pvals(:));
-
-                   % Calculate upper and lower limits with bonferonni correction
-                   % monosynaptic connection will be +/- 4 ms
-
-                   nBonf = round(.005/binSize)*2;
-                   hiBound=poissinv(1-alpha/nBonf,pred);
-                   loBound=poissinv(alpha/nBonf, pred);
-                   Bounds(:,refcellID,cell2ID,1)=hiBound;
-                   Bounds(:,refcellID,cell2ID,2)=loBound;
-
-                   Bounds(:,cell2ID,refcellID,1)=flipud(hiBound(:));
-                   Bounds(:,cell2ID,refcellID,2)=flipud(loBound(:));
-
-                   sig = cch>hiBound;
-                   sig_inh= cch < loBound;
-
-                   % Find if significant periods falls in monosynaptic window +/- 4ms
-                   prebins = round(length(cch)/2 - .0032/binSize):round(length(cch)/2);
-                   postbins = round(length(cch)/2 + .0008/binSize):round(length(cch)/2 + .004/binSize);
-                   cchud  = flipud(cch);
-                   sigud  = flipud(sig);
-                   sigud_inh=flipud(sig_inh);
-
-                   sigpost=max(cch(postbins))>poissinv(1-alpha,max(cch(prebins)));
-                   sigpre=max(cchud(postbins))>poissinv(1-alpha,max(cchud(prebins)));
-
-                   sigpost_inh=min(cch(postbins))<poissinv(alpha,mean(cch(prebins)));
-                   sigpre_inh=min(cchud(postbins))<poissinv(alpha,mean(cchud(prebins)));
-                   %check which is bigger
-                   if (any(sigud(prebins)) && sigpre)
-                       %test if causal is bigger than anti causal
-                       sig_con = [sig_con;cell2ID refcellID];
-                   end
-
-                   if (any(sig(postbins)) && sigpost)
-                       sig_con = [sig_con;refcellID cell2ID];
-                   end
-
-                   if (any(sigud_inh(prebins)) && sigpre_inh)
-                       %test if causal is bigger than anti causal
-                       sig_con_inh = [sig_con_inh;cell2ID refcellID];
-                   end
-                   if (any(sig_inh(postbins)) && sigpost_inh)
-                       sig_con_inh = [sig_con_inh;refcellID cell2ID];
-                   end
-               end
-
+           nCel = size(ccgR, 2);
+           if nCel < length(obj.Units)
+               padded_ccg = zeros(size(ccgR,1), length(obj.Units), length(obj.Units));
+               padded_ccg(:,1:nCel,1:nCel) = ccgR;
+               ccgR = padded_ccg;
+               nCel = length(obj.Units);
            end
 
-           sig_con=unique(sig_con,'rows');
-           sig_con_inh=unique(sig_con_inh, 'rows');
+           binSize = obj.Parameters.CCG.BinSize;
+           conv_w = obj.Parameters.CCG.Conv_w;
+           alpha = obj.Parameters.CCG.Alpha;
 
-           if(~isempty(sig_con))
-               ccg_vec=[];
-               for jj=1:size(sig_con,1)
-                   ccg_vec=[ccg_vec ccgR(:,sig_con(jj,1),sig_con(jj,2))];
+           nBins = size(ccgR, 1);
+           halfBin = round(nBins / 2);
+
+           % Monosynaptic window parameters (seconds)
+           bonf_window = 0.005;        % Bonferroni correction window
+           pre_start   = 0.0032;       % pre-synaptic window start offset
+           post_start  = 0.0008;       % post-synaptic window start offset
+           post_end    = 0.004;        % post-synaptic window end offset
+
+           % Pre-compute bin indices for monosynaptic window
+           nBonf    = round(bonf_window / binSize) * 2;
+           prebins  = round(halfBin - pre_start / binSize):halfBin;
+           postbins = round(halfBin + post_start / binSize):round(halfBin + post_end / binSize);
+
+           % Pre-allocate output arrays
+           Pval   = nan(nBins, nCel, nCel);
+           Pred   = zeros(nBins, nCel, nCel);
+           Bounds = zeros(nBins, nCel, nCel, 2);
+
+           % Pre-allocate connection lists (upper bound: each pair produces at most 2 connections)
+           n_pairs = nCel * (nCel - 1) / 2;
+           sig_con     = zeros(n_pairs * 2, 2);
+           sig_con_inh = zeros(n_pairs * 2, 2);
+           n_exc = 0;
+           n_inh = 0;
+
+           % Iterate upper triangle only — each pair's CCG gives both causal directions
+           for refcellID = 1:nCel
+               for cell2ID = (refcellID+1):nCel
+                   cch = ccgR(:, refcellID, cell2ID);
+                   cchud = flipud(cch);
+
+                   % Convolution-based prediction and p-values
+                   [pvals, pred, ~] = bz_cch_conv(cch, conv_w);
+
+                   % Store for both directions (symmetric via flip)
+                   Pred(:, refcellID, cell2ID) = pred;
+                   Pval(:, refcellID, cell2ID) = pvals(:);
+                   Pred(:, cell2ID, refcellID) = flipud(pred(:));
+                   Pval(:, cell2ID, refcellID) = flipud(pvals(:));
+
+                   % Bonferroni-corrected bounds
+                   hiBound = poissinv(1 - alpha / nBonf, pred);
+                   loBound = poissinv(alpha / nBonf, pred);
+                   Bounds(:, refcellID, cell2ID, 1) = hiBound;
+                   Bounds(:, refcellID, cell2ID, 2) = loBound;
+                   Bounds(:, cell2ID, refcellID, 1) = flipud(hiBound(:));
+                   Bounds(:, cell2ID, refcellID, 2) = flipud(loBound(:));
+
+                   % Significance masks
+                   sig      = cch > hiBound;
+                   sig_inh  = cch < loBound;
+                   sigud     = flipud(sig);
+                   sigud_inh = flipud(sig_inh);
+
+                   % --- Excitatory connections ---
+                   % Forward: ref → cell2 (post-synaptic peak in cch)
+                   sigpost = max(cch(postbins)) > poissinv(1 - alpha, max(cch(prebins)));
+                   if any(sig(postbins)) && sigpost
+                       n_exc = n_exc + 1;
+                       sig_con(n_exc, :) = [refcellID, cell2ID];
+                   end
+                   % Reverse: cell2 → ref (pre-synaptic peak = post-synaptic in flipped cch)
+                   sigpre = max(cchud(postbins)) > poissinv(1 - alpha, max(cchud(prebins)));
+                   if any(sigud(prebins)) && sigpre
+                       n_exc = n_exc + 1;
+                       sig_con(n_exc, :) = [cell2ID, refcellID];
+                   end
+
+                   % --- Inhibitory connections ---
+                   sigpost_inh = min(cch(postbins)) < poissinv(alpha, mean(cch(prebins)));
+                   if any(sig_inh(postbins)) && sigpost_inh
+                       n_inh = n_inh + 1;
+                       sig_con_inh(n_inh, :) = [refcellID, cell2ID];
+                   end
+                   sigpre_inh = min(cchud(postbins)) < poissinv(alpha, mean(cchud(prebins)));
+                   if any(sigud_inh(prebins)) && sigpre_inh
+                       n_inh = n_inh + 1;
+                       sig_con_inh(n_inh, :) = [cell2ID, refcellID];
+                   end
                end
+           end
+
+           % Trim pre-allocated arrays
+           sig_con     = sig_con(1:n_exc, :);
+           sig_con_inh = sig_con_inh(1:n_inh, :);
+
+           % Extract CCG vectors for significant connections (vectorized)
+           ccgR_2d = reshape(ccgR, nBins, []);  % nBins × (nCel*nCel)
+           if ~isempty(sig_con)
+               idx = sub2ind([nCel, nCel], sig_con(:,1), sig_con(:,2));
+               ccg_vec = ccgR_2d(:, idx);
            else
-               ccg_vec=[];
+               ccg_vec = [];
            end
 
-           if(~isempty(sig_con_inh))
-               ccg_vec_inh=[];
-               for jj=1:size(sig_con_inh,1)
-                   ccg_vec_inh=[ccg_vec_inh ccgR(:,sig_con_inh(jj,1),sig_con_inh(jj,2))];
-               end
+           if ~isempty(sig_con_inh)
+               idx_inh = sub2ind([nCel, nCel], sig_con_inh(:,1), sig_con_inh(:,2));
+               ccg_vec_inh = ccgR_2d(:, idx_inh);
            else
-               ccg_vec_inh=[];
+               ccg_vec_inh = [];
            end
+
            fprintf('Found %i excitatory and %i inhibitory connections\n', size(sig_con,1), size(sig_con_inh,1))
-           con_mat = zeros(size(ccgR,[2,3]));
-           for e = 1:size(sig_con,1)
-               con_mat(sig_con(e,1),sig_con(e,2)) = 1;
-           end
-           for i = 1:size(sig_con_inh,1)
-               con_mat(sig_con_inh(i,1),sig_con_inh(i,2)) = -1;
-           end
 
-%            silent_units = find(arrayfun(@(x) isempty(x.SpikeTimes),obj.Units));
+           % Build binary connection matrix
+           con_mat = zeros(nCel, nCel);
+           for e = 1:size(sig_con, 1)
+               con_mat(sig_con(e,1), sig_con(e,2)) = 1;
+           end
+           for i = 1:size(sig_con_inh, 1)
+               con_mat(sig_con_inh(i,1), sig_con_inh(i,2)) = -1;
+           end
 
            obj.Connectivity.(ccg_type).ExcitatoryConnection = sig_con;
            obj.Connectivity.(ccg_type).InhibitoryConnection = sig_con_inh;

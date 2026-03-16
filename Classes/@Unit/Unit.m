@@ -17,8 +17,9 @@ classdef Unit < handle
         GraphFeatures
         Catch22
         ACG
-        BombcellMetrics   % Struct: per-unit bombcell quality metrics
+        BombcellMetrics   % Table: per-unit bombcell quality metrics (BC_ prefixed columns)
         BombcellType      % Scalar: bombcell classification (0=noise, 1=good, 2=MUA)
+        KSLabel string    % Kilosort label from cluster_KSLabel.tsv ("good" or "mua")
     end
 
     properties (SetObservable = true)

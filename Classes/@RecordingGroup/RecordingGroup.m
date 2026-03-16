@@ -1158,18 +1158,8 @@ classdef RecordingGroup < handle
             axis tight
         end
         
-        function plot_group_feature_heatmap(rg, feature_names, separation_var, pooling_vals)
-            arguments
-                rg RecordingGroup
-                feature_names string
-                separation_var string
-                pooling_vals cell = {}
-                
-            end
-            % TODO
-        end
+        % plot_group_feature_heatmap — placeholder removed, implement when needed
 
-        % function 
         
         function plot_unit_cluster_features(rg, cluster_idx, feature_names, colors)
             % Plots box plots per cluster for the selected features

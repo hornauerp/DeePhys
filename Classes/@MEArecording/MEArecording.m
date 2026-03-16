@@ -18,6 +18,10 @@ classdef MEArecording < handle
         NumUnitClusters % Number of unit clusters
     end
 
+    properties (Access = private, Transient)
+        CachedTemplates  % Template matrix from templates.npy — not serialized, freed after construction
+    end
+
     properties (Dependent)
         ParentRecordingPath
         FullACGs
@@ -107,9 +111,45 @@ classdef MEArecording < handle
         end
         
         function template_matrix = getTemplateMatrix(obj)
-            template_matrix = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
+        % GETTEMPLATEMATRIX  Return template waveforms, caching on first load.
+        %   Reads templates.npy once and caches in a Transient property so
+        %   subsequent calls (e.g., generateWaveformMatrix + runBombcellQC)
+        %   don't re-read the same large NPY file from disk.
+            if isempty(obj.CachedTemplates)
+                obj.CachedTemplates = readNPY(fullfile(obj.Metadata.InputPath, "templates.npy"));
+            end
+            template_matrix = obj.CachedTemplates;
         end
-        
+
+        function clearTemplateCache(obj)
+        % CLEARTEMPLATECACHE  Free cached template matrix to reclaim memory.
+            obj.CachedTemplates = [];
+        end
+
+        function [ks_labels, cluster_ids] = getKSLabels(obj)
+        % GETKSLABELS  Load Kilosort labels from cluster_KSLabel.tsv.
+        %   Returns label strings and 0-indexed cluster IDs. Checks both
+        %   the sorting directory and its parent for the TSV file.
+            candidates = {
+                fullfile(obj.Metadata.InputPath, 'cluster_KSLabel.tsv')
+                fullfile(fileparts(obj.Metadata.InputPath), 'cluster_KSLabel.tsv')
+            };
+            tsv_path = '';
+            for c = 1:length(candidates)
+                if exist(candidates{c}, 'file') == 2
+                    tsv_path = candidates{c};
+                    break
+                end
+            end
+            if isempty(tsv_path)
+                error("DeePhys:noKSLabels", ...
+                    "cluster_KSLabel.tsv not found in %s or parent directory.", obj.Metadata.InputPath);
+            end
+            T = readtable(tsv_path, 'FileType', 'text', 'Delimiter', '\t');
+            cluster_ids = T.cluster_id;       % 0-indexed
+            ks_labels = string(T.KSLabel);
+        end
+
         function duration = getRecordingDuration(obj)
             duration = ceil(max(obj.Spikes.Times));
         end
@@ -151,6 +191,9 @@ classdef MEArecording < handle
                     obj.inferGraphFeatures();
                 end
             end
+
+            % Free cached template matrix — no longer needed after construction
+            obj.clearTemplateCache();
         end
         
         function saveObject(obj)
@@ -187,13 +230,28 @@ classdef MEArecording < handle
             [max_amplitudes, max_idx] = min(template_matrix,[],[2,3],'linear');
             max_amplitudes = abs(max_amplitudes * obj.Parameters.QC.LSB);
             [~,~,reference_electrode] = ind2sub(size(template_matrix),max_idx);
-            peak_wf = arrayfun(@(x) template_matrix(x,:,reference_electrode(x)),1:length(reference_electrode),'un',0);
-            peak_wf_matrix = cat(1,peak_wf{:})';
-            norm_wf_matrix = peak_wf_matrix./max(abs(peak_wf_matrix));
+
+            % Vectorized peak waveform extraction: use sub2ind to index directly
+            % instead of arrayfun + cell-to-array conversion
+            n_templates = size(template_matrix, 1);
+            n_samples = size(template_matrix, 2);
+            template_idx = (1:n_templates)';
+            % Build linear indices for template_matrix(u, :, reference_electrode(u))
+            % for all u simultaneously
+            sample_idx = repmat(1:n_samples, n_templates, 1);        % n_templates × n_samples
+            tmpl_idx   = repmat(template_idx, 1, n_samples);         % n_templates × n_samples
+            chan_idx    = repmat(reference_electrode(:), 1, n_samples); % n_templates × n_samples
+            lin_idx = sub2ind(size(template_matrix), tmpl_idx, sample_idx, chan_idx);
+            peak_wf_matrix = template_matrix(lin_idx)';  % n_samples × n_templates
+            norm_wf_matrix = peak_wf_matrix ./ max(abs(peak_wf_matrix));
         end
         
         function [firing_rates, unit_spike_times] = calculateFiringRates(obj, N_units)
-            [spike_times, spike_units] = obj.getSpikeTimes();
+        % CALCULATEFIRINGRATES  Compute per-unit firing rates from cached spike data.
+        %   Uses obj.Spikes (loaded during parseRecordingInfo) instead of
+        %   re-reading spike_times.npy and spike_templates.npy from disk.
+            spike_times = obj.Spikes.Times;
+            spike_units = obj.Spikes.Units;
             unit_spike_times = arrayfun(@(x) spike_times(spike_units == x), 1:N_units,'un',0);
             firing_rates = cellfun(@length, unit_spike_times)/obj.RecordingInfo.Duration;
         end
@@ -463,6 +521,10 @@ classdef MEArecording < handle
             defaultParams.QC.N_Units = 10; % Minimum number of units that need to pass the QC to continue with the analysis
             defaultParams.QC.GoodUnits = []; % Units to keep if some previous analyses already determined good units IDs (e.g. manual curation, KS good units)
                                              % Skips the actual QC if not empty
+
+            % Kilosort label pre-filter (reads cluster_KSLabel.tsv)
+            defaultParams.QC.KSLabel.Enable = false;         % Set true to pre-filter by Kilosort labels
+            defaultParams.QC.KSLabel.AcceptedLabels = "good"; % Labels to keep: "good", ["good","mua"], etc.
 
             % Bombcell integration (template-based QC — no raw recording required)
             defaultParams.QC.Bombcell.Enable = false;          % Set true to run bombcell QC
@@ -977,9 +1039,9 @@ classdef MEArecording < handle
            spike_times = readNPY(fullfile(obj.ParentRecordingPath,'spike_times.npy'));
            spike_templates = readNPY(fullfile(obj.ParentRecordingPath,'spike_templates.npy'));
            good_ids = [obj.Units.TemplateID];
-           spike_times = double(spike_times(ismember(spike_templates,good_ids)))/obj.RecordingInfo.SamplingRate;
-           spike_templates = spike_templates(ismember(spike_templates,good_ids));
-           spike_templates = findgroups(spike_templates);
+           keep = ismember(spike_templates, good_ids);
+           spike_times = double(spike_times(keep)) / obj.RecordingInfo.SamplingRate;
+           spike_templates = findgroups(spike_templates(keep));
 
            [ccgs,t] = CCG(spike_times,spike_templates,'Fs',(1/obj.RecordingInfo.SamplingRate),'binsize',args.binsize,'duration',args.duration);
            obj.Connectivity.FullCCG.CCGs = ccgs;

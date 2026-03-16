@@ -8,8 +8,37 @@
                [bombcell_metrics, bombcell_types] = obj.runBombcellQC(reference_electrode);
            end
 
+           % Check if KS label filtering is requested
+           use_ks = isfield(obj.Parameters.QC, 'KSLabel') && obj.Parameters.QC.KSLabel.Enable;
+           ks_labels = string.empty; ks_ids = [];
+           if use_ks
+               try
+                   [ks_labels, ks_ids] = obj.getKSLabels();
+               catch ME
+                   warning("DeePhys:ksLabelLoad", "Could not load KSLabels: %s", ME.message);
+                   use_ks = false;
+               end
+           end
+
            if isempty(obj.Parameters.QC.GoodUnits)
                good_units = performUnitQC(obj, max_amplitudes, firing_rates', unit_spike_times', norm_wf_matrix);
+
+               % Apply Kilosort label filter
+               if use_ks
+                   n_templates = length(max_amplitudes);
+                   ks_pass = false(n_templates, 1);
+                   accepted_labels = string(obj.Parameters.QC.KSLabel.AcceptedLabels);
+                   for k = 1:length(ks_ids)
+                       tid = ks_ids(k) + 1; % 0-indexed -> 1-indexed
+                       if tid >= 1 && tid <= n_templates
+                           ks_pass(tid) = ismember(ks_labels(k), accepted_labels);
+                       end
+                   end
+                   n_before = sum(good_units);
+                   good_units = good_units & ks_pass;
+                   fprintf('KSLabel filter kept %s units: %d -> %d\n', ...
+                       strjoin(accepted_labels, "/"), n_before, sum(good_units))
+               end
 
                % Apply bombcell filter: reject units bombcell classifies as unacceptable
                if run_bombcell && obj.Parameters.QC.Bombcell.FilterUnits
@@ -41,6 +70,17 @@
                for u = 1:length(waveform_features)
                    unit_array(u) = Unit(obj, good_wf_matrix(:,u), good_reference_electrodes(u), good_unit_spike_times{u}, waveform_features{u});
                    unit_array(u).TemplateID = good_template_ids(u);
+               end
+
+               % Store Kilosort labels on each unit
+               if use_ks
+                   for u = 1:length(unit_array)
+                       tid_0 = good_template_ids(u) - 1; % 1-indexed -> 0-indexed for lookup
+                       match = find(ks_ids == tid_0, 1);
+                       if ~isempty(match)
+                           unit_array(u).KSLabel = ks_labels(match);
+                       end
+                   end
                end
 
                % Store bombcell metrics as feature table on each unit

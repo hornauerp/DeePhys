@@ -41,8 +41,9 @@ function [qMetric, unitType] = runBombcellQC(obj, reference_electrodes)
     n_units = size(templateWaveforms, 1);
     spike_width = size(templateWaveforms, 2);
 
-    % Load spike data
-    [spike_times, spike_units] = obj.getSpikeTimes();
+    % Use cached spike data (loaded during parseRecordingInfo) instead of re-reading NPY files
+    spike_times = obj.Spikes.Times;
+    spike_units = obj.Spikes.Units;
 
     % Load per-spike amplitudes if available
     amp_path = fullfile(obj.Metadata.InputPath, 'amplitudes.npy');
@@ -80,10 +81,16 @@ function [qMetric, unitType] = runBombcellQC(obj, reference_electrodes)
         qMetric.(metric_fields{f}) = NaN(n_units, 1);
     end
 
+    % Pre-compute per-unit spike times and amplitudes once (avoids O(n_spikes)
+    % scan per unit in the loop below)
+    unit_spike_cells = accumarray(spike_units, (1:length(spike_units))', [n_units, 1], @(idx) {spike_times(idx)}, {zeros(0,1)});
+    if has_amplitudes
+        unit_amp_cells = accumarray(spike_units, (1:length(spike_units))', [n_units, 1], @(idx) {all_amplitudes(idx)}, {zeros(0,1)});
+    end
+
     % --- Compute per-unit metrics ---
     for u = 1:n_units
-        unit_mask = spike_units == u;
-        theseSpikeTimes = spike_times(unit_mask);
+        theseSpikeTimes = unit_spike_cells{u};
         n_spikes = length(theseSpikeTimes);
 
         % Spike count (always available)
@@ -95,7 +102,7 @@ function [qMetric, unitType] = runBombcellQC(obj, reference_electrodes)
 
         % Per-spike amplitudes
         if has_amplitudes
-            theseAmplitudes = all_amplitudes(unit_mask);
+            theseAmplitudes = unit_amp_cells{u};
         else
             theseAmplitudes = ones(n_spikes, 1);
         end
