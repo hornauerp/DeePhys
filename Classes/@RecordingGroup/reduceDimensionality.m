@@ -16,7 +16,8 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
                tolerance {isnumeric} = 1 %Gives tolerance for culture selection by age (e.g. age=7 tolerance=1 allows DIVs 6-8)
             end
 
-%             fprintf('Performing %s dimensionality reduction on %ss and normalizing by %s\n', method, level, grouping_var)
+            t_start = tic;
+
             if isempty(grouping_var) %Get group indices for stratification
                 object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
             else
@@ -97,4 +98,10 @@ function [reduction, input_table] = reduceDimensionality(rg, level, method, n_di
             rg.DimensionalityReduction.(level).(method).UnitFeatures = unit_features;
             rg.DimensionalityReduction.(level).(method).NetworkFeatures = network_features;
             rg.DimensionalityReduction.(level).ObjectGroup = object_group;
+
+            % Log the analysis
+            elapsed = toc(t_start);
+            AnalysisLog.instance().add('reduceDimensionality', ...
+                struct('level', level, 'method', method, 'n_dims', n_dims), ...
+                sprintf('%d objects, %s', size(reduction, 1), method), elapsed);
 end

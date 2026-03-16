@@ -43,6 +43,7 @@ classdef MEArecording < handle
             obj.parseRecordingInfo();
             obj.parseParameters(parameters);
             obj.performAnalyses();
+            obj.validate();
             obj.saveObject();
         end
 
@@ -289,7 +290,12 @@ classdef MEArecording < handle
                 unit_array Unit = [obj.Units]
                 features string = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22"];%,"GraphFeatures"]
             end
-            
+
+            % Auto-include BombcellMetrics if available on units
+            if ~isempty(unit_array) && ~isempty(unit_array(1).BombcellMetrics) && ~any(features == "BombcellMetrics")
+                features = [features, "BombcellMetrics"];
+            end
+
             for f = 1:length(features)
                 if length(unit_array) > 1
                     feature_table = vertcat(unit_array.(features(f)));
@@ -457,6 +463,13 @@ classdef MEArecording < handle
             defaultParams.QC.N_Units = 10; % Minimum number of units that need to pass the QC to continue with the analysis
             defaultParams.QC.GoodUnits = []; % Units to keep if some previous analyses already determined good units IDs (e.g. manual curation, KS good units)
                                              % Skips the actual QC if not empty
+
+            % Bombcell integration (template-based QC — no raw recording required)
+            defaultParams.QC.Bombcell.Enable = false;          % Set true to run bombcell QC
+            defaultParams.QC.Bombcell.Path = '';                % Path to bombcell package; empty = assume on MATLAB path
+            defaultParams.QC.Bombcell.FilterUnits = true;       % Use bombcell classification to filter units
+            defaultParams.QC.Bombcell.AcceptedTypes = [1, 2];   % Unit types to keep: 1=good, 2=MUA, 3=non-somatic good, 4=non-somatic MUA
+            defaultParams.QC.Bombcell.Overrides = struct();     % Override any bombcell param field (e.g. struct('maxRPVviolations', 0.05))
             
             % Parameters for the burst detection
             defaultParams.Bursts.MergeFactor = 0.5; %Bursts with an IBI of MergeFactor * best_ISI_N will be merged

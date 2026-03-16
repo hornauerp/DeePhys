@@ -30,6 +30,10 @@ classdef FeatureAssembly
             end
             if isa(obj, 'MEArecording')
                 unit_array = [obj.Units];
+                % Auto-include BombcellMetrics if available
+                if ~isempty(unit_array) && ~isempty(unit_array(1).BombcellMetrics) && ~any(unit_features == "BombcellMetrics")
+                    unit_features = [unit_features, "BombcellMetrics"];
+                end
             elseif isa(obj, 'Unit')
                 unit_array = obj;
             else

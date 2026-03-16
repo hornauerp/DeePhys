@@ -15,6 +15,8 @@ function result = predictAge(rg, level, alg, stratification_var, stratification_
                 K_fold (1,1) double = 5 % number of K-fold CV
             end
 
+            t_start = tic;
+
             if any(arrayfun(@(x) ~isfield(rg.Recordings(x).Metadata,"DIV"),1:length(rg.Recordings)))
                 error('Age data missing')
             end
@@ -120,4 +122,12 @@ function result = predictAge(rg, level, alg, stratification_var, stratification_
             end
 
             rg.Regression.DIV = result;
+
+            % Log the analysis
+            elapsed = toc(t_start);
+            summary_metrics = RegressionResult.summarizeFolds(result);
+            AnalysisLog.instance().add('predictAge', ...
+                struct('level', level, 'K_fold', K_fold), ...
+                sprintf('R2=%.3f, Corr=%.3f', summary_metrics.mean_R2, summary_metrics.mean_Correlation), ...
+                elapsed);
 end

@@ -17,6 +17,8 @@ classdef Unit < handle
         GraphFeatures
         Catch22
         ACG
+        BombcellMetrics   % Struct: per-unit bombcell quality metrics
+        BombcellType      % Scalar: bombcell classification (0=noise, 1=good, 2=MUA)
     end
 
     properties (SetObservable = true)
@@ -48,6 +50,12 @@ classdef Unit < handle
                     feature_names = ["RegularityFrequency","RegularityMagnitude","RegularityFit"];
                 case "c22"
                     feature_names = string(GetAllFeatureNames());
+                case "bc"
+                    feature_names = ["BC_nPeaks","BC_nTroughs","BC_waveformDuration", ...
+                        "BC_mainPeakToTroughRatio","BC_peak1ToPeak2Ratio", ...
+                        "BC_scndPeakToTroughRatio","BC_troughToPeak2Ratio", ...
+                        "BC_waveformBaselineFlatness","BC_spatialDecaySlope", ...
+                        "BC_fractionRPVs","BC_presenceRatio","BC_percSpikesMissing"];
             end
         end
 

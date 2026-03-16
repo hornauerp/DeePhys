@@ -2,9 +2,25 @@
            [max_amplitudes, reference_electrode, norm_wf_matrix] = obj.generateWaveformMatrix();
            [firing_rates, unit_spike_times] = obj.calculateFiringRates(length(max_amplitudes));
 
+           % Run bombcell QC on all templates (before filtering)
+           run_bombcell = isfield(obj.Parameters.QC, 'Bombcell') && obj.Parameters.QC.Bombcell.Enable;
+           if run_bombcell
+               [bombcell_metrics, bombcell_types] = obj.runBombcellQC(reference_electrode);
+           end
 
            if isempty(obj.Parameters.QC.GoodUnits)
                good_units = performUnitQC(obj, max_amplitudes, firing_rates', unit_spike_times', norm_wf_matrix);
+
+               % Apply bombcell filter: reject units bombcell classifies as unacceptable
+               if run_bombcell && obj.Parameters.QC.Bombcell.FilterUnits
+                   accepted = obj.Parameters.QC.Bombcell.AcceptedTypes;
+                   bombcell_pass = ismember(bombcell_types, accepted);
+                   n_before = sum(good_units);
+                   good_units = good_units & bombcell_pass(:);
+                   fprintf('Bombcell filtered %d additional units (%d -> %d)\n', ...
+                       n_before - sum(good_units), n_before, sum(good_units))
+               end
+
                obj.Parameters.QC.GoodUnits = good_units;
            else
                good_units = obj.Parameters.QC.GoodUnits;
@@ -26,6 +42,29 @@
                    unit_array(u) = Unit(obj, good_wf_matrix(:,u), good_reference_electrodes(u), good_unit_spike_times{u}, waveform_features{u});
                    unit_array(u).TemplateID = good_template_ids(u);
                end
+
+               % Store bombcell metrics as feature table on each unit
+               if run_bombcell
+                   bc_names = Unit.returnFeatureNames("bc");
+                   for u = 1:length(unit_array)
+                       tid = good_template_ids(u);
+                       bc_vals = [bombcell_metrics.nPeaks(tid), ...
+                                  bombcell_metrics.nTroughs(tid), ...
+                                  bombcell_metrics.waveformDuration_peakTrough(tid), ...
+                                  bombcell_metrics.mainPeakToTroughRatio(tid), ...
+                                  bombcell_metrics.peak1ToPeak2Ratio(tid), ...
+                                  bombcell_metrics.scndPeakToTroughRatio(tid), ...
+                                  bombcell_metrics.troughToPeak2Ratio(tid), ...
+                                  bombcell_metrics.waveformBaselineFlatness(tid), ...
+                                  bombcell_metrics.spatialDecaySlope(tid), ...
+                                  bombcell_metrics.fractionRPVs_estimatedTauR(tid), ...
+                                  bombcell_metrics.presenceRatio(tid), ...
+                                  bombcell_metrics.percentageSpikesMissing_gaussian(tid)];
+                       unit_array(u).BombcellMetrics = array2table(bc_vals, 'VariableNames', bc_names);
+                       unit_array(u).BombcellType = bombcell_types(tid);
+                   end
+               end
+
                no_act_idx = arrayfun(@(x) isempty(x.ActivityFeatures),unit_array);
                %If activity features were not computed (too few spikes), fill with zeros to prevent issues when tracking units
                act_features = Unit.returnFeatureNames("act");
