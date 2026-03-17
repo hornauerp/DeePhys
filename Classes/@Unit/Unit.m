@@ -124,6 +124,22 @@ classdef Unit < handle
             end
         end
 
+        function sr = getSamplingRate(unit)
+        % GETSAMPLINGRATE  Return cached sampling rate (survives save/load without MEArecording).
+            sr = unit.SamplingRate;
+            if isempty(sr) && ~isempty(unit.MEArecording)
+                sr = unit.MEArecording.RecordingInfo.SamplingRate;
+            end
+        end
+
+        function dur = getRecordingDuration(unit)
+        % GETRECORDINGDURATION  Return cached duration (survives save/load without MEArecording).
+            dur = unit.RecordingDuration;
+            if isempty(dur) && ~isempty(unit.MEArecording)
+                dur = unit.MEArecording.RecordingInfo.Duration;
+            end
+        end
+
         function generateStableID(unit)
         % GENERATESTABLEID  Create deterministic identifier from recording metadata + unit identity.
         %   ID is a hex string derived from (ChipID, PlatingDate, TemplateID, ReferenceElectrode).

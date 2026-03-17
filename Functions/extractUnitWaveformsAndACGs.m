@@ -30,7 +30,7 @@ N    = numel(unit_list);
 
 % Collect per-unit sampling rates and assert uniformity.
 % If rates differ, resample each waveform to the first unit's SR before stacking.
-unit_srs = arrayfun(@(u) u.MEArecording.RecordingInfo.SamplingRate, unit_list);
+unit_srs = arrayfun(@(u) getSamplingRate(u), unit_list);
 sr_wf    = unit_srs(1);
 
 if all(unit_srs == sr_wf)
@@ -100,7 +100,12 @@ else
     rec_list   = {};
     rec_groups = {};
     for u = 1:N
-        rec   = unit_list(u).MEArecording;
+        rec = unit_list(u).MEArecording;
+        if isempty(rec)
+            warning('extractUnitWaveformsAndACGs:noParent', ...
+                'Unit %d has no MEArecording reference — skipping ACG recompute.', u);
+            continue
+        end
         found = false;
         for r = 1:numel(rec_list)
             if rec_list{r} == rec
@@ -118,7 +123,7 @@ else
     for r = 1:numel(rec_list)
         rec   = rec_list{r};
         g_idx = rec_groups{r};          % global indices into unit_list
-        sr_r  = rec.RecordingInfo.SamplingRate;
+        sr_r  = unit_list(g_idx(1)).getSamplingRate();
 
         % Build concatenated spike train; track compact local unit index
         all_times    = [];
