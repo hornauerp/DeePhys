@@ -27,7 +27,7 @@ p_umap = ctc.Parameters.UMAP;
 rg     = ctc.RecordingGroup;
 
 % ── Extract features via harmonized path ─────────────────────────────────────
-[wf, acg, sr]                        = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[wf, acg, sr]                        = ctc.getOrExtract(ctc.UnitList);
 [X_raw, feat_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, wf, acg, sr);
 
 % Store harmonized data for downstream inspection / plotting

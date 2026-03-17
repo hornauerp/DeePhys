@@ -37,7 +37,7 @@ rg      = ctc.RecordingGroup;
 rng(ctc.Parameters.RNGSeed, 'twister');
 
 % ── Extract features via harmonized path ─────────────────────────────────────
-[wf, acg, sr] = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[wf, acg, sr] = ctc.getOrExtract(ctc.UnitList);
 [X_raw, ~]    = buildFeatureMatrix(ctc, wf, acg, sr);
 
 % ── Chip-level normalisation (all units, matching main branch) ───────────────

@@ -23,6 +23,7 @@ classdef CellTypeClassifier < handle
         HarmonizedWaveforms     % (N_samples × N_units) processed waveforms (upsampled, aligned, trimmed)
         HarmonizedACGs          % (N_bins × N_units)   ACGs at Harmonization params
         HarmonizedSR            % scalar — waveform sampling rate after harmonization
+        CachedExtraction        % struct caching extractUnitWaveformsAndACGs output (see getOrExtract)
                                 % struct storing UMAP embeddings:
                                 %   .Unsupervised — (N x D) from generateTrainLabels (all units, unsupervised)
                                 %   .Train        — (N_train x D) from classifyUnits (supervised training embedding)
@@ -40,6 +41,36 @@ classdef CellTypeClassifier < handle
             ctc.Parameters = parseStructParameters(ctc.returnDefaultParams(), parameters);
             % UnitList is populated by identifyResponsiveUnits(), which also sets
             % the cumulative culture offsets needed for ResponsiveUnitIdx.
+        end
+    end
+
+        function [wf, acg, sr] = getOrExtract(ctc, unit_list)
+        % getOrExtract  Return cached extraction or compute and cache.
+        %   Avoids redundant FullACG recomputation across generateTrainLabels,
+        %   classifyUnits, etc. Cache is invalidated when unit count or
+        %   harmonization parameters change.
+            ph = ctc.Parameters.Harmonization;
+            cache = ctc.CachedExtraction;
+            if ~isempty(cache) ...
+                    && cache.N == numel(unit_list) ...
+                    && abs(cache.ACGBinSize - ph.ACGBinSize) < 1e-12 ...
+                    && abs(cache.ACGLag - ph.ACGLag) < 1e-12 ...
+                    && cache.WaveformTargetSR == ph.WaveformTargetSamplingRate ...
+                    && cache.ACGSource == ph.ACGSource
+                wf  = cache.wf;
+                acg = cache.acg;
+                sr  = cache.sr;
+                fprintf('Using cached waveform/ACG extraction (%d units)\n', cache.N);
+                return
+            end
+            [wf, acg, sr] = extractUnitWaveformsAndACGs(ctc, unit_list);
+            ctc.CachedExtraction = struct( ...
+                'wf', wf, 'acg', acg, 'sr', sr, ...
+                'N', numel(unit_list), ...
+                'ACGBinSize', ph.ACGBinSize, ...
+                'ACGLag', ph.ACGLag, ...
+                'WaveformTargetSR', ph.WaveformTargetSamplingRate, ...
+                'ACGSource', ph.ACGSource);
         end
     end
 

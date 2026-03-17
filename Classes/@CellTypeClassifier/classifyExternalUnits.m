@@ -34,7 +34,7 @@ assert(~isempty(ctc.UnitList), ...
 labels = ctc.TrainLabels;
 
 % ── Build DeePhys train features using harmonization parameters ───────────────
-[wf_dphy, acg_dphy, sr_dphy] = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[wf_dphy, acg_dphy, sr_dphy] = ctc.getOrExtract(ctc.UnitList);
 [X_dphy, feat_names]         = buildFeatureMatrix(ctc, wf_dphy, acg_dphy, sr_dphy);
 
 % ── Build external test features ─────────────────────────────────────────────

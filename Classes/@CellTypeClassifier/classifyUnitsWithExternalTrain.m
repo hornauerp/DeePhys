@@ -40,7 +40,7 @@ assert(size(X_train, 1) == numel(y_train), ...
     numel(y_train), size(X_train, 1));
 
 % ── Build DeePhys test features ───────────────────────────────────────────────
-[wf_dphy, acg_dphy, sr_dphy]                      = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[wf_dphy, acg_dphy, sr_dphy]                      = ctc.getOrExtract(ctc.UnitList);
 [X_test, feat_names_test, aligned_wf, norm_acgs]  = buildFeatureMatrix(ctc, wf_dphy, acg_dphy, sr_dphy);
 
 % Store harmonized data for downstream inspection / plotting
