@@ -9,10 +9,14 @@ function plotUMAPSanityCheck(ctc)
 %     (black x), clean inhibitory candidates (red), excitatory
 %     counterexamples (blue).
 %
-%   Tile 2:
-%     Supervised UMAP — training units coloured by known label.
+%   Tile 2 (bootstrap path only):
+%     Unsupervised UMAP — same embedding, coloured by final predicted
+%     cell-type labels (excitatory/inhibitory/unclassified).
 %
 %   Tile 3:
+%     Supervised UMAP — training units coloured by known label.
+%
+%   Tile 4:
 %     Supervised UMAP — test units coloured by predicted label.
 %     Unclassified units (NaN label) are shown in grey.
 %
@@ -31,7 +35,7 @@ black     = [0.15, 0.15, 0.15];
 colors    = [exc_color; inh_color];
 
 has_unsup = ~isempty(ctc.Reduction.Unsupervised) && ~isempty(ctc.ResponsiveUnitIdx);
-n_tiles   = 2 + has_unsup;
+n_tiles   = 2 + 2 * has_unsup;  % 2 extra tiles when unsupervised data exists
 
 figure('Color', 'w');
 tl = tiledlayout(1, n_tiles, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -110,9 +114,37 @@ if has_unsup
     title('Unsupervised — label generation', 'FontWeight', 'normal');
     legend('Location', 'best', 'FontSize', 7, 'Box', 'off');
     box off; hold off;
+
+    % --- Tile 2: unsupervised embedding coloured by predicted cell type ---
+    nexttile; hold on;
+
+    % Map global UnitLabels onto the subset used for unsupervised UMAP
+    subset_labels = ctc.UnitLabels(subset_mask);
+
+    m_exc = subset_labels == 1;
+    m_inh = subset_labels == 2;
+    m_unc = isnan(subset_labels) | (subset_labels ~= 1 & subset_labels ~= 2);
+
+    if any(m_unc)
+        scatter(r(m_unc, 1), r(m_unc, 2), 6, gray, 'filled', ...
+            'MarkerFaceAlpha', 0.2, 'DisplayName', sprintf('Unclassified (n=%d)', sum(m_unc)));
+    end
+    if any(m_exc)
+        scatter(r(m_exc, 1), r(m_exc, 2), 10, exc_color, 'filled', ...
+            'MarkerFaceAlpha', 0.5, 'DisplayName', sprintf('Excitatory (n=%d)', sum(m_exc)));
+    end
+    if any(m_inh)
+        scatter(r(m_inh, 1), r(m_inh, 2), 10, inh_color, 'filled', ...
+            'MarkerFaceAlpha', 0.5, 'DisplayName', sprintf('Inhibitory (n=%d)', sum(m_inh)));
+    end
+
+    xlabel('UMAP 1'); ylabel('UMAP 2');
+    title('Unsupervised — predicted labels', 'FontWeight', 'normal');
+    legend('Location', 'best', 'FontSize', 7, 'Box', 'off');
+    box off; hold off;
 end
 
-% --- Tile 2: supervised embedding — training units ---
+% --- Tile 3: supervised embedding — training units ---
 r_train  = ctc.Reduction.Train;
 y_train  = ctc.TrainLabels.sorted_y_train(:)';
 
@@ -127,7 +159,7 @@ title('Supervised — training set', 'FontWeight', 'normal');
 legend('Location', 'best', 'FontSize', 7);
 box off; hold off;
 
-% --- Tile 3: supervised embedding — test units ---
+% --- Tile 4: supervised embedding — test units ---
 r_test       = ctc.Reduction.Test;
 test_mask    = ctc.TrainLabels.umap_test_idx(:)';
 labels_test  = ctc.UnitLabels(test_mask);
