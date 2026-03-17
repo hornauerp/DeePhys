@@ -107,7 +107,7 @@ if use_cached
         end
     end
 else
-    fprintf('Harmonization ACG params (%i bins) differ from cached %s (%i bins) — recomputing per recording\n', ...
+    fprintf('Harmonization ACG params (%i bins) differ from cached %s (%i bins) — recomputing from parent recording\n', ...
         n_bins_harm, acg_source, n_bins_cached);
 
     % Ensure CCGHeart MEX is compiled (required by CCG).
@@ -120,15 +120,114 @@ else
         mex('CCGHeart.c');
     end
 
+    % ── FullACG recompute: read from ParentRecordingPath (.npy) ────────────
+    % The FullACG uses all spikes from the concatenated parent recording
+    % (across all DIVs/segments), not just the current segment's spike times.
+    % Group units by ParentRecordingPath so one CCG call covers all segments.
+    if acg_source == "FullACG"
+        parent_paths  = {};   % unique parent paths
+        parent_groups = {};   % {i} = global unit indices sharing parent_paths{i}
+        parent_tids   = {};   % {i} = TemplateIDs for those units
+        parent_srs    = [];   % sampling rate per parent group
+
+        for u = 1:N
+            rec = unit_list(u).MEArecording;
+            if isempty(rec)
+                warning('extractUnitWaveformsAndACGs:noParent', ...
+                    'Unit %d has no MEArecording reference — skipping FullACG recompute.', u);
+                continue
+            end
+            pp = rec.ParentRecordingPath;
+            found = false;
+            for p = 1:numel(parent_paths)
+                if strcmp(parent_paths{p}, pp)
+                    parent_groups{p}(end+1) = u;
+                    parent_tids{p}(end+1)   = unit_list(u).TemplateID;
+                    found = true;
+                    break;
+                end
+            end
+            if ~found
+                parent_paths{end+1}  = pp;
+                parent_groups{end+1} = u;
+                parent_tids{end+1}   = unit_list(u).TemplateID;
+                parent_srs(end+1)    = rec.RecordingInfo.SamplingRate;
+            end
+        end
+
+        for p = 1:numel(parent_paths)
+            pp    = parent_paths{p};
+            g_idx = parent_groups{p};   % global indices into unit_list
+            tids  = parent_tids{p};     % TemplateIDs for units in this group
+            sr_p  = parent_srs(p);
+
+            % Read full concatenated spike data from parent Kilosort output
+            npy_times = fullfile(pp, 'spike_times.npy');
+            npy_temps = fullfile(pp, 'spike_templates.npy');
+            if ~isfile(npy_times) || ~isfile(npy_temps)
+                warning('extractUnitWaveformsAndACGs:missingNPY', ...
+                    'Parent .npy files not found at %s — falling back to segment spike times.', pp);
+                acgs = recomputeACGsFromSegments(unit_list, g_idx, acgs, ph, n_bins_harm);
+                continue
+            end
+
+            spike_times_raw = readNPY(npy_times);
+            spike_templates = readNPY(npy_temps);
+
+            % Filter to good template IDs (unique across units in this parent)
+            unique_tids = unique(tids);
+            keep = ismember(spike_templates, unique_tids);
+            spike_times_s = double(spike_times_raw(keep)) / sr_p;
+            spike_templates_kept = spike_templates(keep);
+
+            % Assign compact local unit IDs via findgroups on kept templates
+            [unit_ids_local, group_tids] = findgroups(spike_templates_kept);
+
+            if isempty(spike_times_s)
+                continue
+            end
+
+            % Sort by time (required by CCG)
+            [spike_times_s, sort_idx] = sort(spike_times_s);
+            unit_ids_local = unit_ids_local(sort_idx);
+
+            [ccg_3d, ~] = CCG(spike_times_s, unit_ids_local, ...
+                'binSize', ph.ACGBinSize, ...
+                'duration', 2 * ph.ACGLag, ...
+                'Fs', 1 / sr_p);
+
+            % Map CCG diagonals back to unit_list indices via TemplateID
+            for k = 1:numel(g_idx)
+                tid = tids(k);
+                lid = find(group_tids == tid, 1);
+                if ~isempty(lid)
+                    acgs(:, g_idx(k)) = double(ccg_3d(:, lid, lid));
+                end
+            end
+
+            fprintf('  FullACG recomputed from %s (%i units, %i spikes)\n', ...
+                pp, numel(g_idx), numel(spike_times_s));
+        end
+
+    else
+        % ── Regular ACG recompute: use per-segment spike times ─────────────
+        % For ACGSource=="ACG", segment-level spikes are appropriate.
+        acgs = recomputeACGsFromSegments(unit_list, 1:N, acgs, ph, n_bins_harm);
+    end
+end
+end
+
+function acgs = recomputeACGsFromSegments(unit_list, indices, acgs, ph, n_bins_harm)
+% Recompute ACGs from per-segment in-memory spike times.
+% Used for ACGSource=="ACG" or as fallback when parent .npy files are missing.
+
     % Group units by parent MEArecording for one batch CCG call per recording.
-    % All spike times are already in memory — no .npy files are re-read.
     rec_list   = {};
     rec_groups = {};
-    for u = 1:N
+    for ii = 1:numel(indices)
+        u   = indices(ii);
         rec = unit_list(u).MEArecording;
         if isempty(rec)
-            warning('extractUnitWaveformsAndACGs:noParent', ...
-                'Unit %d has no MEArecording reference — skipping ACG recompute.', u);
             continue
         end
         found = false;
@@ -146,14 +245,13 @@ else
     end
 
     for r = 1:numel(rec_list)
-        rec   = rec_list{r};
-        g_idx = rec_groups{r};          % global indices into unit_list
+        g_idx = rec_groups{r};
         sr_r  = unit_list(g_idx(1)).getSamplingRate();
 
-        % Build concatenated spike train; track compact local unit index
+        % Build concatenated spike train with compact local unit IDs
         all_times    = [];
         all_unit_ids = [];
-        local_ids    = zeros(1, numel(g_idx));  % local CCG index per unit (0 = no spikes)
+        local_ids    = zeros(1, numel(g_idx));
         local_ctr    = 0;
         for k = 1:numel(g_idx)
             st = unit_list(g_idx(k)).SpikeTimes;
@@ -166,7 +264,7 @@ else
         end
 
         if local_ctr == 0
-            continue  % all units in this recording have no spikes
+            continue
         end
 
         [~, sort_idx]  = sort(all_times);
@@ -178,7 +276,6 @@ else
             'duration', 2 * ph.ACGLag, ...
             'Fs', 1 / sr_r);
 
-        % Extract ACG (diagonal) for each unit in this recording
         for k = 1:numel(g_idx)
             if local_ids(k) > 0
                 lid = local_ids(k);
@@ -186,5 +283,4 @@ else
             end
         end
     end
-end
 end
