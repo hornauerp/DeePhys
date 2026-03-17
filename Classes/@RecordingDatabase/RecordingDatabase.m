@@ -77,12 +77,20 @@ classdef RecordingDatabase < handle
                 end
                 db.IsConnected = true;
 
-                % Enable WAL mode for parfor compatibility (best-effort)
+                % Enable WAL mode for parfor compatibility (best-effort).
+                % Some MATLAB sqlite drivers open an implicit transaction,
+                % making PRAGMA calls fail — safe to skip.
+                pragma_ok = true;
                 try
                     db.sqlExecute("PRAGMA journal_mode=WAL");
-                    db.sqlExecute("PRAGMA busy_timeout=5000");
-                catch
-                    % Some drivers open implicit transactions; PRAGMAs are optional
+                catch pragma_err %#ok<NASGU>
+                    pragma_ok = false;
+                end
+                if pragma_ok
+                    try
+                        db.sqlExecute("PRAGMA busy_timeout=5000");
+                    catch pragma_err2 %#ok<NASGU>
+                    end
                 end
 
                 db.ensureSchema();
