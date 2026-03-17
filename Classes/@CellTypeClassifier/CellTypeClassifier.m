@@ -42,7 +42,7 @@ classdef CellTypeClassifier < handle
             % UnitList is populated by identifyResponsiveUnits(), which also sets
             % the cumulative culture offsets needed for ResponsiveUnitIdx.
         end
-    end
+    
 
         function [wf, acg, sr] = getOrExtract(ctc, unit_list)
         % getOrExtract  Return cached extraction or compute and cache.
