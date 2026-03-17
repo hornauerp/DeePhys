@@ -22,14 +22,19 @@ end
 
 baseline_units = culture.Units;           % canonical unit order from Recordings(1)
 n_units    = length(baseline_units);
-baseline_ids = [baseline_units.unitID];
+if n_units == 0
+    binned_mat = zeros(0, max(0, floor((diff(time_window))/bin_size)));
+    return
+end
+% Use TemplateID for matching — unitID is fragile after save/load
+baseline_ids = [baseline_units.TemplateID];
 bins       = time_window(1) : bin_size : time_window(2);
 binned_mat = zeros(n_units, length(bins) - 1);
 offset     = 0;
 
 for r = 1:culture.N
     rec        = culture.Recordings(r);
-    rec_ids    = [rec.Units.unitID];
+    rec_ids    = [rec.Units.TemplateID];
     [~, row_idx] = ismember(baseline_ids, rec_ids);  % map baseline order → rec order
     for u = 1:n_units
         if row_idx(u) == 0; continue; end            % unit absent in this recording
