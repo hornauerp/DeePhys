@@ -44,9 +44,25 @@ norm_wf   = all_wf   ./ wf_scale;
 norm_acgs = all_acgs ./ acg_scale;
 
 % Time axes for x-labels
-ph    = ctc.Parameters.Harmonization;
-t_wf  = (0:size(all_wf, 2)-1) / ph.WaveformTargetSamplingRate * 1000;  % ms
-t_acg = linspace(-ph.ACGLag, ph.ACGLag, size(all_acgs, 2)) * 1000;    % ms
+ph = ctc.Parameters.Harmonization;
+
+% Waveform axis: use effective SR after interpolation (stored by classifyUnits),
+% falling back to the target parameter if not yet set.
+if ~isempty(ctc.HarmonizedSR) && ctc.HarmonizedSR > 0
+    wf_sr = ctc.HarmonizedSR;
+else
+    wf_sr = ph.WaveformTargetSamplingRate;
+end
+t_wf  = (0:size(all_wf, 2)-1) / wf_sr * 1000;  % ms
+
+% ACG axis: derived from the actual bin size (more precise than linspace over ACGLag)
+n_acg_bins = size(all_acgs, 2);
+half_bins  = floor(n_acg_bins / 2);
+t_acg = (-half_bins:half_bins) * ph.ACGBinSize * 1000;  % ms
+if numel(t_acg) ~= n_acg_bins
+    % Fallback if bin count is even (no centre bin)
+    t_acg = linspace(-ph.ACGLag, ph.ACGLag, n_acg_bins) * 1000;
+end
 
 % ── Figure 1: heatmap grid ─────────────────────────────────────────────────
 cell_type_vals = [1, 2];
@@ -71,7 +87,10 @@ for r = 1:2
             t_x = t_acg;
             x_label = 'Lag (ms)';
             if ~isempty(sub)
-                [~, peak_pos] = max(sub, [], 2);
+                % Sort by peak position in first half only (negative lags)
+                % to avoid random flips from the symmetric ACG structure
+                half = floor(size(sub, 2) / 2);
+                [~, peak_pos] = max(sub(:, 1:half), [], 2);
                 [~, ord]      = sort(peak_pos);
                 sub           = sub(ord, :);
             end

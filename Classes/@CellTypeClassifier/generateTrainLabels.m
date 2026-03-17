@@ -130,6 +130,13 @@ labels.umap_train_idx   = false(1, length(ctc.UnitList));
 labels.umap_train_idx(sorted_train_ids) = true;
 labels.umap_test_idx    = ~labels.umap_train_idx;
 
+% Store outlier and counterexample info for diagnostic plotting
+% outlier_global_idx: responsive candidates removed by isolation forest
+outlier_local = responsive_in_subset(tf_forest(:)');
+labels.outlier_global_idx        = subset_global(outlier_local);
+% excitatory_candidate_global_idx: non-responsive units selected as counterexamples
+labels.excitatory_candidate_global_idx = subset_global(counterexample_idx_local);
+
 ctc.TrainLabels = labels;
 fprintf('Training set: %i excitatory, %i inhibitory candidates\n', ...
     sum(y_train==1), sum(y_train==2));
