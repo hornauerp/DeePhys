@@ -76,23 +76,6 @@ classdef RecordingDatabase < handle
                     db.Connection = sqlite(db.DBPath, "create");
                 end
                 db.IsConnected = true;
-
-                % Enable WAL mode for parfor compatibility (best-effort).
-                % Some MATLAB sqlite drivers open an implicit transaction,
-                % making PRAGMA calls fail — safe to skip.
-                pragma_ok = true;
-                try
-                    db.sqlExecute("PRAGMA journal_mode=WAL");
-                catch pragma_err %#ok<NASGU>
-                    pragma_ok = false;
-                end
-                if pragma_ok
-                    try
-                        db.sqlExecute("PRAGMA busy_timeout=5000");
-                    catch pragma_err2 %#ok<NASGU>
-                    end
-                end
-
                 db.ensureSchema();
             catch ME
                 warning('RecordingDatabase:connectionFailed', ...
@@ -217,16 +200,18 @@ classdef RecordingDatabase < handle
 
         function sqlExecute(db, sql)
         % SQLEXECUTE  Version-safe SQL execution (execute vs exec).
+            sql = strjoin(sql, "");  % ensure scalar string from string arrays
             if ismethod(db.Connection, 'execute')
-                execute(db.Connection, sql);
+                execute(db.Connection, char(sql));
             else
-                exec(db.Connection, sql);
+                exec(db.Connection, char(sql));
             end
         end
 
         function rows = sqlFetch(db, sql)
         % SQLFETCH  Version-safe SQL fetch.
-            rows = fetch(db.Connection, sql);
+            sql = strjoin(sql, "");
+            rows = fetch(db.Connection, char(sql));
         end
 
     end
