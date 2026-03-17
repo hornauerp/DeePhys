@@ -103,51 +103,97 @@ classdef RecordingGroup < handle
             end
         end
         
-        function cultures = groupCultures(rg, grouping_var)
+        function cultures = groupCultures(rg, grouping_var, opts)
+        % groupCultures  Group recordings into Culture objects.
+        %
+        %   cultures = rg.groupCultures(grouping_var)
+        %   cultures = rg.groupCultures(grouping_var, IdentityKeys=["ChipID","PlatingDate"])
+        %
+        %   grouping_var  — metadata field that VARIES within a culture
+        %                   (e.g. "DIV", "RecordingDate", "Concentration").
+        %                   Each Culture will contain multiple recordings
+        %                   spanning the values of this field.
+        %                   Use "" to put all recordings for one identity
+        %                   key combination into one culture.
+        %
+        %   IdentityKeys  — metadata fields that DEFINE a unique culture.
+        %                   Recordings sharing the same values of all
+        %                   identity keys belong to the same culture.
+        %                   Default: ["ChipID", "PlatingDate"]
+        %
+        % Examples:
+        %   % Dose-response: each (ChipID, PlatingDate, DIV) = one culture,
+        %   % Concentration varies within it:
+        %   cultures = rg.groupCultures("Concentration", IdentityKeys=["ChipID","PlatingDate","DIV"])
+        %
+        %   % Longitudinal: each (ChipID, PlatingDate) = one culture,
+        %   % DIV varies within it:
+        %   cultures = rg.groupCultures("DIV")
+        %
+        %   % Dose-response across timepoints: each (ChipID, PlatingDate, Concentration) = one culture,
+        %   % DIV varies within it:
+        %   cultures = rg.groupCultures("DIV", IdentityKeys=["ChipID","PlatingDate","Concentration"])
             arguments
-               rg RecordingGroup
-               grouping_var string = "" % Metadata field that varies across recordings within one culture
-                                        % (e.g. "Concentration" for dose-response, "RecordingDate" for timepoints)
+                rg RecordingGroup
+                grouping_var string = ""
+                opts.IdentityKeys string = ["ChipID", "PlatingDate"]
             end
+
             cultures = Culture.empty;
+            if isempty(rg.Recordings)
+                return
+            end
+
             metadata = [rg.Recordings.Metadata];
-            if ~isfield(metadata,"ChipID")
-                warning('No chip IDs provided, cannot group recordings')
-                return
-            end
-            chip_ids = unique([metadata.ChipID]);
-            if isempty(chip_ids)
-                warning('No chip IDs provided, cannot group recordings')
-                return
-            end
-            for id = chip_ids
-                inclusion = {{'ChipID',id}};
-                chip_idx = rg.filterRecordingArray(metadata, inclusion);
-                chip_array = rg.Recordings(chip_idx);
-                chip_metadata = [chip_array.Metadata];
-                if ~isfield(metadata,"PlatingDate")
-                    warning('No plating date provided, cannot differentiate batches')
+
+            % Validate that all identity keys exist in metadata
+            for k = 1:numel(opts.IdentityKeys)
+                if ~isfield(metadata, opts.IdentityKeys(k))
+                    warning('RecordingGroup:missingKey', ...
+                        'Identity key "%s" not found in metadata — cannot group.', opts.IdentityKeys(k));
                     return
                 end
-                chip_plating_dates = unique([chip_metadata.PlatingDate]);
-                for pd = chip_plating_dates
-                   inclusion = {{'PlatingDate',pd}};
-                   plating_idx = rg.filterRecordingArray(chip_metadata, inclusion);
-                   culture_array = chip_array(plating_idx);
-                   if grouping_var ~= ""
-                       group_metadata = [culture_array.Metadata];
-                       group_values = unique([group_metadata.(grouping_var)]);
-                       for gv = group_values
-                           inclusion = {{grouping_var, gv}};
-                           group_idx = rg.filterRecordingArray(group_metadata, inclusion);
-                           group_array = culture_array(group_idx);
-                           cultures = [cultures, Culture(group_array, grouping_var, gv)]; %#ok<AGROW>
-                       end
-                   else
-                       cultures = [cultures, Culture(culture_array)]; %#ok<AGROW>
-                   end
+            end
+
+            % Build a composite identity string per recording
+            n_rec = numel(rg.Recordings);
+            identity_strings = strings(1, n_rec);
+            for r = 1:n_rec
+                parts = strings(1, numel(opts.IdentityKeys));
+                for k = 1:numel(opts.IdentityKeys)
+                    val = metadata(r).(opts.IdentityKeys(k));
+                    parts(k) = string(val);
+                end
+                identity_strings(r) = strjoin(parts, "||");
+            end
+
+            % Group by unique identity
+            [unique_ids, ~, group_idx] = unique(identity_strings);
+            for g = 1:numel(unique_ids)
+                mask = (group_idx' == g);
+                culture_recs = rg.Recordings(mask);
+
+                if grouping_var ~= ""
+                    % Extract per-recording grouping values and sort by them
+                    culture_meta = [culture_recs.Metadata];
+                    if ~isfield(culture_meta, grouping_var)
+                        warning('RecordingGroup:missingGroupingVar', ...
+                            'Grouping variable "%s" not found in metadata.', grouping_var);
+                        gv = [];
+                    else
+                        gv = [culture_meta.(grouping_var)];
+                        [gv, sort_idx] = sort(gv);
+                        culture_recs = culture_recs(sort_idx);
+                    end
+                    cultures = [cultures, Culture(culture_recs, grouping_var, gv)]; %#ok<AGROW>
+                else
+                    cultures = [cultures, Culture(culture_recs)]; %#ok<AGROW>
                 end
             end
+
+            fprintf('Grouped %d recordings into %d cultures (identity: [%s], varying: %s)\n', ...
+                n_rec, numel(cultures), strjoin(opts.IdentityKeys, ", "), ...
+                char(strrep(grouping_var, "", "none")));
         end
     end
     
