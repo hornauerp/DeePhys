@@ -27,10 +27,7 @@ function registerUnits(db, mearec)
         if isempty(mearec.Units); return; end
 
         % Build and execute INSERT for each unit
-        % Using explicit transaction for bulk insert performance
-        db.sqlExecute( "BEGIN TRANSACTION");
-        try
-            for u = 1:length(mearec.Units)
+        for u = 1:length(mearec.Units)
                 unit = mearec.Units(u);
 
                 stable_id = '';
@@ -69,11 +66,6 @@ function registerUnits(db, mearec)
                     esc(ks_label), esc(bc_type));
 
                 db.sqlExecute( sql);
-            end
-            db.sqlExecute( "COMMIT");
-        catch ME_inner
-            db.sqlExecute( "ROLLBACK");
-            rethrow(ME_inner);
         end
 
     catch ME

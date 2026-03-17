@@ -38,8 +38,8 @@ function updateQCResults(db, mearec)
         end
 
         % KS / Bombcell filter counts (if available from QC)
-        ks_enabled = qc.KSLabel.Enable;
-        bc_enabled = qc.Bombcell.Enable;
+        ks_enabled = isfield(qc, 'KSLabel') && isfield(qc.KSLabel, 'Enable') && qc.KSLabel.Enable;
+        bc_enabled = isfield(qc, 'Bombcell') && isfield(qc.Bombcell, 'Enable') && qc.Bombcell.Enable;
         n_ks_filtered = 0;   % not easily recoverable post-hoc; placeholder
         n_bc_filtered = 0;
 
