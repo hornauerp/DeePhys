@@ -154,35 +154,19 @@ plotUMAPSanityCheck(ctc);
 %% 8 — Inspect classification quality  (DeePhys test only)
 
 if test_source == "DeePhys"
-    % ACG images — uses whichever ACGSource was selected
-    acg_prop  = char(ctc.Parameters.Harmonization.ACGSource);
-    all_acgs  = horzcat(ctc.UnitList.(acg_prop))';
-    norm_acgs = all_acgs ./ max(all_acgs, [], 2);
-
-    inh_acgs = norm_acgs(ctc.UnitLabels == 2, :);
-    exc_acgs = norm_acgs(ctc.UnitLabels == 1, :);
-
-    [sorted_inh, ~] = sortACGsByPeak(inh_acgs, "max");
-    [sorted_exc, ~] = sortACGsByPeak(exc_acgs, "max");
-
-    figure('Color', 'w');
-    tiledlayout(1, 2, 'TileSpacing', 'compact');
-    nexttile; imagesc(sorted_inh); title('Inhibitory ACGs', 'FontWeight', 'normal'); colorbar
-    nexttile; imagesc(sorted_exc); title('Excitatory ACGs',  'FontWeight', 'normal'); colorbar
-
-    % Waveforms and ACGs split by cell type; TrainLabels only available for DeePhys train
-    train_labels_arg = [];
-    if train_source == "DeePhys"
-        train_labels_arg = ctc.TrainLabels;
-    end
-    plotCellTypeFeatures(ctc.UnitList, ctc.UnitLabels, train_labels_arg);
+    % Heatmaps and average waveforms using the actual harmonized classifier input
+    plotCellTypeFeatures(ctc);
 
     % I/E fraction per chip
     [chip_idx, ~] = rg.combineMetadataIndices(ctc.UnitList, "ChipID");
-    inh_count = histcounts(chip_idx(ctc.UnitLabels == 2));
-    all_count = histcounts(chip_idx);
-    ie_per_chip = inh_count ./ all_count;
-    fprintf('Inhibitory fraction per chip:'); fprintf('  %.2f', ie_per_chip); fprintf('\n');
+    unique_chips  = unique(chip_idx);
+    for c = 1:length(unique_chips)
+        m = chip_idx == unique_chips(c);
+        n_e = sum(ctc.UnitLabels(m) == 1);
+        n_i = sum(ctc.UnitLabels(m) == 2);
+        fprintf('Chip %i: %d E / %d I (%.1f%% inhibitory)\n', ...
+            unique_chips(c), n_e, n_i, 100 * n_i / max(n_e + n_i, 1));
+    end
 end
 
 %% 9 — E/I network analysis  (DeePhys test only)

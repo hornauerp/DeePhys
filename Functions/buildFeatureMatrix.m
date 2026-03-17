@@ -1,4 +1,4 @@
-function [X, feature_names] = buildFeatureMatrix(ctc, waveforms, acgs, sr_wf, acg_bin_size, acg_lag)
+function [X, feature_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, waveforms, acgs, sr_wf, acg_bin_size, acg_lag)
 % BUILDFEATUREMATRIX  Build a classifier-compatible feature matrix from raw waveforms and ACGs.
 %
 % Converts raw waveforms and ACGs (from DeePhys units or any external source)
@@ -30,8 +30,10 @@ function [X, feature_names] = buildFeatureMatrix(ctc, waveforms, acgs, sr_wf, ac
 %   acg_lag      - one-sided ACG lag in seconds (default: ctc.Parameters.Harmonization.ACGLag)
 %
 % OUTPUTS:
-%   X            - (N_units × N_features) raw (un-z-scored) feature matrix
+%   X             - (N_units × N_features) raw (un-z-scored) feature matrix
 %   feature_names - (1 × N_features) string column names
+%   aligned_wf    - (N_wf_samples × N_units) processed waveforms (upsampled, aligned, trimmed)
+%   norm_acgs     - (N_bins × N_units) normalised ACGs
 
 arguments
     ctc          CellTypeClassifier

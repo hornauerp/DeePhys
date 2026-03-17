@@ -40,8 +40,13 @@ assert(size(X_train, 1) == numel(y_train), ...
     numel(y_train), size(X_train, 1));
 
 % ── Build DeePhys test features ───────────────────────────────────────────────
-[wf_dphy, acg_dphy, sr_dphy] = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
-[X_test,  feat_names_test]   = buildFeatureMatrix(ctc, wf_dphy, acg_dphy, sr_dphy);
+[wf_dphy, acg_dphy, sr_dphy]                      = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[X_test, feat_names_test, aligned_wf, norm_acgs]  = buildFeatureMatrix(ctc, wf_dphy, acg_dphy, sr_dphy);
+
+% Store harmonized data for downstream inspection / plotting
+ctc.HarmonizedWaveforms = aligned_wf;
+ctc.HarmonizedACGs      = norm_acgs;
+ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
 assert(isequal(feat_names_train, feat_names_test), ...
     ['Feature mismatch: external train (%i) vs DeePhys test (%i) features.\n' ...

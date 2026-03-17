@@ -20,6 +20,9 @@ classdef CellTypeClassifier < handle
         UnitLabels              % (1 x N) double — 1=excitatory, 2=inhibitory, NaN=unclassified
         UMAP                    % trained UMAP model returned by run_umap
         Reduction = struct('Unsupervised', [], 'Train', [], 'Test', [], 'External', [])
+        HarmonizedWaveforms     % (N_samples × N_units) processed waveforms (upsampled, aligned, trimmed)
+        HarmonizedACGs          % (N_bins × N_units)   ACGs at Harmonization params
+        HarmonizedSR            % scalar — waveform sampling rate after harmonization
                                 % struct storing UMAP embeddings:
                                 %   .Unsupervised — (N x D) from generateTrainLabels (all units, unsupervised)
                                 %   .Train        — (N_train x D) from classifyUnits (supervised training embedding)

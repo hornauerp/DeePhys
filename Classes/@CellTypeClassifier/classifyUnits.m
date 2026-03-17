@@ -27,8 +27,13 @@ p_umap = ctc.Parameters.UMAP;
 rg     = ctc.RecordingGroup;
 
 % ── Extract features via harmonized path ─────────────────────────────────────
-[wf, acg, sr]       = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
-[X_raw, feat_names] = buildFeatureMatrix(ctc, wf, acg, sr);
+[wf, acg, sr]                        = extractUnitWaveformsAndACGs(ctc, ctc.UnitList);
+[X_raw, feat_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, wf, acg, sr);
+
+% Store harmonized data for downstream inspection / plotting
+ctc.HarmonizedWaveforms = aligned_wf;
+ctc.HarmonizedACGs      = norm_acgs;
+ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
 % ── Chip-level normalisation (matching main branch prepareInputMatrix) ───────
 X_raw(isnan(X_raw)) = 0;
