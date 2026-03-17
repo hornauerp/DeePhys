@@ -31,7 +31,7 @@ function T = queryRecordings(db, options)
     try
         db.ensureConnected();
 
-        esc = @(s) strrep(char(string(s)), "'", "''");
+        esc = @(s) strrep(char(string(s)), '''', '''''');
         conditions = {};
         needs_join = false;
 

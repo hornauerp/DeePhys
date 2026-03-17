@@ -238,8 +238,8 @@ classdef RecordingDatabase < handle
             if ~db.IsConnected; return; end
             try
                 rows = db.sqlFetch( ...
-                    sprintf("SELECT id FROM recordings WHERE input_path = '%s'", ...
-                    strrep(char(input_path), "'", "''")));
+                    sprintf('SELECT id FROM recordings WHERE input_path = ''%s''', ...
+                    strrep(char(input_path), '''', '''''')));
                 if ~isempty(rows) && height(rows) > 0
                     rec_id = rows.id(1);
                 end
