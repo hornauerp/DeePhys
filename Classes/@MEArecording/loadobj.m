@@ -36,9 +36,12 @@ function obj = loadobj(s)
         end
     end
 
-    % Register loaded recording in database (backfills existing recordings)
+    % Register loaded recording in database (backfills existing recordings).
+    % Skip if called from a parfor context or if DB registration is suppressed
+    % (e.g. fromDatabase loads where recordings are already registered).
     try
-        if RecordingDatabase.isAvailable()
+        skip_db = getenv('DEEPHYS_SKIP_DB_REGISTER');
+        if isempty(skip_db) && RecordingDatabase.isAvailable()
             db = RecordingDatabase.instance();
             db.registerRecording(obj);
             if ~isempty(obj.Units)
