@@ -23,6 +23,14 @@ function obj = loadobj(s)
         obj = s;
     end
 
+    % Re-link units to their parent MEArecording (stripped by Unit.saveobj
+    % to break circular references during serialization).
+    if ~isempty(obj.Units)
+        for u = 1:length(obj.Units)
+            obj.Units(u).MEArecording = obj;
+        end
+    end
+
     % --- Migration patches (cumulative, keyed by ClassVersion) ---
     % Each block upgrades from version N-1 to N.
     % Legacy objects without ClassVersion are treated as version 0.

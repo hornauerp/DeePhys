@@ -129,6 +129,10 @@ classdef Unit < handle
             sr = unit.SamplingRate;
             if isempty(sr) && ~isempty(unit.MEArecording)
                 sr = unit.MEArecording.RecordingInfo.SamplingRate;
+                unit.SamplingRate = sr;  % backfill cache
+            end
+            if isempty(sr)
+                sr = NaN;
             end
         end
 
@@ -137,6 +141,10 @@ classdef Unit < handle
             dur = unit.RecordingDuration;
             if isempty(dur) && ~isempty(unit.MEArecording)
                 dur = unit.MEArecording.RecordingInfo.Duration;
+                unit.RecordingDuration = dur;  % backfill cache
+            end
+            if isempty(dur)
+                dur = NaN;
             end
         end
 
