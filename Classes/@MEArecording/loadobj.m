@@ -37,19 +37,24 @@ function obj = loadobj(s)
     end
 
     % Register loaded recording in database (backfills existing recordings).
-    % Skip if called from a parfor context or if DB registration is suppressed
-    % (e.g. fromDatabase loads where recordings are already registered).
+    % Skip inside parfor workers to avoid SQLite lock contention.
     try
-        skip_db = getenv('DEEPHYS_SKIP_DB_REGISTER');
-        if isempty(skip_db) && RecordingDatabase.isAvailable()
-            db = RecordingDatabase.instance();
-            db.registerRecording(obj);
-            if ~isempty(obj.Units)
-                db.registerUnits(obj);
-                db.updateQCResults(obj);
+        in_parfor = ~isempty(getCurrentTask());
+    catch
+        in_parfor = false;
+    end
+    if ~in_parfor
+        try
+            if RecordingDatabase.isAvailable()
+                db = RecordingDatabase.instance();
+                db.registerRecording(obj);
+                if ~isempty(obj.Units)
+                    db.registerUnits(obj);
+                    db.updateQCResults(obj);
+                end
             end
+        catch ME
+            warning('MEArecording:loadobjDB', 'Database registration on load: %s', ME.message);
         end
-    catch ME
-        warning('MEArecording:loadobjDB', 'Database registration on load: %s', ME.message);
     end
 end

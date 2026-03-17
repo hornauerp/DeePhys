@@ -196,9 +196,7 @@ classdef RecordingGroup < handle
            end
 
            % Load MEArecording objects from their saved MAT files (parallel).
-           % Suppress DB registration during load — these are already registered.
-           setenv('DEEPHYS_SKIP_DB_REGISTER', '1');
-           cleanup = onCleanup(@() setenv('DEEPHYS_SKIP_DB_REGISTER', ''));
+           % DB registration is auto-skipped inside parfor workers (see loadobj).
 
            n_recs = height(T);
            rec_cell = cell(1, n_recs);
