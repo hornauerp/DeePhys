@@ -44,7 +44,7 @@ function updateQCResults(db, mearec)
         n_bc_filtered = 0;
 
         % Delete existing row for this recording + hash, then insert
-        execute(db.Connection, sprintf( ...
+        db.sqlExecute( sprintf( ...
             "DELETE FROM qc_results WHERE recording_id = %d AND qc_params_hash = '%s'", ...
             rec_id, qc_hash));
 
@@ -58,7 +58,7 @@ function updateQCResults(db, mearec)
             rec_id, n_total, n_good, n_ks_filtered, n_bc_filtered, ...
             ks_enabled, bc_enabled, qc_hash, esc(qc_json));
 
-        execute(db.Connection, sql);
+        db.sqlExecute( sql);
 
     catch ME
         warning('RecordingDatabase:qcUpdateFailed', ...

@@ -70,12 +70,20 @@ classdef RecordingDatabase < handle
                     mkdir(parent_dir);
                 end
 
-                db.Connection = sqlite(db.DBPath);
+                if isfile(db.DBPath)
+                    db.Connection = sqlite(db.DBPath);
+                else
+                    db.Connection = sqlite(db.DBPath, "create");
+                end
                 db.IsConnected = true;
 
-                % Enable WAL mode for parfor compatibility
-                execute(db.Connection, "PRAGMA journal_mode=WAL");
-                execute(db.Connection, "PRAGMA busy_timeout=5000");
+                % Enable WAL mode for parfor compatibility (best-effort)
+                try
+                    db.sqlExecute("PRAGMA journal_mode=WAL");
+                    db.sqlExecute("PRAGMA busy_timeout=5000");
+                catch
+                    % Some drivers open implicit transactions; PRAGMAs are optional
+                end
 
                 db.ensureSchema();
             catch ME
@@ -109,13 +117,13 @@ classdef RecordingDatabase < handle
         % ENSURESCHEMA  Create tables if they do not exist.
             if ~db.IsConnected; return; end
 
-            execute(db.Connection, [...
+            db.sqlExecute([...
                 "CREATE TABLE IF NOT EXISTS schema_version (" ...
                 "  version INTEGER NOT NULL, " ...
                 "  applied_at TEXT DEFAULT (datetime('now'))" ...
                 ")"]);
 
-            execute(db.Connection, [...
+            db.sqlExecute([...
                 "CREATE TABLE IF NOT EXISTS recordings (" ...
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT, " ...
                 "  input_path TEXT UNIQUE NOT NULL, " ...
@@ -135,7 +143,7 @@ classdef RecordingDatabase < handle
                 "  last_updated TEXT DEFAULT (datetime('now'))" ...
                 ")"]);
 
-            execute(db.Connection, [...
+            db.sqlExecute([...
                 "CREATE TABLE IF NOT EXISTS processing_status (" ...
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT, " ...
                 "  recording_id INTEGER NOT NULL, " ...
@@ -150,7 +158,7 @@ classdef RecordingDatabase < handle
                 "  UNIQUE(recording_id, analysis_name, parameter_hash)" ...
                 ")"]);
 
-            execute(db.Connection, [...
+            db.sqlExecute([...
                 "CREATE TABLE IF NOT EXISTS qc_results (" ...
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT, " ...
                 "  recording_id INTEGER NOT NULL, " ...
@@ -165,7 +173,7 @@ classdef RecordingDatabase < handle
                 "  FOREIGN KEY (recording_id) REFERENCES recordings(id)" ...
                 ")"]);
 
-            execute(db.Connection, [...
+            db.sqlExecute([...
                 "CREATE TABLE IF NOT EXISTS units (" ...
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT, " ...
                 "  recording_id INTEGER NOT NULL, " ...
@@ -179,14 +187,14 @@ classdef RecordingDatabase < handle
                 ")"]);
 
             % Check if we need to stamp the schema version
-            rows = fetch(db.Connection, "SELECT COUNT(*) AS cnt FROM schema_version");
+            rows = db.sqlFetch("SELECT COUNT(*) AS cnt FROM schema_version");
             if istable(rows)
                 cnt = rows.cnt;
             else
                 cnt = rows{1};
             end
             if cnt == 0
-                execute(db.Connection, sprintf( ...
+                db.sqlExecute(sprintf( ...
                     "INSERT INTO schema_version (version) VALUES (%d)", ...
                     db.SchemaVersion));
             end
@@ -199,6 +207,20 @@ classdef RecordingDatabase < handle
             end
         end
 
+        function sqlExecute(db, sql)
+        % SQLEXECUTE  Version-safe SQL execution (execute vs exec).
+            if ismethod(db.Connection, 'execute')
+                execute(db.Connection, sql);
+            else
+                exec(db.Connection, sql);
+            end
+        end
+
+        function rows = sqlFetch(db, sql)
+        % SQLFETCH  Version-safe SQL fetch.
+            rows = fetch(db.Connection, sql);
+        end
+
     end
 
     methods
@@ -209,7 +231,7 @@ classdef RecordingDatabase < handle
             rec_id = [];
             if ~db.IsConnected; return; end
             try
-                rows = fetch(db.Connection, ...
+                rows = db.sqlFetch( ...
                     sprintf("SELECT id FROM recordings WHERE input_path = '%s'", ...
                     strrep(char(input_path), "'", "''")));
                 if ~isempty(rows) && height(rows) > 0
@@ -261,7 +283,7 @@ classdef RecordingDatabase < handle
         function available = isAvailable()
         % ISAVAILABLE  Check whether the Database Toolbox is licensed.
             available = license('test', 'Database_Toolbox') && ...
-                        exist('sqlite', 'file') == 2;
+                        exist('sqlite', 'class') == 8;
         end
 
     end

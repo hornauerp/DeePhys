@@ -84,7 +84,7 @@ function registerRecording(db, mearec)
             n_total_templates, n_good_units, ...
             nanStr(sampling_rate), nanStr(duration_s));
 
-        execute(db.Connection, sql);
+        db.sqlExecute(sql);
 
     catch ME
         warning('RecordingDatabase:registerFailed', ...

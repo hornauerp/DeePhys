@@ -69,7 +69,7 @@ function updateProcessingStatus(db, mearec, analysis_name, status, duration_s, e
                 rec_id, esc(analysis_name), param_hash);
         end
 
-        execute(db.Connection, sql);
+        db.sqlExecute(sql);
 
     catch ME
         warning('RecordingDatabase:statusUpdateFailed', ...

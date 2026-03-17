@@ -21,14 +21,14 @@ function registerUnits(db, mearec)
         if isempty(rec_id); return; end
 
         % Delete existing units for this recording (idempotent re-registration)
-        execute(db.Connection, sprintf( ...
+        db.sqlExecute( sprintf( ...
             "DELETE FROM units WHERE recording_id = %d", rec_id));
 
         if isempty(mearec.Units); return; end
 
         % Build and execute INSERT for each unit
         % Using explicit transaction for bulk insert performance
-        execute(db.Connection, "BEGIN TRANSACTION");
+        db.sqlExecute( "BEGIN TRANSACTION");
         try
             for u = 1:length(mearec.Units)
                 unit = mearec.Units(u);
@@ -68,11 +68,11 @@ function registerUnits(db, mearec)
                     rec_id, esc(stable_id), template_id, ref_elec, ...
                     esc(ks_label), esc(bc_type));
 
-                execute(db.Connection, sql);
+                db.sqlExecute( sql);
             end
-            execute(db.Connection, "COMMIT");
+            db.sqlExecute( "COMMIT");
         catch ME_inner
-            execute(db.Connection, "ROLLBACK");
+            db.sqlExecute( "ROLLBACK");
             rethrow(ME_inner);
         end
 

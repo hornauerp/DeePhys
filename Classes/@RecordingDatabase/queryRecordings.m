@@ -88,7 +88,7 @@ function T = queryRecordings(db, options)
             sql = sql + sprintf(" LIMIT %d", options.Limit);
         end
 
-        T = fetch(db.Connection, char(sql));
+        T = db.sqlFetch( char(sql));
 
         % Ensure output is a table
         if ~istable(T)

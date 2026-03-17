@@ -25,15 +25,15 @@ function summary = getSummary(db)
         db.ensureConnected();
 
         % Total recordings
-        row = fetch(db.Connection, "SELECT COUNT(*) AS cnt FROM recordings");
+        row = db.sqlFetch( "SELECT COUNT(*) AS cnt FROM recordings");
         summary.TotalRecordings = row.cnt(1);
 
         % Total units
-        row = fetch(db.Connection, "SELECT COUNT(*) AS cnt FROM units");
+        row = db.sqlFetch( "SELECT COUNT(*) AS cnt FROM units");
         summary.TotalUnits = row.cnt(1);
 
         % Total good units per recording (avg)
-        row = fetch(db.Connection, ...
+        row = db.sqlFetch( ...
             "SELECT AVG(n_good_units) AS avg_units FROM recordings WHERE n_good_units > 0");
         if ~isempty(row) && height(row) > 0
             summary.AvgGoodUnits = row.avg_units(1);
@@ -42,19 +42,19 @@ function summary = getSummary(db)
         end
 
         % By mutation
-        mut_table = fetch(db.Connection, ...
+        mut_table = db.sqlFetch( ...
             "SELECT mutation, COUNT(*) AS cnt FROM recordings GROUP BY mutation ORDER BY cnt DESC");
         summary.ByMutation = mut_table;
 
         % Processing status
-        status_table = fetch(db.Connection, [...
+        status_table = db.sqlFetch( [...
             "SELECT analysis_name, status, COUNT(*) AS cnt " ...
             "FROM processing_status GROUP BY analysis_name, status " ...
             "ORDER BY analysis_name, status"]);
         summary.ProcessingStatus = status_table;
 
         % QC summary
-        qc_table = fetch(db.Connection, [...
+        qc_table = db.sqlFetch( [...
             "SELECT AVG(CAST(n_good_units AS REAL) / NULLIF(n_total_templates, 0)) AS avg_pass_rate, " ...
             "AVG(n_good_units) AS avg_good, AVG(n_total_templates) AS avg_total " ...
             "FROM qc_results"]);
