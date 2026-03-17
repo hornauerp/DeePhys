@@ -93,6 +93,9 @@ for r = 1:2
             axis off
         else
             imagesc(t_x, 1:size(sub,1), sub); colorbar; axis tight
+            if ~use_acg(c)
+                clim([-1 0.5]);
+            end
             xlabel(x_label);
             ylabel(sprintf('n = %i', size(sub, 1)));
         end
@@ -138,6 +141,7 @@ for s = 1:2
         plot(t_wf, mu, 'Color', clr, 'LineWidth', 1.5);
     end
 
+    ylim([-1 0.5]);
     xlabel('Time (ms)');
     ylabel('Amplitude (norm.)');
     title(split_names(s), 'FontWeight', 'normal');
