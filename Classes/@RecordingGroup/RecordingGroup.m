@@ -195,38 +195,43 @@ classdef RecordingGroup < handle
                    'No recordings found matching the given filters.');
            end
 
-           % Load MEArecording objects from their saved MAT files
-           rec_array = MEArecording.empty;
-           for i = 1:height(T)
-               input_path = char(T.input_path{i});
-               mat_candidates = {
-                   fullfile(input_path, 'MEArecording.mat')
-               };
-               loaded = false;
-               for c = 1:length(mat_candidates)
-                   if exist(mat_candidates{c}, 'file') == 2
-                       data = load(mat_candidates{c});
-                       if isfield(data, 'obj')
-                           rec_array(end+1) = data.obj; %#ok<AGROW>
-                           loaded = true;
-                           break
-                       end
+           % Load MEArecording objects from their saved MAT files (parallel)
+           n_recs = height(T);
+           rec_cell = cell(1, n_recs);
+           paths = cell(1, n_recs);
+           for i = 1:n_recs
+               paths{i} = char(T.input_path{i});
+           end
+
+           parfor i = 1:n_recs
+               mat_file = fullfile(paths{i}, 'MEArecording.mat');
+               if exist(mat_file, 'file') == 2
+                   data = load(mat_file);
+                   if isfield(data, 'obj')
+                       rec_cell{i} = data.obj;
                    end
-               end
-               if ~loaded
-                   warning('RecordingGroup:fromDatabase', ...
-                       'Could not load MAT file for: %s', input_path);
                end
            end
 
-           if isempty(rec_array)
+           % Collect loaded recordings, warn about failures
+           loaded_mask = ~cellfun(@isempty, rec_cell);
+           if any(~loaded_mask)
+               failed_paths = paths(~loaded_mask);
+               for i = 1:length(failed_paths)
+                   warning('RecordingGroup:fromDatabase', ...
+                       'Could not load MAT file for: %s', failed_paths{i});
+               end
+           end
+
+           if ~any(loaded_mask)
                error('RecordingGroup:fromDatabase', ...
                    'No recordings could be loaded from database results.');
            end
 
+           rec_array = [rec_cell{loaded_mask}];
            rg = RecordingGroup(rec_array, parameters);
            fprintf('fromDatabase: loaded %d/%d recordings from database query.\n', ...
-               length(rec_array), height(T));
+               length(rec_array), n_recs);
        end
        
        function aligned_wf = alignWaveforms(unit_array, target_sr)
