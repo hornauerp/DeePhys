@@ -5,13 +5,15 @@ function [X, feature_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, wav
 % into the feature format used by the CellTypeClassifier. All data is harmonized
 % to ctc.Parameters.Harmonization regardless of its origin.
 %
-% Waveform pipeline:
-%   1. Resample to reference rate (if sr_wf differs from DeePhys recording rate)
-%   2. Trim / zero-pad to reference sample count
-%   3. Interpolate to WaveformTargetSamplingRate with makima spline
-%   4. Normalise each waveform by max(abs)
-%   5. Circular-shift to align troughs to population mean position
-%   6. Trim 5×interp_factor samples from each edge
+% Waveform pipeline (per unit):
+%   1. Find trough (minimum) in raw waveform
+%   2. Build time axis relative to trough (trough = 0 ms)
+%   3. Interpolate onto fixed output grid [−PreTrough, +PostTrough] at TargetSR
+%   4. Normalise by max(abs)
+%
+% Output waveform dimensions are determined entirely by Harmonization params
+% (WaveformPreTrough, WaveformPostTrough, WaveformTargetSamplingRate) and
+% are independent of input sampling rate or sample count.
 %
 % ACG pipeline:
 %   1. Validate bin count against acg_bin_size, acg_lag, and Harmonization params
@@ -46,42 +48,42 @@ end
 
 ph = ctc.Parameters.Harmonization;
 
-% ── Reference waveform parameters ───────────────────────────────────────────
-if ~isempty(ctc.UnitList)
-    ref_unit = ctc.UnitList(1);
-    sr_ref   = ref_unit.MEArecording.RecordingInfo.SamplingRate;
-    n_ref    = length(ref_unit.ReferenceWaveform);
-    fprintf('Waveform reference from ctc.UnitList: sr=%g Hz, %i samples\n', sr_ref, n_ref);
-else
-    sr_ref = ctc.Parameters.External.WaveformSamplingRate;
-    n_ref  = ctc.Parameters.External.WaveformNSamples;
-    fprintf('Waveform reference from ctc.Parameters.External: sr=%g Hz, %i samples\n', sr_ref, n_ref);
-end
+% ── Harmonized output parameters (independent of input source) ─────────────
+% All waveforms are resampled to target_sr and trimmed to a fixed time
+% window around the trough. This guarantees identical output dimensions
+% regardless of input sampling rate or sample count.
+target_sr     = ph.WaveformTargetSamplingRate;
+pre_trough_ms  = ph.WaveformPreTrough;   % ms before trough (positive number, e.g. 1.0)
+post_trough_ms = ph.WaveformPostTrough;  % ms after trough  (positive number, e.g. 0.5)
+n_out_pre      = round(pre_trough_ms  * target_sr / 1000);  % samples before trough at target rate
+n_out_post     = round(post_trough_ms * target_sr / 1000);  % samples after  trough at target rate
+n_out          = n_out_pre + n_out_post + 1;                 % total output samples
+fprintf('Waveform harmonization: [-%g, +%g] ms @ %g Hz → %d samples\n', ...
+    pre_trough_ms, post_trough_ms, target_sr, n_out);
 
 % ── Input orientation: enforce (N_samples × N_units) and (N_bins × N_units) ─
-% The expected waveform sample count is known from the reference sampling rate
-% and the standard Kilosort template width (82 samples at 30 kHz). Using this
-% avoids the ambiguous heuristic when N_units > N_samples.
+% Use expected ACG bin count as the reliable anchor; waveform orientation
+% follows from matching unit count with ACGs.
 [r_wf, c_wf]   = size(waveforms);
 [r_acg, c_acg] = size(acgs);
 
-expected_wf_samples = n_ref;  % from ctc.Parameters or the DeePhys default
-if r_wf ~= expected_wf_samples && c_wf == expected_wf_samples
-    waveforms = waveforms'; [~, c_wf] = size(waveforms);
-elseif r_wf ~= expected_wf_samples && c_wf ~= expected_wf_samples
-    % Fallback: use the heuristic but warn
+n_bins_expected = round(2 * acg_lag / acg_bin_size) + 1;
+if r_acg ~= n_bins_expected && c_acg == n_bins_expected
+    acgs = acgs'; [r_acg, c_acg] = size(acgs);
+elseif r_acg ~= n_bins_expected && c_acg ~= n_bins_expected
     warning('buildFeatureMatrix:orient', ...
-        'Neither waveform dimension matches expected %i samples — using size heuristic.', expected_wf_samples);
-    if c_wf > r_wf, waveforms = waveforms'; [~, c_wf] = size(waveforms); end
+        'Neither ACG dimension matches expected %i bins — using size heuristic.', n_bins_expected);
+    if c_acg > r_acg, acgs = acgs'; [r_acg, c_acg] = size(acgs); end
 end
-% ACG orientation: use the expected bin count
-n_bins_expected_orient = round(2 * acg_lag / acg_bin_size) + 1;
-if r_acg ~= n_bins_expected_orient && c_acg == n_bins_expected_orient
-    acgs = acgs'; [~, c_acg] = size(acgs);
-elseif r_acg ~= n_bins_expected_orient && c_acg ~= n_bins_expected_orient
-    warning('buildFeatureMatrix:orient', ...
-        'Neither ACG dimension matches expected %i bins — using size heuristic.', n_bins_expected_orient);
-    if c_acg > r_acg, acgs = acgs'; [~, c_acg] = size(acgs); end
+
+% Orient waveforms to match ACG unit count
+if c_wf == c_acg
+    % Already correct orientation
+elseif r_wf == c_acg
+    waveforms = waveforms'; [r_wf, c_wf] = size(waveforms);
+else
+    % Neither dimension matches — try smaller-dim-is-samples heuristic
+    if c_wf > r_wf, waveforms = waveforms'; [r_wf, c_wf] = size(waveforms); end
 end
 
 assert(c_wf == c_acg, ...
@@ -105,59 +107,110 @@ assert(n_bins_in == n_bins_harm, ...
      'Recompute your ACGs with the matching parameters or update ctc.Parameters.Harmonization.'], ...
     n_bins_in, n_bins_harm, ph.ACGBinSize, ph.ACGLag, n_bins_harm);
 
-% ── Resample waveforms to reference rate ─────────────────────────────────────
-if sr_wf ~= sr_ref
-    [p, q]    = rat(sr_ref / sr_wf, 1e-6);
-    waveforms = resample(double(waveforms), p, q);
-    fprintf('Resampled waveforms %g Hz → %g Hz (factor %i/%i)\n', sr_wf, sr_ref, p, q);
+% ── Waveform harmonization ────────────────────────────────────────────────────
+% Goal: produce aligned waveforms at target_sr covering a fixed time window
+%       around the trough. Output dimensions depend on edge_mode:
+%   "zero" / "edge" → fixed (n_out × N_units) using full requested window
+%   "trim"          → (n_trim × N_units) shrunk to the shortest available span
+%
+% Strategy per unit:
+%   1. Find trough (minimum) sample index
+%   2. Build time axis relative to trough (trough = 0 ms)
+%   3. Interpolate onto the output time grid at target_sr
+%   4. Handle out-of-range samples according to edge_mode
+%   5. Normalise by max(abs)
+
+wf_raw    = double(waveforms);
+dt_in     = 1000 / sr_wf;                                  % input sample spacing in ms
+dt_out    = 1000 / target_sr;                               % output sample spacing in ms
+edge_mode = ph.WaveformEdgeMode;                            % "zero" | "edge" | "trim"
+
+% ── Pass 1 (trim mode only): find tightest available window across all units
+if edge_mode == "trim"
+    global_pre_ms  = pre_trough_ms;
+    global_post_ms = post_trough_ms;
+    for u = 1:N_units
+        wf_u = wf_raw(:, u);
+        if all(wf_u == 0); continue; end
+        [~, trough_samp] = min(wf_u);
+        avail_pre_ms  = (trough_samp - 1) * dt_in;         % ms before trough
+        avail_post_ms = (size(wf_u,1) - trough_samp) * dt_in; % ms after trough
+        global_pre_ms  = min(global_pre_ms,  avail_pre_ms);
+        global_post_ms = min(global_post_ms, avail_post_ms);
+    end
+    % Recompute output grid with trimmed window
+    n_out_pre  = round(global_pre_ms  * target_sr / 1000);
+    n_out_post = round(global_post_ms * target_sr / 1000);
+    n_out      = n_out_pre + n_out_post + 1;
+    fprintf('Trim mode: window narrowed to [-%g, +%g] ms → %d samples\n', ...
+        global_pre_ms, global_post_ms, n_out);
 end
 
-% Trim / zero-pad to exactly n_ref samples
-n_got = size(waveforms, 1);
-if n_got > n_ref
-    waveforms = waveforms(1:n_ref, :);
-elseif n_got < n_ref
-    waveforms = [waveforms; zeros(n_ref - n_got, N_units)];
-end
+t_out = (-n_out_pre : n_out_post)' * dt_out;               % (n_out × 1) output time grid in ms
+aligned_wf = zeros(n_out, N_units);
+n_truncated = 0;
 
-% ── Waveform alignment ───────────────────────────────────────────────────────
-%  1. Interpolate to WaveformTargetSamplingRate with makima spline
-%  2. Normalise each waveform by max(abs)
-%  3. Circular-shift to align troughs to population mean position
-%  4. Trim 5×interp_factor samples from each edge
-target_sr         = ph.WaveformTargetSamplingRate;
-interp_factor_raw = target_sr / sr_ref;
-interp_factor     = round(interp_factor_raw);
-if abs(interp_factor_raw - interp_factor) > 1e-9
-    warning('buildFeatureMatrix:nonIntegerFactor', ...
-        ['WaveformTargetSamplingRate (%g Hz) is not an integer multiple of the reference rate (%g Hz). ' ...
-        'Rounding factor from %.6f to %i (effective: %g Hz).'], ...
-        target_sr, sr_ref, interp_factor_raw, interp_factor, sr_ref * interp_factor);
-end
-
-ref_wf = double(waveforms);
-ref_wf(sum(ref_wf, 2) == 0, :) = [];    % drop all-zero rows
-
-[~, trough_idx] = min(ref_wf, [], 1);
-peak_idx        = mean(trough_idx);
-max_offset      = round(peak_idx / 2);
-n_samp          = size(ref_wf, 1);
-buffer_n        = n_samp + 2 * max_offset;
-
-x  = max_offset : (n_samp + max_offset - 1);
-xq = linspace(1, buffer_n, buffer_n * interp_factor);
-
-interp_wf = interp1(x, ref_wf, xq, 'makima');
-interp_wf = interp_wf( (max_offset*interp_factor + 1) : ((buffer_n-max_offset-1)*interp_factor), :);
-interp_wf = interp_wf ./ max(abs(interp_wf), [], 1);
-
-[~, min_idx] = min(interp_wf, [], 1);
-shifts = round(peak_idx * interp_factor) - min_idx;
 for u = 1:N_units
-    interp_wf(:, u) = circshift(interp_wf(:, u), shifts(u));
+    wf_u = wf_raw(:, u);
+
+    % Skip all-zero waveforms
+    if all(wf_u == 0)
+        continue
+    end
+
+    % Find trough in raw waveform
+    [~, trough_samp] = min(wf_u);
+
+    % Build input time axis relative to trough (ms)
+    n_in   = size(wf_u, 1);
+    t_in   = ((1:n_in)' - trough_samp) * dt_in;            % trough at t=0
+
+    % Determine which output samples fall within the input range
+    t_min_avail = t_in(1);
+    t_max_avail = t_in(end);
+    in_range = (t_out >= t_min_avail) & (t_out <= t_max_avail);
+
+    if sum(in_range) < 3
+        warning('buildFeatureMatrix:shortWaveform', ...
+            'Unit %d: input waveform too short (%.2f ms available, [%.1f, %.1f] ms requested) — zeroed.', ...
+            u, t_max_avail - t_min_avail, -pre_trough_ms, post_trough_ms);
+        continue
+    end
+
+    % Interpolate within available range
+    wf_interp = zeros(n_out, 1);
+    wf_interp(in_range) = interp1(t_in, wf_u, t_out(in_range), 'makima');
+
+    % Fill out-of-range samples according to edge_mode
+    if ~all(in_range) && edge_mode == "edge"
+        % Hold boundary values (nearest-neighbor extrapolation)
+        first_valid = find(in_range, 1, 'first');
+        last_valid  = find(in_range, 1, 'last');
+        wf_interp(1:first_valid-1)   = wf_interp(first_valid);
+        wf_interp(last_valid+1:end)  = wf_interp(last_valid);
+    end
+    % "zero" mode: wf_interp was initialised to zeros, out-of-range stays 0
+    % "trim" mode: in_range should be all true after pass 1
+
+    if ~all(in_range)
+        n_truncated = n_truncated + 1;
+    end
+
+    % Normalise by max(abs)
+    amp = max(abs(wf_interp));
+    if amp > 0
+        wf_interp = wf_interp / amp;
+    end
+
+    aligned_wf(:, u) = wf_interp;
 end
 
-aligned_wf = interp_wf((5*interp_factor) : (end - 5*interp_factor), :);
+if n_truncated > 0
+    fprintf('Waveform edge handling (%s): %d/%d units had incomplete coverage\n', ...
+        edge_mode, n_truncated, N_units);
+end
+fprintf('Waveform alignment: %d units, %d input samples @ %g Hz → %d output samples @ %g Hz\n', ...
+    N_units, size(wf_raw, 1), sr_wf, n_out, target_sr);
 
 % ── ACG normalisation ────────────────────────────────────────────────────────
 norm_acgs = acgs ./ max(acgs, [], 1);
