@@ -30,26 +30,32 @@ freq_domain = abs(TEMP(1:floor(NFFT/2)));
 frequency = F(freq_idx);
 
 norm_freq_domain = freq_domain / max(freq_domain);
-l = [];
+abs_locs = [];  % Absolute bin positions in the original freq_domain
 p = [];
+offset = 0;  % Track cumulative offset from truncation
 for i = 1:n_peaks
     if length(norm_freq_domain) < 10
         break
     end
     [pks, locs, ~, ~] = findpeaks(norm_freq_domain, 'NPeaks', 1, 'SortStr', 'descend');
-    norm_freq_domain = norm_freq_domain(locs:end);
-    l = [l; locs]; %#ok<AGROW>
-    p = [p; pks]; %#ok<AGROW>
     if isempty(pks)
         break
     end
+    abs_locs = [abs_locs; offset + locs]; %#ok<AGROW>  % Convert to absolute position
+    p = [p; pks]; %#ok<AGROW>
+    offset = offset + locs - 1;  % Truncation removes indices 1..locs-1
+    norm_freq_domain = norm_freq_domain(locs:end);
 end
 
-log_p = log10(p) - min(log10(p)); % shift to positive for fitting
-try
-    f = fit(cumsum(l), log_p, 'exp1');
-    fit_coeff = f.b;
-catch
+if length(p) >= 2
+    log_p = log10(p) - min(log10(p)); % shift to positive for fitting
+    try
+        f = fit(abs_locs, log_p, 'exp1');
+        fit_coeff = f.b;
+    catch
+        fit_coeff = NaN;
+    end
+else
     fit_coeff = NaN;
 end
 

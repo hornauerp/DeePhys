@@ -29,14 +29,15 @@ function [norm_train, norm_test, feature_names] = prepareInputMatrix(rg, input_t
 
     input_mat = input_table.Variables;
     feature_names = string(input_table.Properties.VariableNames);
-    % Impute NaN with per-column median (avoids injecting artificial zeros)
+    % Impute NaN with per-column median from TRAINING data only (prevents data leakage)
     for col = 1:size(input_mat, 2)
+        train_col = input_mat(train_idx, col);
+        col_median = median(train_col(~isnan(train_col)));
+        if isnan(col_median)
+            col_median = 0; % All-NaN column fallback
+        end
         nan_mask = isnan(input_mat(:, col));
         if any(nan_mask)
-            col_median = median(input_mat(~nan_mask, col));
-            if isnan(col_median)
-                col_median = 0; % All-NaN column fallback
-            end
             input_mat(nan_mask, col) = col_median;
         end
     end

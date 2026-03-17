@@ -29,8 +29,8 @@ function [mlm_result_array, p_G, p_GxT, features] = runMLM(rg, network_features,
                 formula = ['y~ Week*', char(comparison_var), ' + (1|Subject)'];
                 lme = fitlme(tbl,formula,'FitMethod','REML','DummyVarCoding','effects');
                 mlm_result_array{f} = anova(lme,'DFMethod','satterthwaite');
-                p_G(f) = mlm_result_array{f}.pValue(3) * length(features);
-                p_GxT(f) = mlm_result_array{f}.pValue(4) * length(features);
+                p_G(f) = min(1, mlm_result_array{f}.pValue(3) * length(features));
+                p_GxT(f) = min(1, mlm_result_array{f}.pValue(4) * length(features));
             end
 
 end

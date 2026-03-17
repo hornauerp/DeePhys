@@ -51,14 +51,20 @@
              % Using 20 random rewirings for comparison
              n_rand = 20;
              n_nodes = size(con_mat, 1);
+             is_directed = isfield(obj.Connectivity.(alg(a)), "bd");
              if density > 0 && n_nodes >= 4
                  C_real = mean(clustering_coef);
                  L_real = charpath(distance_bin(con_mat));
                  C_rand_vals = zeros(1, n_rand);
                  L_rand_vals = zeros(1, n_rand);
                  for ir = 1:n_rand
-                     rand_mat = randmio_und(double(con_mat ~= 0), 5);
-                     C_rand_vals(ir) = mean(clustering_coef_bu(rand_mat));
+                     if is_directed
+                         rand_mat = randmio_dir(double(con_mat ~= 0), 5);
+                         C_rand_vals(ir) = mean(clustering_coef_bd(rand_mat));
+                     else
+                         rand_mat = randmio_und(double(con_mat ~= 0), 5);
+                         C_rand_vals(ir) = mean(clustering_coef_bu(rand_mat));
+                     end
                      L_rand_vals(ir) = charpath(distance_bin(rand_mat));
                  end
                  C_rand = mean(C_rand_vals);

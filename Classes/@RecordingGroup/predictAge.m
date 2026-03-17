@@ -35,17 +35,19 @@ function result = predictAge(rg, level, alg, stratification_var, stratification_
 
                 for k = 1:K_fold
                     if level == "Unit"
-                        train_table = object_group(cv.training(k)).getUnitFeatures(unit_features);
-                        test_table = object_group(cv.test(k)).getUnitFeatures(unit_features);
+                        train_recs = object_group(cv.training(k));
+                        test_recs  = object_group(cv.test(k));
+                        train_table = train_recs.getUnitFeatures(unit_features);
+                        test_table = test_recs.getUnitFeatures(unit_features);
                         train_idx = logical([ones(1, size(train_table,1)) zeros(1, size(test_table,1))]);
                         test_idx = ~train_idx;
-                        input_group = [object_group(cv.training(k)).Units, object_group(cv.test(k)).Units];
+                        input_group = [train_recs.Units, test_recs.Units];
                         input_table = [train_table;test_table];
-                        unit_recordings = [object_group.MEArecording];
-                        metadata = [unit_recordings.Metadata];
-                        true_age = [metadata.DIV];
-                        Y_train = true_age(train_idx);
-                        Y_test = true_age(test_idx);
+                        % Build per-unit age vector by expanding each recording's DIV
+                        Y_train = arrayfun(@(r) repmat(r.Metadata.DIV, 1, length(r.Units)), train_recs, 'un', 0);
+                        Y_train = [Y_train{:}];
+                        Y_test  = arrayfun(@(r) repmat(r.Metadata.DIV, 1, length(r.Units)), test_recs, 'un', 0);
+                        Y_test  = [Y_test{:}];
                     else
                         input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
                         train_idx = cv.training(k);

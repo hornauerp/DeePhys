@@ -25,7 +25,7 @@ classdef FeatureAssembly
                 obj
                 unit_features string = ["ReferenceWaveform", "ActivityFeatures"]
             end
-            if unit_features == "all"
+            if isscalar(unit_features) && unit_features == "all"
                 unit_features = ["ActivityFeatures", "WaveformFeatures", "RegularityFeatures", "Catch22", "GraphFeatures"];
             end
             if isa(obj, 'MEArecording')
@@ -86,7 +86,7 @@ classdef FeatureAssembly
                     network_array(i) = network_struct;
                 end
                 fnames = fieldnames(network_array);
-                if network_features == "all"
+                if isscalar(network_features) && network_features == "all"
                     nw_idx = 1:length(fnames);
                 else
                     nw_idx = find(contains(fnames, network_features));
@@ -105,7 +105,7 @@ classdef FeatureAssembly
                     unit_table = concatenateClusteredFeatures(obj, 0, unit_features);
                 else
                     fnames = fieldnames([obj.UnitFeatures]);
-                    if unit_features == "all"
+                    if isscalar(unit_features) && unit_features == "all"
                         feat_idx = 1:length(fnames);
                     else
                         feat_idx = find(contains(fnames, unit_features));

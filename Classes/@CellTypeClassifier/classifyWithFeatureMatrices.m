@@ -2,13 +2,9 @@ function [labels, train_reduction, test_reduction] = classifyWithFeatureMatrices
 % CLASSIFYWITHFEATUREMATRICES  Supervised UMAP classification from raw feature matrices.
 %
 % Low-level entry point for mixed or fully external classification workflows.
-% Applies joint z-score normalisation (train + test stacked), drops constant
-% features, scales by the training-set column maximum, then runs supervisedUMAP.
-%
-% Normalisation note:
-%   DeePhys' default classifyUnits path uses chip-level (ChipID) z-scoring
-%   followed by a global z-score. This method uses a single joint z-score —
-%   the only option when training and test sets come from different sources.
+% Fits z-score normalisation on training data only, applies to test set,
+% drops constant features, scales by the training-set column maximum,
+% then runs supervisedUMAP.
 %
 % INPUTS:
 %   ctc           - CellTypeClassifier (must have TrainLabels set)
@@ -32,22 +28,21 @@ end
 
 N_train = size(X_train, 1);
 
-% Joint z-score normalisation
-X_combined        = [X_train; X_test];
-[X_norm, ~, ~]    = normalize(X_combined, 1, 'zscore');
+% Z-score normalisation fitted on training data only (prevents data leakage)
+[X_tr, train_mu, train_sd] = normalize(X_train, 1, 'zscore');
+X_te = normalize(X_test, 'center', train_mu, 'scale', train_sd);
 
 % Drop features where training block is NaN (constant or all-zero features)
-nan_cols = any(isnan(X_norm(1:N_train, :)), 1);
-X_norm(:, nan_cols)   = [];
+nan_cols = any(isnan(X_tr), 1);
+X_tr(:, nan_cols)     = [];
+X_te(:, nan_cols)     = [];
 feature_names(nan_cols) = [];
 
 % Scale by training-set column maximum
-scale        = max(abs(X_norm(1:N_train, :)), [], 1);
+scale        = max(abs(X_tr), [], 1);
 scale(scale == 0) = 1;
-X_norm       = X_norm ./ scale;
-
-X_tr = X_norm(1:N_train, :);
-X_te = X_norm(N_train+1:end, :);
+X_tr       = X_tr ./ scale;
+X_te       = X_te ./ scale;
 
 [labels, ~, ~, test_reduction, train_reduction] = supervisedUMAP(ctc, ...
     X_tr, y_train, feature_names, X_te);

@@ -52,7 +52,17 @@ function result = applyClassifier(rg, level, alg, classification_var, clf_poolin
             [test_group_idx, test_group_labels] = combineMetadataIndices(rg, object_group, test_var, test_pooling_vals);
 %             [test_group_idx,test_group_labels] = rg.poolMetadataValues(test_group_idx, test_group_labels, );
 
-            train_idx = test_group_idx == 1;
+            % Training set: first group in test_pooling_vals (matched by label, not index)
+            if ~isempty(test_pooling_vals)
+                train_label = test_pooling_vals{1};
+                train_group = find(strcmp(test_group_labels, string(train_label)), 1);
+                if isempty(train_group)
+                    train_group = 1;
+                end
+            else
+                train_group = 1;
+            end
+            train_idx = test_group_idx == train_group;
             test_idx = ~train_idx;
             Y_train = Y(train_idx);
             Y_test = Y(test_idx);

@@ -44,17 +44,19 @@ if size(confmat,1) > 2
         F1score(:,i)     = (2*TP) /(2*TP + FP + FN);
      end
     
-        % Remove junks         
-        stats = [Precision', Recall', F1score', Accuracy', Specificity'];
-        stats(any(isinf(stats),2),:) = 0;
-        stats(any(isnan(stats),2),:) = 0;
-        
-        % Compute averages
-        Accuracy  = sum(stats(:,4));
-        Precision = mean(stats(:,1));
-        Recall    = mean(stats(:,2));
+        % Handle undefined metrics (Inf/NaN) per class without zeroing entire rows.
+        % Replace individual NaN/Inf with 0 so that defined metrics are preserved.
+        Precision(isnan(Precision) | isinf(Precision)) = 0;
+        Recall(isnan(Recall) | isinf(Recall)) = 0;
+        F1score(isnan(F1score) | isinf(F1score)) = 0;
+        Specificity(isnan(Specificity) | isinf(Specificity)) = 0;
+
+        % Compute overall accuracy as trace(confmat) / total (not sum of per-class accuracy)
+        Accuracy  = sum(diag(confmat)) / sum(confmat(:));
+        Precision = mean(Precision);
+        Recall    = mean(Recall);
         Specificity = mean(Specificity);
-        F1score = mean(stats(:,3));
+        F1score = mean(F1score);
 else
         TP = confmat(1, 1);
         FP = confmat(2, 1);

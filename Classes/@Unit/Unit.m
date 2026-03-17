@@ -28,6 +28,7 @@ classdef Unit < handle
 
     properties (Dependent)
         FullACG
+        unitID           % Index of this unit in MEArecording.Units (recomputed each access)
     end
 
     properties (Access = private)
@@ -148,9 +149,13 @@ classdef Unit < handle
                 params struct = struct()
             end
             if isempty(fieldnames(params))
-                try
+                has_ccg = ~isempty(unit.MEArecording) ...
+                    && isfield(unit.MEArecording.Connectivity, 'CCG') ...
+                    && isfield(unit.MEArecording.Connectivity.CCG, 'CCGs') ...
+                    && ~isempty(unit.unitID);
+                if has_ccg
                     acg = unit.MEArecording.Connectivity.CCG.CCGs(:, unit.unitID, unit.unitID);
-                catch
+                else
                     [acg, ~] = CCG(unit.SpikeTimes, ones(size(unit.SpikeTimes)), ...
                         'binSize', unit.UnitParams.CCG.BinSize, ...
                         'duration', unit.UnitParams.CCG.Duration, ...
@@ -166,11 +171,12 @@ classdef Unit < handle
         end
 
         function uid = get.unitID(unit)
-            % Return cached ID; recompute only if cache is empty
-            if isempty(unit.CachedUnitID) && ~isempty(unit.MEArecording)
-                unit.CachedUnitID = find(unit.MEArecording.Units == unit, 1);
+            % Always recompute to avoid stale indices after unit filtering/removal
+            if ~isempty(unit.MEArecording) && ~isempty(unit.MEArecording.Units)
+                uid = find(unit.MEArecording.Units == unit, 1);
+            else
+                uid = [];
             end
-            uid = unit.CachedUnitID;
         end
 
         function acg = get.FullACG(unit)
@@ -182,8 +188,20 @@ classdef Unit < handle
         end
 
         function s = saveobj(unit)
-        % SAVEOBJ  Serialize Unit for save().
-            s = unit;
+        % SAVEOBJ  Serialize Unit for save(), breaking the circular MEArecording reference.
+            s = struct();
+            mc = metaclass(unit);
+            props = mc.PropertyList;
+            for i = 1:length(props)
+                p = props(i);
+                if p.Dependent || p.Transient || ~strcmp(p.GetAccess, 'public')
+                    continue
+                end
+                if p.Name == "MEArecording"
+                    continue  % Break circular reference — restored by MEArecording.loadobj
+                end
+                s.(p.Name) = unit.(p.Name);
+            end
         end
     end
 end

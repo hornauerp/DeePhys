@@ -34,7 +34,7 @@
                 peak_2_abs_idx = peak_2_rel_idx + unit_trough_idx(u) - 1;
 
                 asymmetry_u = (peak_2_value - peak_1_value) / (peak_2_value + peak_1_value);
-                t2pdelay_u  = (peak_2_abs_idx - unit_trough_idx(u)) / (obj.RecordingInfo.SamplingRate / 1000); %in [ms]
+                t2pdelay_u  = (peak_2_abs_idx - unit_trough_idx(u)) / (obj.RecordingInfo.SamplingRate * interpolation_factor / 1000); %in [ms]
                 t2pratio_u  = abs(unit_trough_value(u) / peak_2_value);
 
                 % AUC features using per-unit zero crossings and waveform column
@@ -75,7 +75,7 @@
                 feature_names = fieldnames(unit_features);
                 for f = 1:length(feature_names) %If slewrates could not be calculated // should happen very rarely
                    if isempty(unit_features.(feature_names{f}))
-                       unit_features.(feature_names{f}) = 0;
+                       unit_features.(feature_names{f}) = NaN;
                    end
                 end
                 waveform_features{u} = unit_features;

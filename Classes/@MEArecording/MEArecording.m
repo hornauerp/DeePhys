@@ -1373,9 +1373,11 @@ classdef MEArecording < handle
             Version2: change the implementation of ReLu, get rid of the translation
            %}
            TR = 1;
-           V_obs = zeros(obj.RecordingInfo.Duration * round(1/obj.Parameters.DDC.BinSize),length(obj.Units));
-           spiketimes_ms = round(obj.Spikes.Times * 1000);
-           V_obs(sub2ind(size(V_obs), spiketimes_ms, obj.Spikes.Units)) = 1;
+           bin_size = obj.Parameters.DDC.BinSize;
+           n_bins = ceil(obj.RecordingInfo.Duration / bin_size);
+           V_obs = zeros(n_bins, length(obj.Units));
+           spiketimes_binned = max(1, min(n_bins, round(obj.Spikes.Times / bin_size) + 1));
+           V_obs(sub2ind(size(V_obs), spiketimes_binned, obj.Spikes.Units)) = 1;
 %            V_obs = smoothdata(V_obs,'gaussian',3);
            [~,N] = size(V_obs);
            % 	Cov = cov(V_obs);
@@ -1388,7 +1390,7 @@ classdef MEArecording < handle
            dV = [mean(dV);dV;mean(dV)]; % substitute the first and last row with mean
            tmp = cov([dV V_obs]);
            dCov = tmp(1:N,N+1:end);
-           obj.Connectivity.DDC.wu = dCov * inv(B);
+           obj.Connectivity.DDC.wu = dCov / B;
        end
        
        function inferConnectivitySTTC(obj)

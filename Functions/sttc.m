@@ -41,7 +41,13 @@ else
     PA = PA / N1; 
     PB = run_P(N2, N1, dt, spike_times_2, spike_times_1); 
     PB = PB / N2; 
-    index = 0.5 * (PA - TB) / (1 - TB * PA) + 0.5 * (PB - TA) / (1 - TA * PB);
+    denom1 = 1 - TB * PA;
+    denom2 = 1 - TA * PB;
+    if denom1 == 0 || denom2 == 0
+        index = NaN;
+    else
+        index = 0.5 * (PA - TB) / denom1 + 0.5 * (PB - TA) / denom2;
+    end
 end 
 
 tileCoef = index; 

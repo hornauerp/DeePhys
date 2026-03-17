@@ -23,25 +23,22 @@ function result = classifyByFeatureGroups(rg, level, alg, classification_var, po
             t_start = tic;
 
             if isempty(grouping_var) %Get group indices for stratification
-                object_group = [rg.Recordings]; %Stratify on recordings level also for units, to avoid bias
-            else
-                [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
-            end
-            [group_idx, group_labels_comb] = rg.combineMetadataIndices(object_group, classification_var, pooling_vals);
-
-
-            if isempty(grouping_var)
                 if level == "Unit"
-                    input_table = object_group.getUnitFeatures(unit_features);
                     object_group = [rg.Units];
+                    input_table = [rg.Recordings].getUnitFeatures(unit_features);
                     [Y, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var, pooling_vals);
+                    group_idx = Y;
                 elseif level == "Recording"
+                    object_group = [rg.Recordings];
                     input_table = object_group.getRecordingFeatures(network_features, unit_features, useClustered);
+                    [group_idx, group_labels_comb] = rg.combineMetadataIndices(object_group, classification_var, pooling_vals);
                     Y = group_idx;
                 else
                     error('Unknown level')
                 end
             else
+                [input_table, object_group] = aggregateCultureFeatureTables(rg, level, grouping_var, grouping_values, tolerance, network_features, unit_features, normalization, useClustered);
+                [group_idx, group_labels_comb] = rg.combineMetadataIndices(object_group, classification_var, pooling_vals);
                 if level == "Unit"
                     Y = arrayfun(@(x) ones(1,length([object_group{x}(1).Units]))*group_idx(x),1:length(group_idx),'un',0);
                     object_group = cellfun(@(x) [x(1).Units],object_group,'un',0);

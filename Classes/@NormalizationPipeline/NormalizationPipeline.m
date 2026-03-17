@@ -149,11 +149,23 @@ end
 
 function X_out = applyGroupZscore(X, group_labels, fit)
 % Apply previously fitted per-group z-score to new data.
+% Unseen groups fall back to pooled training statistics.
     X_out = X;
+    known_mask = false(size(X, 1), 1);
     for g = 1:length(fit.groups)
         mask = (group_labels == fit.groups(g));
         if any(mask)
             X_out(mask,:) = normalize(X(mask,:), 'center', fit.means(g,:), 'scale', fit.sds(g,:));
+            known_mask = known_mask | mask(:);
         end
+    end
+    % Handle unseen groups: use mean of fitted group statistics as fallback
+    if any(~known_mask)
+        warning('NormalizationPipeline:unseenGroup', ...
+            '%d samples belong to groups not seen during fit — using pooled training statistics.', sum(~known_mask));
+        fallback_mean = mean(fit.means, 1);
+        fallback_sd   = mean(fit.sds, 1);
+        fallback_sd(fallback_sd == 0) = 1;
+        X_out(~known_mask,:) = normalize(X(~known_mask,:), 'center', fallback_mean, 'scale', fallback_sd);
     end
 end

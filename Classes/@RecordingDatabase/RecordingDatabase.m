@@ -224,15 +224,25 @@ classdef RecordingDatabase < handle
 
     methods (Static)
 
-        function db = instance(db_path)
+        function db = instance(db_path, do_reset)
         % INSTANCE  Get the singleton RecordingDatabase.
-        %   db = RecordingDatabase.instance()          — default path
+        %   db = RecordingDatabase.instance()            — default path
         %   db = RecordingDatabase.instance(custom_path) — override path
+        %   RecordingDatabase.instance("", true)         — reset singleton
             arguments
                 db_path string = ""
+                do_reset logical = false
             end
 
             persistent shared_db
+            if do_reset
+                if ~isempty(shared_db) && isvalid(shared_db)
+                    shared_db.close();
+                end
+                shared_db = [];
+                db = [];
+                return
+            end
             if isempty(shared_db) || ~isvalid(shared_db)
                 if db_path == ""
                     shared_db = RecordingDatabase();
@@ -245,11 +255,7 @@ classdef RecordingDatabase < handle
 
         function resetInstance()
         % RESETINSTANCE  Clear the singleton (for testing).
-            persistent shared_db
-            if ~isempty(shared_db) && isvalid(shared_db)
-                shared_db.close();
-            end
-            shared_db = [];
+            RecordingDatabase.instance("", true);
         end
 
         function available = isAvailable()

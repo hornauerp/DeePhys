@@ -94,11 +94,12 @@ function Burst = detectBurstsLogISI(obj, min_spikes)
             b_start = i;
             in_burst = true;
         elseif ~is_intra(i) && in_burst
-            % End of burst: spike indices b_start to i
+            % End of burst: ISI i is inter-burst, so last intra-burst spike is i
+            % (ISI b_start..i-1 are intra-burst, spanning spikes b_start..i)
             n_spikes_in_burst = i - b_start + 1;
             if n_spikes_in_burst >= min_spikes
                 burst_starts = [burst_starts; spike_times(b_start)]; %#ok<AGROW>
-                burst_ends = [burst_ends; spike_times(i)]; %#ok<AGROW>
+                burst_ends = [burst_ends; spike_times(i)]; %#ok<AGROW> % spike_times(i) is the last spike connected by intra-burst ISIs
             end
             in_burst = false;
         end

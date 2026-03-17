@@ -21,14 +21,19 @@ end
 for pf = 1:length(parameter_fields)
     field = parameter_fields{pf};
     if ismember(field, fieldnames(merged))
-        subfields = fieldnames(overrides.(field));
-        for sf = 1:length(subfields)
-            subfield = subfields{sf};
-            if ismember(subfield, fieldnames(merged.(field)))
-                merged.(field).(subfield) = overrides.(field).(subfield);
-            else
-                warning("Unrecognized parameter field: %s.%s", field, subfield)
+        if isstruct(overrides.(field)) && isstruct(merged.(field))
+            subfields = fieldnames(overrides.(field));
+            for sf = 1:length(subfields)
+                subfield = subfields{sf};
+                if ismember(subfield, fieldnames(merged.(field)))
+                    merged.(field).(subfield) = overrides.(field).(subfield);
+                else
+                    warning("Unrecognized parameter field: %s.%s", field, subfield)
+                end
             end
+        else
+            % Direct (non-struct) override at the top level
+            merged.(field) = overrides.(field);
         end
     else
         warning("Unrecognized parameter field: %s", field)
