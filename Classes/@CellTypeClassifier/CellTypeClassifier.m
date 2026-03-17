@@ -106,10 +106,10 @@ classdef CellTypeClassifier < handle
             % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to
             % ensure DeePhys and external units are projected into the same feature space.
             % Change these to harmonize to a different ACG resolution or waveform rate.
-            defaultParams.Harmonization.WaveformTargetSamplingRate = 300000;  % Hz — output rate after interpolation
+            defaultParams.Harmonization.WaveformTargetSamplingRate = 120000;  % Hz — output rate after interpolation
             defaultParams.Harmonization.WaveformPreTrough          = 1.0;   % ms before trough to include
-            defaultParams.Harmonization.WaveformPostTrough         = 0.5;   % ms after  trough to include
-            defaultParams.Harmonization.WaveformEdgeMode           = "zero"; % "zero" | "edge" | "trim"
+            defaultParams.Harmonization.WaveformPostTrough         = 1.0;   % ms after  trough to include
+            defaultParams.Harmonization.WaveformEdgeMode           = "trim"; % "zero" | "edge" | "trim"
                 % zero — zero-pad regions outside available input
                 % edge — hold the boundary value (nearest-neighbor extrapolation)
                 % trim — shrink output window to the shortest available span across all units
