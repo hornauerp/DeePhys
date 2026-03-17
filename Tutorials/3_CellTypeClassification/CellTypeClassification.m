@@ -100,16 +100,32 @@ fprintf('Classification: %d excitatory, %d inhibitory\n', n_exc, n_inh)
 %% 7 - Inspect classification quality
 % Check that inhibitory units have distinct ACG and waveform profiles
 figure('Color', 'w');
+
+% Train embedding (labelled by isolation forest)
 subplot(1, 2, 1)
-title('Supervised UMAP')
-scatter(ctc.Reduction.Test(:,1), ctc.Reduction.Test(:,2), 5, ctc.UnitLabels, 'filled')
+train_idx = ctc.TrainLabels.sorted_train_ids;
+train_labels = ctc.UnitLabels(train_idx);
+scatter(ctc.Reduction.Train(:,1), ctc.Reduction.Train(:,2), 5, train_labels, 'filled')
+title('Train (isolation forest labels)')
+colorbar
+
+% Test embedding (labelled by supervised UMAP propagation)
+subplot(1, 2, 2)
+test_idx = ctc.TrainLabels.umap_test_idx;
+test_labels = ctc.UnitLabels(test_idx);
+scatter(ctc.Reduction.Test(:,1), ctc.Reduction.Test(:,2), 5, test_labels, 'filled')
+title('Test (propagated labels)')
 colorbar
 
 % Per-chip I/E ratio sanity check
-chips = unique([cellfun(@(x) x(1).Metadata.ChipID, rg.Cultures, 'un', false)]);
-for c = 1:min(5, length(chips))
-    fprintf('Chip %s: ', chips{c})
-    % count E/I per chip
+unit_chips = arrayfun(@(u) string(u.MEArecording.Metadata.ChipID), ctc.UnitList);
+unique_chips = unique(unit_chips);
+for c = 1:length(unique_chips)
+    mask = unit_chips == unique_chips(c);
+    chip_labels = ctc.UnitLabels(mask);
+    n_e = sum(chip_labels == 1);
+    n_i = sum(chip_labels == 2);
+    fprintf('Chip %s: %d E / %d I (%.1f%% inhibitory)\n', unique_chips(c), n_e, n_i, 100 * n_i / max(n_e + n_i, 1));
 end
 
 %% 8 - Apply to external data (optional)

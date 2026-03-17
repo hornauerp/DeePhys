@@ -67,7 +67,32 @@ try
     else
         n_bins_cached = length(unit_list(1).ACG);
     end
-    use_cached = (n_bins_cached == n_bins_harm);
+    % Check both bin count AND actual parameters (bin size + lag).
+    % Two different (BinSize, Lag) pairs can yield the same bin count.
+    params_match = false;
+    if n_bins_cached == n_bins_harm
+        rec1 = unit_list(1).MEArecording;
+        if ~isempty(rec1)
+            if acg_source == "FullACG" && isfield(rec1.Connectivity, 'FullCCG') ...
+                    && isfield(rec1.Connectivity.FullCCG, 'args')
+                cached_args = rec1.Connectivity.FullCCG.args;
+                params_match = abs(cached_args.binsize - ph.ACGBinSize) < 1e-9 ...
+                    && abs(cached_args.duration - 2 * ph.ACGLag) < 1e-9;
+            elseif acg_source == "ACG" && isfield(rec1.Connectivity, 'CCG') ...
+                    && isfield(rec1.Connectivity.CCG, 'args')
+                cached_args = rec1.Connectivity.CCG.args;
+                params_match = abs(cached_args.binsize - ph.ACGBinSize) < 1e-9 ...
+                    && abs(cached_args.duration - 2 * ph.ACGLag) < 1e-9;
+            else
+                % No stored args — fall back to bin count match only
+                params_match = true;
+            end
+        else
+            % No MEArecording reference — trust bin count
+            params_match = true;
+        end
+    end
+    use_cached = params_match;
 catch
     use_cached    = false;
     n_bins_cached = 0;
