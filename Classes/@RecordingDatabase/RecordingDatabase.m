@@ -198,20 +198,33 @@ classdef RecordingDatabase < handle
             end
         end
 
+        function sql_char = toCharSQL(~, sql)
+        % TOCHARSQL  Convert any SQL input to a char vector.
+            if ischar(sql)
+                sql_char = sql;
+            elseif isstring(sql) && isscalar(sql)
+                sql_char = char(sql);
+            elseif isstring(sql)
+                sql_char = char(strjoin(sql, ""));
+            else
+                sql_char = char(string(sql));
+            end
+        end
+
         function sqlExecute(db, sql)
         % SQLEXECUTE  Version-safe SQL execution (execute vs exec).
-            sql = strjoin(sql, "");  % ensure scalar string from string arrays
+            sql_char = db.toCharSQL(sql);
             if ismethod(db.Connection, 'execute')
-                execute(db.Connection, char(sql));
+                execute(db.Connection, sql_char);
             else
-                exec(db.Connection, char(sql));
+                exec(db.Connection, sql_char);
             end
         end
 
         function rows = sqlFetch(db, sql)
         % SQLFETCH  Version-safe SQL fetch.
-            sql = strjoin(sql, "");
-            rows = fetch(db.Connection, char(sql));
+            sql_char = db.toCharSQL(sql);
+            rows = fetch(db.Connection, sql_char);
         end
 
     end
