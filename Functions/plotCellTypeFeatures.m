@@ -29,9 +29,33 @@ assert(~isempty(ctc.TrainLabels), ...
     'ctc.TrainLabels is empty — run generateTrainLabels() first.');
 
 % ── Unpack ──────────────────────────────────────────────────────────────────
-train_mask = ctc.TrainLabels.umap_train_idx(:)';
-test_mask  = ctc.TrainLabels.umap_test_idx(:)';
-labels     = ctc.UnitLabels;
+labels = ctc.UnitLabels;
+N      = numel(labels);
+ph     = ctc.Parameters.Harmonization;
+
+% Detect transfer mode: TrainLabels indices refer to a different (source)
+% unit list, so train_mask/test_mask don't apply to this ctc's data.
+% In transfer mode, all units in this ctc are "test" (target) units.
+is_transfer = false;
+if isfield(ctc.TrainLabels, 'umap_train_idx')
+    train_idx_raw = ctc.TrainLabels.umap_train_idx(:)';
+    test_idx_raw  = ctc.TrainLabels.umap_test_idx(:)';
+    % Check if the masks are compatible with this ctc's unit count
+    if max([find(train_idx_raw, 1, 'last'), find(test_idx_raw, 1, 'last')]) <= N ...
+            && numel(train_idx_raw) == N
+        train_mask = logical(train_idx_raw);
+        test_mask  = logical(test_idx_raw);
+    else
+        is_transfer = true;
+    end
+else
+    is_transfer = true;
+end
+
+if is_transfer
+    train_mask = false(1, N);      % no training units in target ctc
+    test_mask  = true(1, N);       % all units are test
+end
 
 % Harmonized data: (N_samples × N_units) — transpose to (N_units × N_samples)
 all_wf   = ctc.HarmonizedWaveforms';
@@ -43,43 +67,53 @@ acg_scale = max(all_acgs,     [], 2); acg_scale(acg_scale  == 0) = 1;
 norm_wf   = all_wf   ./ wf_scale;
 norm_acgs = all_acgs ./ acg_scale;
 
-% Time axes for x-labels
-ph = ctc.Parameters.Harmonization;
-
-% Waveform axis: use effective SR after interpolation (stored by classifyUnits),
-% falling back to the target parameter if not yet set.
-if ~isempty(ctc.HarmonizedSR) && ctc.HarmonizedSR > 0
-    wf_sr = ctc.HarmonizedSR;
+% ── Time axes ──────────────────────────────────────────────────────────────
+% Waveform axis: trough-centred using Harmonization time window
+n_wf_samp = size(all_wf, 2);
+if isfield(ph, 'WaveformPreTrough') && isfield(ph, 'WaveformPostTrough')
+    t_wf = linspace(-ph.WaveformPreTrough, ph.WaveformPostTrough, n_wf_samp);  % ms
 else
+    % Legacy fallback: assume zero-based
     wf_sr = ph.WaveformTargetSamplingRate;
+    t_wf  = (0:n_wf_samp-1) / wf_sr * 1000;
 end
-t_wf  = (0:size(all_wf, 2)-1) / wf_sr * 1000;  % ms
 
-% ACG axis: derived from the actual bin size (more precise than linspace over ACGLag)
+% ACG axis: symmetric around zero
 n_acg_bins = size(all_acgs, 2);
 half_bins  = floor(n_acg_bins / 2);
 t_acg = (-half_bins:half_bins) * ph.ACGBinSize * 1000;  % ms
 if numel(t_acg) ~= n_acg_bins
-    % Fallback if bin count is even (no centre bin)
     t_acg = linspace(-ph.ACGLag, ph.ACGLag, n_acg_bins) * 1000;
 end
 
 % ── Figure 1: heatmap grid ─────────────────────────────────────────────────
 cell_type_vals = [1, 2];
 type_labels    = ["Excitatory", "Inhibitory"];
-split_masks    = {train_mask, train_mask, test_mask, test_mask};
-col_labels     = ["Train - waveforms", "Train - ACGs", "Test - waveforms", "Test - ACGs"];
-use_acg        = [false, true, false, true];
+
+if is_transfer
+    % Transfer mode: 2×2 grid (target units only, no train/test split)
+    split_masks = {test_mask, test_mask};
+    col_labels  = ["Waveforms", "ACGs"];
+    use_acg     = [false, true];
+    n_cols      = 2;
+    fig_title   = 'Transfer classifier — target units';
+else
+    % Standard mode: 2×4 grid (train + test)
+    split_masks = {train_mask, train_mask, test_mask, test_mask};
+    col_labels  = ["Train - waveforms", "Train - ACGs", "Test - waveforms", "Test - ACGs"];
+    use_acg     = [false, true, false, true];
+    n_cols      = 4;
+    fig_title   = 'Harmonized classifier input (top: excitatory | bottom: inhibitory)';
+end
 
 figure('Color', 'w', 'Name', 'Cell-type features (harmonized)');
-tl = tiledlayout(2, 4, 'TileSpacing', 'compact', 'Padding', 'compact');
-title(tl, 'Harmonized classifier input (top: excitatory | bottom: inhibitory)', ...
-    'FontWeight', 'normal');
+tl = tiledlayout(2, n_cols, 'TileSpacing', 'compact', 'Padding', 'compact');
+title(tl, fig_title, 'FontWeight', 'normal');
 
 for r = 1:2
     ct_mask = labels == cell_type_vals(r);
 
-    for c = 1:4
+    for c = 1:n_cols
         m = ct_mask & split_masks{c};
 
         if use_acg(c)
@@ -87,8 +121,6 @@ for r = 1:2
             t_x = t_acg;
             x_label = 'Lag (ms)';
             if ~isempty(sub)
-                % Sort by peak position in first half only (negative lags)
-                % to avoid random flips from the symmetric ACG structure
                 half = floor(size(sub, 2) / 2);
                 [~, peak_pos] = max(sub(:, 1:half), [], 2);
                 [~, ord]      = sort(peak_pos);
@@ -128,32 +160,33 @@ for r = 1:2
 end
 
 % ── Figure 2: average waveforms per cell type ──────────────────────────────
-colors = struct('exc', [0.2 0.4 0.8], 'inh', [0.8 0.2 0.2]);
+clrs = struct('exc', [0.2 0.4 0.8], 'inh', [0.8 0.2 0.2]);
+
+if is_transfer
+    split_names = "Target";
+    split_idx   = {test_mask};
+else
+    split_names = ["Train", "Test"];
+    split_idx   = {train_mask, test_mask};
+end
 
 figure('Color', 'w', 'Name', 'Average waveforms by cell type');
-tl2 = tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-title(tl2, 'Mean waveform (+/- SEM) by cell type', 'FontWeight', 'normal');
+tl2 = tiledlayout(1, numel(split_idx), 'TileSpacing', 'compact', 'Padding', 'compact');
+title(tl2, 'Mean waveform (\pm SEM) by cell type', 'FontWeight', 'normal');
 
-split_names  = ["Train", "Test"];
-split_idx    = {train_mask, test_mask};
-
-for s = 1:2
+for s = 1:numel(split_idx)
     nexttile; hold on;
     mask_s = split_idx{s};
 
     for ct = 1:2
         m = mask_s & (labels == cell_type_vals(ct));
-        wf_sub = all_wf(m, :);  % unnormalised — preserves amplitude
+        wf_sub = all_wf(m, :);
         if isempty(wf_sub); continue; end
 
         mu  = mean(wf_sub, 1);
         sem = std(wf_sub, 0, 1) / sqrt(size(wf_sub, 1));
 
-        if ct == 1
-            clr = colors.exc;
-        else
-            clr = colors.inh;
-        end
+        if ct == 1; clr = clrs.exc; else; clr = clrs.inh; end
 
         fill([t_wf, fliplr(t_wf)], [mu+sem, fliplr(mu-sem)], clr, ...
             'FaceAlpha', 0.2, 'EdgeColor', 'none');
