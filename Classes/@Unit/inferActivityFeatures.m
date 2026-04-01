@@ -12,7 +12,16 @@ function inferActivityFeatures(unit, force)
     end
 
     unit.ensureCache();
-    cache_key = "ActivityFeatures_" + paramHash(struct('Duration', unit.RecordingDuration));
+
+    % Fano factor bin width — configurable via UnitParams.Activity.FanoBinWidth.
+    % Fallback to 0.1 s for objects saved before this parameter was introduced.
+    if isfield(unit.UnitParams, 'Activity') && isfield(unit.UnitParams.Activity, 'FanoBinWidth')
+        fano_bin_width = unit.UnitParams.Activity.FanoBinWidth;
+    else
+        fano_bin_width = 0.1;  % legacy default: 100 ms
+    end
+
+    cache_key = "ActivityFeatures_" + paramHash(struct('Duration', unit.RecordingDuration, 'FanoBinWidth', fano_bin_width));
 
     if ~force && unit.FeatureCache.isKey(cache_key) && ~isempty(unit.ActivityFeatures)
         return
@@ -73,7 +82,7 @@ function inferActivityFeatures(unit, force)
     end
 
     % Fano factor: var(count)/mean(count) in time bins
-    bin_width = 0.1;  % 100 ms bins
+    bin_width = fano_bin_width;
     edges = 0:bin_width:unit.RecordingDuration;
     if length(edges) > 2
         spike_counts = histcounts(unit.SpikeTimes, edges);

@@ -41,10 +41,11 @@ classdef MLPipeline < handle
         % RETURNDEFAULTPARAMS  Default ML hyperparameters.
         %   Replaces hardcoded values scattered across RecordingGroup methods.
             params.RF.NumCycles = 500;
-            params.RF.MinLeafSize = 1;
+            params.RF.MinLeafSize = 5;  % ≥5 prevents leaf-level memorisation on typical neuro datasets
             params.RF.NumVariablesToSample = 'all';
             params.RF.Surrogate = 'on';
             params.RF.Reproducible = true;
+            params.RF.Prior = 'empirical';  % 'uniform' gives equal weight to each class regardless of frequency
 
             params.UMAP.NNeighbors = 100;
             params.UMAP.NNeighborsCulture = 10;
@@ -79,18 +80,21 @@ classdef MLPipeline < handle
                     'MaxObjectiveEvaluations', N_hyper, 'ShowPlots', false, 'Verbose', 0);
                 switch alg
                     case 'svm'
-                        clf = fitcsvm(X_train, Y_train, 'OptimizeHyperparameters', 'all', ...
+                        clf = fitcsvm(X_train, Y_train, 'Prior', params.RF.Prior, ...
+                            'OptimizeHyperparameters', 'all', ...
                             'HyperparameterOptimizationOptions', opt_opts);
                     case 'cnb'
-                        clf = fitcnb(X_train, Y_train, 'OptimizeHyperparameters', 'all', ...
+                        clf = fitcnb(X_train, Y_train, 'Prior', params.RF.Prior, ...
+                            'OptimizeHyperparameters', 'all', ...
                             'HyperparameterOptimizationOptions', opt_opts);
                     case 'knn'
-                        clf = fitcknn(X_train, Y_train, 'OptimizeHyperparameters', 'all', ...
+                        clf = fitcknn(X_train, Y_train, 'Prior', params.RF.Prior, ...
+                            'OptimizeHyperparameters', 'all', ...
                             'HyperparameterOptimizationOptions', opt_opts);
                     case 'rf'
                         hyperparams = {'NumLearningCycles', 'MinLeafSize', 'MaxNumSplits', 'SplitCriterion', 'NumVariablesToSample'};
                         t = templateTree('Reproducible', true);
-                        clf = fitcensemble(X_train, Y_train, 'Method', 'Bag', ...
+                        clf = fitcensemble(X_train, Y_train, 'Method', 'Bag', 'Prior', params.RF.Prior, ...
                             'OptimizeHyperparameters', hyperparams, 'Learners', t, ...
                             'HyperparameterOptimizationOptions', opt_opts);
                 end
@@ -98,17 +102,17 @@ classdef MLPipeline < handle
             else
                 switch alg
                     case 'svm'
-                        clf = fitcsvm(X_train, Y_train);
+                        clf = fitcsvm(X_train, Y_train, 'Prior', params.RF.Prior);
                     case 'cnb'
-                        clf = fitcnb(X_train, Y_train);
+                        clf = fitcnb(X_train, Y_train, 'Prior', params.RF.Prior);
                     case 'knn'
-                        clf = fitcknn(X_train, Y_train);
+                        clf = fitcknn(X_train, Y_train, 'Prior', params.RF.Prior);
                     case 'rf'
                         t = templateTree('Surrogate', params.RF.Surrogate, ...
                             'MinLeafSize', params.RF.MinLeafSize, ...
                             'NumVariablesToSample', params.RF.NumVariablesToSample, ...
                             'Reproducible', params.RF.Reproducible);
-                        clf = fitcensemble(X_train, Y_train, 'Method', 'Bag', ...
+                        clf = fitcensemble(X_train, Y_train, 'Method', 'Bag', 'Prior', params.RF.Prior, ...
                             'NumLearningCycles', params.RF.NumCycles, ...
                             'Learners', t, 'Options', statset("UseParallel", true));
                 end

@@ -113,6 +113,7 @@ classdef Unit < handle
             unit.UnitParams.CCG = mearec.Parameters.CCG;
             unit.UnitParams.Analyses = mearec.Parameters.Analyses;
             unit.UnitParams.QC.RefractoryPeriod = mearec.Parameters.QC.RefractoryPeriod;
+            unit.UnitParams.Activity = mearec.Parameters.Activity;
             unit.generateStableID();
             unit.inferActivityFeatures();
         end

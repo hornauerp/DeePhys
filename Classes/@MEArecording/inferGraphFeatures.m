@@ -48,8 +48,15 @@
              end
 
              % Small-worldness: sigma = (C/C_rand) / (L/L_rand)
-             % Using 20 random rewirings for comparison
-             n_rand = 20;
+             % Number of random rewirings for the null model — configurable via
+             % Parameters.GraphFeatures.SmallWorldnessIterations (default 100).
+             % Fallback to 100 for objects created before this parameter was added
+             % (previously hardcoded to 20, which is insufficient for stable estimates).
+             if isfield(obj.Parameters, 'GraphFeatures') && isfield(obj.Parameters.GraphFeatures, 'SmallWorldnessIterations')
+                 n_rand = obj.Parameters.GraphFeatures.SmallWorldnessIterations;
+             else
+                 n_rand = 100;
+             end
              n_nodes = size(con_mat, 1);
              is_directed = isfield(obj.Connectivity.(alg(a)), "bd");
              if density > 0 && n_nodes >= 4
