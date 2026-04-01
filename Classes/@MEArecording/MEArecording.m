@@ -752,6 +752,9 @@ classdef MEArecording < handle
             defaultParams.QC.Bombcell.AcceptedTypes = [1, 2];   % Unit types to keep: 1=good, 2=MUA, 3=non-somatic good, 4=non-somatic MUA
             defaultParams.QC.Bombcell.Overrides = struct();     % Override any bombcell param field (e.g. struct('maxRPVviolations', 0.05))
             
+            % Parameters for single-cell activity features
+            defaultParams.Activity.FanoBinWidth = 0.1;  % Bin width (s) for Fano factor computation; increase for low-rate neurons, decrease for fast-spiking interneurons
+
             % Parameters for the burst detection
             defaultParams.Bursts.MergeFactor = 0.5; %Bursts with an IBI of MergeFactor * best_ISI_N will be merged
             defaultParams.Bursts.Binning = 0.1; %in [s] 0.1 = 100ms
@@ -786,6 +789,9 @@ classdef MEArecording < handle
             defaultParams.STTC.N_Surrogates = 100;
             defaultParams.STTC.Percentile = 95;
             
+            % Parameters for graph feature computation
+            defaultParams.GraphFeatures.SmallWorldnessIterations = 100;  % Random rewirings for small-worldness null model (literature recommends ≥100)
+
             % Parameters for catch 22 calculation
             defaultParams.Catch22.BinSize = .1;%in seconds //100ms
             
