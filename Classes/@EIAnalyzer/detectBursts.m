@@ -2,9 +2,16 @@ function detectBursts(eia)
 % DETECTBURSTS  Label each time bin as burst (2) or non-burst (1) state.
 %
 % A burst is defined as a time bin where:
-%   - The I/E ratio is below the threshold (excitatory-dominant activity), AND
+%   - The I/E ratio is below MaxIERatio (excitatory-dominant activity), AND
 %   - The excitatory firing rate exceeds the noise floor
 % The resulting binary vector is median-filtered to smooth rapid state transitions.
+%
+% Noise floor: NoiseFloorPercentile-th percentile of positive E values.
+% This is robust to the continuous-valued E trace produced by movmean smoothing,
+% unlike the "second unique value" heuristic which degenerates for float data.
+%
+% Clears BurstCutouts and NormalizedCutouts to prevent stale results after
+% re-running with new parameters.
 %
 % Requires eia.Activity (run computeActivity first).
 % Sets: eia.BurstState
@@ -15,17 +22,30 @@ end
 
 assert(~isempty(eia.Activity), 'Run computeActivity() before detectBursts()');
 
-p          = eia.Parameters.BurstDetection;
-burst_state = cell(1, length(eia.Activity));
+% Invalidate downstream results
+eia.BurstCutouts      = [];
+eia.NormalizedCutouts = [];
 
-for c = 1:length(eia.Activity)
+p          = eia.Parameters.BurstDetection;
+burst_state = cell(1, numel(eia.Activity));
+
+for c = 1:numel(eia.Activity)
     act = eia.Activity(c);
 
-    % Noise floor: second smallest unique value (avoids true zero from silent units)
-    unique_E    = unique(act.E);
-    noise_floor = unique_E(min(2, length(unique_E)));
+    if isempty(act.E)
+        burst_state{c} = [];
+        continue
+    end
 
-    z = double(act.ratio < p.Threshold & act.E > noise_floor) + 1;
+    % Percentile-based noise floor over positive E values
+    pos_E = act.E(act.E > 0);
+    if isempty(pos_E)
+        noise_floor = 0;
+    else
+        noise_floor = prctile(pos_E, p.NoiseFloorPercentile);
+    end
+
+    z = double(act.ratio < p.MaxIERatio & act.E > noise_floor) + 1;
     z = round(medfilt1(z, p.SmoothWindow));
     burst_state{c} = z;
 end

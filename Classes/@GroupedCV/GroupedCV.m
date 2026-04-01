@@ -9,16 +9,14 @@ classdef GroupedCV
 %   then expands the masks to the object level (unit, recording).
 %
 %   USAGE:
-%     gcv = GroupedCV(object_group, group_ids, K);
+%     gcv = GroupedCV(group_ids, K);
 %     for k = 1:gcv.NumFolds
 %         [train_idx, test_idx] = gcv.fold(k);
 %         X_train = X(train_idx,:); X_test = X(test_idx,:);
 %     end
 %
-%   FACTORY METHODS:
-%     gcv = GroupedCV.byRecording(unit_array, K)
-%     gcv = GroupedCV.byCulture(unit_array, K)
-%     gcv = GroupedCV.byCulture(recording_array, K)
+%   FACTORY METHOD:
+%     gcv = GroupedCV.byGroups(group_ids, K, Y)
 %
 %   The partition is stratified: each fold has approximately the same
 %   proportion of each class label (if provided).
@@ -110,58 +108,27 @@ classdef GroupedCV
 
     methods (Static)
 
-        function gcv = byRecording(unit_array, K, class_labels)
-        % BYRECORDING  Split at the recording level for unit-level analysis.
-        %   Units from the same recording are always in the same fold.
+        function gcv = byGroups(group_ids, K, Y)
+        % BYGROUPS  Generic factory: split by arbitrary group IDs.
+        %
+        % This is the table-centric entry point used by Classifier.classify and
+        % other v2 analysis methods.  group_ids can be any vector that supports
+        % unique() (strings, integers, etc.).
+        %
+        %   gcv = GroupedCV.byGroups(fs.UnitTable.RecordingID, 5, Y)
+        %   gcv = GroupedCV.byGroups(culture_ids, -1, Y)  % leave-one-out
+        %
+        % INPUTS:
+        %   group_ids - (N x 1) group assignment per object
+        %   K         - folds (-1 = leave-one-group-out)
+        %   Y         - (N x 1) optional class labels for stratification
             arguments
-                unit_array Unit
+                group_ids
                 K (1,1) double = 5
-                class_labels = []
+                Y = []
             end
-            recordings = [unit_array.MEArecording];
-            [~, ~, group_ids] = unique(recordings);
-            gcv = GroupedCV(group_ids, K, class_labels);
-        end
-
-        function gcv = byCulture(object_array, K, class_labels)
-        % BYCULTURE  Split at the culture level.
-        %   All recordings/units from the same culture are in the same fold.
-        %   Works with both Unit arrays and MEArecording arrays.
-            arguments
-                object_array
-                K (1,1) double = 5
-                class_labels = []
-            end
-            if isa(object_array, 'Unit')
-                recordings = [object_array.MEArecording];
-            elseif isa(object_array, 'MEArecording')
-                recordings = object_array;
-            else
-                error('GroupedCV:byCulture', 'Input must be Unit array or MEArecording array.');
-            end
-            metadata = [recordings.Metadata];
-            % Culture identity = ChipID + PlatingDate
-            culture_keys = strings(length(recordings), 1);
-            for i = 1:length(recordings)
-                md = metadata(i);
-                chip = "unknown";
-                plating = "unknown";
-                if isfield(md, 'ChipID'),     chip    = string(md.ChipID);     end
-                if isfield(md, 'PlatingDate'), plating = string(md.PlatingDate); end
-                culture_keys(i) = chip + "_" + plating;
-            end
-            if isa(object_array, 'Unit')
-                % Expand recording-level culture keys to unit level
-                unit_culture_keys = strings(length(object_array), 1);
-                for u = 1:length(object_array)
-                    rec_idx = find(recordings == object_array(u).MEArecording, 1);
-                    unit_culture_keys(u) = culture_keys(rec_idx);
-                end
-                [~, ~, group_ids] = unique(unit_culture_keys);
-            else
-                [~, ~, group_ids] = unique(culture_keys);
-            end
-            gcv = GroupedCV(group_ids, K, class_labels);
+            [~, ~, group_idx] = unique(group_ids(:), 'stable');
+            gcv = GroupedCV(group_idx, K, Y);
         end
 
     end

@@ -1,209 +1,121 @@
 % run_clf_metadata.m
 %
-% General-purpose cell-type classification using metadata-defined training labels.
+% Cell-type classification using metadata-defined training labels.
 %
-% Unlike run_clf_transfer.m (which identifies inhibitory candidates via a
-% bootstrap firing-rate response test), this script assigns training labels
-% directly from recording metadata fields.  Use this when ground-truth or
-% proxy cell-type information is available in the metadata — e.g. genetic
-% markers, sorted cell-type fractions, or manually curated labels.
-%
-% Pipeline:
-%   1.  Load MEArecordings and form a RecordingGroup
-%   2.  Initialise CellTypeClassifier
-%   3.  Build training labels from metadata
-%       a. Collect all units from all cultures
-%       b. Flag inhibitory / excitatory training units via metadata filters
-%       c. Optionally balance classes by subsampling the larger one
-%       d. Set ctc.TrainLabels directly (bypasses bootstrap + UMAP label generation)
-%   4.  Classify all units via supervised UMAP
-%   5.  Inspect classification quality (ACG heatmaps, I/E ratio per chip)
-%   6.  E/I network analysis (EIAnalyzer)
-%   7.  Visualise burst dynamics
-%   8.  Save
-%
-% Requirements:
-%   - DeePhys on path
-%   - run_umap toolbox on path
-%   - Chemogenetics/Helpers on path (load_cortical_cultures)
+% Use when ground-truth or proxy labels are available in recording metadata
+% (e.g. genetic markers, sorted populations, manually curated labels).
+% Bypasses the bootstrap firing-rate test and unsupervised UMAP label generation.
 
 %% 0 — Setup
 
 deephys_root = fileparts(fileparts(mfilename('fullpath')));
 addpath(genpath(deephys_root));
 
-%% 1 — Load recordings and form RecordingGroup
+%% 1 — Configuration
 
-batch_ids = [1, 1, 2, 2];
-week_ids  = [2, 3, 1, 2];
-full_rec_array = load_cortical_cultures(batch_ids, week_ids);
+proc_paths = {
+    '/path/to/proc1.mat'
+    '/path/to/proc2.mat'
+};
+save_dir = '/path/to/save';
 
-rg_params.Selection.Inclusion = {{'Region', 'Cortex'}};
-rg_params.Selection.Exclusion = {{'Concentration', inf}};
-rg = RecordingGroup(full_rec_array, rg_params);
-rg.Cultures = rg.groupCultures('RecordingDate');
+% Metadata field that carries cell-type labels
+label_field = 'CellType';   % e.g. 'CellType', 'GeneticLabel'
+inh_value   = 'PV';         % value indicating inhibitory units
+exc_value   = 'PYR';        % value indicating excitatory units
+balance     = true;          % balance class sizes by subsampling
 
-%% 2 — Initialise CellTypeClassifier
+%% 2 — Load data
+
+procs = RecordingProcessor.loadMany(proc_paths);
+fs    = FeatureStore.fromProcessors(procs);
+
+ud = [];
+for i = 1:numel(procs)
+    ud = [ud, procs(i).Units]; %#ok<AGROW>
+end
+
+%% 3 — Initialise CellTypeClassifier
 
 parameters = struct();
+parameters.UMAP.NormalizationVar   = 'ChipID';
+parameters.UMAP.GroupingVar        = 'Concentration';
+parameters.UMAP.GroupingValues     = 0;
+parameters.UMAP.NNeighbors         = 100;
+parameters.UMAP.MinDist            = 0.1;
+parameters.UMAP.NDims              = 10;
+parameters.Harmonization.ACGSource = 'FullACG';
 
-% UMAP embedding — used by classifyUnits to build the feature matrix
-% Set GroupingVar / GroupingValues to select which recording condition
-% to use for unit features.  Use GroupingValues = [] to include all.
-parameters.UMAP.UnitFeatures    = ["FullACG", "ReferenceWaveform"];
-parameters.UMAP.NormalizationVar= "ChipID";
-parameters.UMAP.GroupingVar     = "Concentration";
-parameters.UMAP.GroupingValues  = 0;       % 0 = baseline only
-parameters.UMAP.NNeighbors      = 100;
-parameters.UMAP.MinDist         = 0.1;
-parameters.UMAP.Spread          = 1;
-parameters.UMAP.NDims           = 10;
+ctc = CellTypeClassifier(fs, ud, parameters);
 
-ctc = CellTypeClassifier(rg, parameters);
+%% 4 — Build training labels from metadata
 
-%% 3 — Build training labels from metadata
-
-% --- 3a: Specify metadata filters ---
-%
-% label_field   : metadata field that carries cell-type information
-% inh_value     : value(s) of label_field that indicate inhibitory units
-% exc_value     : value(s) of label_field that indicate excitatory units
-% balance       : if true, subsample the larger class to match the smaller
-%
-% Example: units whose recording has Metadata.CellType == 'PV' are
-% treated as inhibitory; 'PYR' units as excitatory.
-%
-label_field = 'CellType';     % <-- adjust to your metadata field
-inh_value   = 'PV';           % <-- value(s) marking inhibitory units
-exc_value   = 'PYR';          % <-- value(s) marking excitatory units
-balance     = true;
-
-% --- 3b: Collect all units and extract the label metadata field ---
-unit_list = Unit.empty;
-for c = 1:length(rg.Cultures)
-    unit_list = [unit_list, rg.Cultures(c).Units]; %#ok<AGROW>
+% Look up label_field in UnitTable for each unit
+if ~ismember(label_field, string(fs.UnitTable.Properties.VariableNames))
+    error('Field "%s" not found in UnitTable. Available: %s', ...
+        label_field, strjoin(string(fs.UnitTable.Properties.VariableNames), ', '));
 end
-ctc.UnitList = unit_list;
 
-meta_vals = arrayfun(@(u) u.MEArecording.Metadata.(label_field), ...
-    ctc.UnitList, 'UniformOutput', false);
+meta_vals = string(fs.UnitTable.(label_field));
+inh_mask  = meta_vals == string(inh_value);
+exc_mask  = meta_vals == string(exc_value);
 
-inh_mask = cellfun(@(v) isequal(v, inh_value), meta_vals);
-exc_mask = cellfun(@(v) isequal(v, exc_value), meta_vals);
-
-fprintf('Inhibitory training candidates: %i\n', sum(inh_mask));
-fprintf('Excitatory training candidates: %i\n', sum(exc_mask));
+fprintf('Inhibitory candidates: %d\n', sum(inh_mask));
+fprintf('Excitatory candidates: %d\n', sum(exc_mask));
 assert(sum(inh_mask) > 0 && sum(exc_mask) > 0, ...
     'No training units found — check label_field / inh_value / exc_value.');
 
-% --- 3c: Optional class balancing ---
 inh_idx = find(inh_mask);
 exc_idx = find(exc_mask);
 
 if balance
-    n_min = min(length(inh_idx), length(exc_idx));
+    n_min   = min(numel(inh_idx), numel(exc_idx));
+    rng(42);
     inh_idx = randsample(inh_idx, n_min, false);
     exc_idx = randsample(exc_idx, n_min, false);
-    fprintf('Balanced training set: %i inhibitory + %i excitatory\n', n_min, n_min);
-else
-    fprintf('Training set (unbalanced): %i inhibitory + %i excitatory\n', ...
-        length(inh_idx), length(exc_idx));
+    fprintf('Balanced: %d inhibitory + %d excitatory\n', n_min, n_min);
 end
 
-% --- 3d: Build TrainLabels struct (same format as generateTrainLabels) ---
 train_ids = [exc_idx(:)', inh_idx(:)'];
-y_train   = [ones(1, length(exc_idx)), 2*ones(1, length(inh_idx))];
-
+y_train   = [ones(1, numel(exc_idx)), 2*ones(1, numel(inh_idx))];
 [sorted_train_ids, sort_idx] = sort(train_ids, 'ascend');
 
 labels.sorted_train_ids = sorted_train_ids;
 labels.sorted_y_train   = y_train(sort_idx);
-labels.umap_train_idx   = false(1, length(ctc.UnitList));
+labels.umap_train_idx   = false(1, height(fs.UnitTable));
 labels.umap_train_idx(sorted_train_ids) = true;
 labels.umap_test_idx    = ~labels.umap_train_idx;
 
 ctc.TrainLabels = labels;
 
-%% 4 — Classify all units via supervised UMAP
-%
-% Trains supervised UMAP on the metadata-labelled training set, then
-% projects all remaining units and assigns labels by nearest supervisor.
+%% 5 — Classify all units
 
 ctc.classifyUnits();
+fprintf('Result: %d excitatory | %d inhibitory | %d unclassified\n', ...
+    sum(ctc.UnitLabels == 1), sum(ctc.UnitLabels == 2), sum(isnan(ctc.UnitLabels)));
 
-n_exc = sum(ctc.UnitLabels == 1);
-n_inh = sum(ctc.UnitLabels == 2);
-n_nan = sum(isnan(ctc.UnitLabels));
-fprintf('Classification: %i excitatory | %i inhibitory | %i unclassified\n', ...
-    n_exc, n_inh, n_nan);
+%% 6 — Inspect quality
 
-%% 5 — UMAP sanity check  (optional — comment out to skip)
-%
-% Shows supervised train/test embeddings coloured by label.
-% No unsupervised tile since generateTrainLabels was bypassed.
+plotCellTypeFeatures(ctc);
 
-plotUMAPSanityCheck(ctc);
+chip_col = string(fs.UnitTable.ChipID);
+chips    = unique(chip_col, 'stable');
+for c = 1:numel(chips)
+    mask = chip_col == chips(c);
+    ie   = sum(ctc.UnitLabels(mask) == 2) / sum(mask);
+    fprintf('  ChipID %s: I/E fraction = %.2f\n', chips(c), ie);
+end
 
-%% 6 — Inspect classification quality
-
-% ACG heatmaps
-all_acgs  = horzcat(ctc.UnitList.FullACG)';
-norm_acgs = all_acgs ./ max(all_acgs, [], 2);
-
-inh_acgs = norm_acgs(ctc.UnitLabels == 2, :);
-exc_acgs = norm_acgs(ctc.UnitLabels == 1, :);
-
-[sorted_inh_acgs, ~] = sortACGsByPeak(inh_acgs, "max");
-[sorted_exc_acgs, ~] = sortACGsByPeak(exc_acgs, "max");
-
-figure('Color', 'w');
-tiledlayout(1, 2, 'TileSpacing', 'compact');
-nexttile; imagesc(sorted_inh_acgs); title('Inhibitory ACGs', 'FontWeight', 'normal'); colorbar
-nexttile; imagesc(sorted_exc_acgs); title('Excitatory ACGs',  'FontWeight', 'normal'); colorbar
-
-% Waveforms and ACGs split by cell type and training / test set
-plotCellTypeFeatures(ctc.UnitList, ctc.UnitLabels, ctc.TrainLabels);
-
-% I/E fraction per chip
-[chip_idx, ~] = rg.combineMetadataIndices(ctc.UnitList, "ChipID");
-in_count  = histcounts(chip_idx(ctc.UnitLabels == 2));
-all_count = histcounts(chip_idx);
-ie_per_chip = in_count ./ all_count;
-fprintf('Inhibitory fraction per chip: ');
-fprintf('%.2f ', ie_per_chip);
-fprintf('\n');
-
-%% 7 — Validation against ground truth  (optional — comment out to skip)
-%
-% Compare predicted test-set labels against an INDEPENDENT ground truth.
-% NOTE: use a different metadata field from label_field used for training,
-% otherwise you are comparing against the training signal itself.
-% Units with NaN ground truth are silently excluded.
-
-gt_field     = 'IndependentCellType'; % <-- different from label_field above
-gt_exc_value = 'PYR';                 % <-- value indicating excitatory (class 1)
-gt_inh_value = 'PV';                  % <-- value indicating inhibitory (class 2)
-
-gt_meta   = arrayfun(@(u) u.MEArecording.Metadata.(gt_field), ...
-    ctc.UnitList, 'UniformOutput', false);
-gt_labels = nan(1, length(ctc.UnitList));
-gt_labels(cellfun(@(v) isequal(v, gt_exc_value), gt_meta)) = 1;
-gt_labels(cellfun(@(v) isequal(v, gt_inh_value), gt_meta)) = 2;
-
-% Evaluate on test units only (training labels are known by construction)
-test_mask = ctc.TrainLabels.umap_test_idx;
-metrics   = validateClassification(ctc.UnitLabels(test_mask), gt_labels(test_mask));
-
-%% 8 — E/I network analysis
+%% 7 — E/I analysis
 
 eia_params = struct();
-eia_params.Activity.BinSize               = 0.01;
-eia_params.Activity.SecCutout             = [0, 1200];
-eia_params.BurstDetection.Threshold       = 2;
-eia_params.BurstDetection.SmoothWindow    = 9;
-eia_params.BurstDetection.PeakCutout      = 150;
-eia_params.BurstDetection.PeakHeight      = 0.1;
-eia_params.BurstDetection.PeakProminence  = 0.1;
+eia_params.Activity.BinSize              = 0.01;
+eia_params.Activity.SecCutout            = [0, 1200];
+eia_params.BurstDetection.Threshold      = 2;
+eia_params.BurstDetection.SmoothWindow   = 9;
+eia_params.BurstDetection.PeakCutout     = 150;
+eia_params.BurstDetection.PeakHeight     = 0.1;
+eia_params.BurstDetection.PeakProminence = 0.1;
 eia_params.BurstDetection.MinPeakDistance = 6;
 eia_params.BurstDetection.SelectedVariant = 4;
 
@@ -212,12 +124,10 @@ eia.computeActivity();
 eia.detectBursts();
 eia.extractBurstCutouts();
 eia.computeCorrelations();
-
-%% 9 — Visualise
+eia.normalizeBurstCutouts();
 
 eia.PlotNetworkActivity(1);
 
-eia.normalizeBurstCutouts();
 norm_bursts = eia.NormalizedCutouts.bursts;
 norm_ie     = eia.NormalizedCutouts.ie;
 
@@ -226,66 +136,12 @@ tiledlayout(2, 2, 'TileSpacing', 'compact');
 nexttile; imagesc(norm_ie);     title('I/E ratio (normalised)',      'FontWeight', 'normal'); colorbar
 nexttile; imagesc(norm_bursts); title('Total activity (normalised)', 'FontWeight', 'normal'); colorbar
 nexttile; plot(nanmean(norm_ie), 'r'); hold on; plot(nanmean(norm_bursts), 'k');
-          legend('I/E', 'Total', 'Location', 'northwest'); xlabel('Bin'); box off
+          legend('I/E', 'Total'); xlabel('Bin'); box off
 nexttile; plot(gradient(nanmean(norm_bursts)));
           xlabel('Bin'); title('d/dt total activity', 'FontWeight', 'normal'); box off
 
-%% 10 — Classify external units  (optional — fill in wf_ext / acg_ext to enable)
-%
-% Classify units from outside the DeePhys pipeline (e.g. sorted by another tool
-% or acquired at a different sampling rate). ACGs must use the same bin size
-% and lag as ctc.Parameters.Harmonization; waveforms are resampled automatically.
-%
-% ACG requirements:
-%   bin_size = ctc.Parameters.Harmonization.ACGBinSize  (default: 0.5 ms)
-%   lag      = ctc.Parameters.Harmonization.ACGLag       (default: 100 ms → 401 bins)
-%
-% Waveform requirements:
-%   Any sampling rate — set sr_ext to your acquisition rate; resampled automatically.
-%   Window should cover the same duration as DeePhys reference waveforms (~2.73 ms).
+%% 8 — Save
 
-% wf_ext  = [];    % (N_samples × N_units) unnormalised waveforms
-% acg_ext = [];    % (N_bins × N_units)   autocorrelograms (401 bins)
-% sr_ext  = 30000; % Hz — set to your acquisition sampling rate
-%
-% ext_labels = ctc.classifyExternalUnits(wf_ext, acg_ext, sr_ext);
-%
-% figure('Color','w');
-% tiledlayout(1,2,'TileSpacing','compact','Padding','compact');
-% nexttile; scatter(ctc.Reduction.External(:,1), ctc.Reduction.External(:,2), ...
-%     6, ext_labels, 'filled'); colorbar;
-%     xlabel('UMAP 1'); ylabel('UMAP 2'); title('External units — UMAP', 'FontWeight','normal');
-% nexttile; histogram(categorical(ext_labels,[1 2],{'Excitatory','Inhibitory'}));
-%     ylabel('Count'); title('External unit types', 'FontWeight','normal'); box off
-
-%% 11 — Classify DeePhys units with external training data  (optional)
-%
-% Use labelled external data (e.g. patched or optogenetically identified units)
-% as the training set to classify all ctc.UnitList units.
-% Does not require generateTrainLabels() to have been run.
-%
-% ACG requirements (same as above):
-%   bin_size = ctc.Parameters.Harmonization.ACGBinSize  (default: 0.5 ms)
-%   lag      = ctc.Parameters.Harmonization.ACGLag       (default: 100 ms → 401 bins)
-
-% wf_train  = [];    % (N_samples × N_train) unnormalised waveforms
-% acg_train = [];    % (N_bins × N_train)   autocorrelograms (401 bins)
-% y_train   = [];    % (1 × N_train) labels: 1=excitatory, 2=inhibitory
-% sr_train  = 30000; % Hz — set to your acquisition sampling rate
-%
-% ctc.classifyUnitsWithExternalTrain(wf_train, acg_train, y_train, sr_train);
-%
-% figure('Color','w');
-% tiledlayout(1,2,'TileSpacing','compact','Padding','compact');
-% nexttile; scatter(ctc.Reduction.Test(:,1), ctc.Reduction.Test(:,2), ...
-%     6, ctc.UnitLabels, 'filled'); colorbar;
-%     xlabel('UMAP 1'); ylabel('UMAP 2'); title('DeePhys units — UMAP (ext. train)', 'FontWeight','normal');
-% nexttile; histogram(categorical(ctc.UnitLabels,[1 2],{'Excitatory','Inhibitory'}));
-%     ylabel('Count'); title('DeePhys unit types', 'FontWeight','normal'); box off
-
-%% 12 — Save
-
-save_dir = fullfile(deephys_root, 'Data', 'Classification');
 if ~isfolder(save_dir); mkdir(save_dir); end
 save_path = fullfile(save_dir, ...
     strjoin(["clf_metadata", label_field, string(inh_value), "vs", string(exc_value)], "_"));

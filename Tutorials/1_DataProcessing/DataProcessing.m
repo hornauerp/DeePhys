@@ -1,0 +1,158 @@
+%% Tutorial 1 — Data Processing Pipeline
+%
+% Covers the full pipeline from raw Kilosort output to a FeatureStore
+% ready for analysis: SpikeData → RecordingProcessor → FeatureStore.
+%
+% Prerequisites: DeePhys on the MATLAB path (run startup.m from repo root).
+%
+% Fill in the placeholder paths in Section 1 before running.
+
+%% 1  Setup — fill in your paths
+
+% Path to one Kilosort output directory (must contain spike_times.npy etc.)
+ks_path = '/path/to/kilosort_output';
+
+% Optional: path to a parent (concatenated) recording.
+% Set to '' if your recording was not split from a longer session.
+parent_ks_path = '/path/to/parent_kilosort_output';
+
+% Where to save the processed RecordingProcessor and FeatureStore files
+save_dir = '/path/to/save';
+
+%% 2  Metadata struct
+%
+% One struct per recording. Any scalar fields are stored in the FeatureStore
+% and become available for subsetting and ML labels.
+
+metadata = struct();
+metadata.ChipID       = 'Chip001';
+metadata.PlatingDate  = '2024-01-15';
+metadata.RecordingDate = '2024-02-05';  % DIV computed automatically if absent
+metadata.DIV          = 21;
+metadata.Mutation     = 'WT';
+metadata.Concentration = 0;
+
+% If split from a parent recording, specify the parent path here.
+% If omitted, SpikeData tries to auto-detect a sibling 'qc_output' folder.
+if ~isempty(parent_ks_path)
+    metadata.ParentInputPath = parent_ks_path;
+end
+
+%% 3  Load Kilosort output into SpikeData
+
+sd = SpikeData.fromKilosort(ks_path, metadata);
+
+% Inspect
+fprintf('RecordingID : %s\n', sd.RecordingID);
+fprintf('Duration    : %.1f s\n', sd.Duration);
+fprintf('N spikes    : %d\n', numel(sd.SpikeTimes));
+fprintf('N templates : %d\n', size(sd.TemplateWaveforms, 1));
+fprintf('Parent path : %s\n', sd.ParentPath);
+
+%% 4  Create RecordingProcessor (no analysis yet)
+%
+% Pass optional parameter overrides in the second argument (struct).
+% All unspecified fields fall back to RecordingProcessor.returnDefaultParams().
+
+proc = RecordingProcessor(sd);
+
+% Alternatively, load directly from disk in one step:
+%   proc = RecordingProcessor.fromKilosort(ks_path, metadata);
+
+%% 5  Quality control — filter templates into proc.Units
+
+proc.runQC();
+
+fprintf('Units after QC: %d\n', numel(proc.Units));
+
+% Inspect individual units
+if ~isempty(proc.Units)
+    u = proc.Units(1);
+    fprintf('  Unit 1 — TemplateID: %d, N spikes: %d, FR: %.2f Hz\n', ...
+        u.TemplateID, numel(u.SpikeTimes), numel(u.SpikeTimes) / sd.Duration);
+end
+
+%% 6  Compute per-unit features
+%
+% Computes ActivityFeatures, WaveformFeatures, RegularityFeatures, Catch22.
+% Results stored in proc.UnitFeatureTable.
+
+proc.computeUnitFeatures();
+
+% Peek at the table
+disp(proc.UnitFeatureTable(1:min(5, height(proc.UnitFeatureTable)), :));
+
+%% 7  Compute parent features (full-recording ACGs)
+%
+% Reads spike data from proc.SpikeData.ParentPath, computes CCG once for ALL
+% templates in the parent recording (shared cache across siblings), then
+% stores the autocorrelogram diagonal as Parent_ACG1..N columns.
+%
+% If no parent path is available, a warning is printed and the step is skipped
+% silently — child ACG features serve as automatic fallback.
+
+proc.computeParentFeatures();
+
+% Parent ACG columns are now in proc.UnitFeatureTable with 'Parent_' prefix
+parent_cols = startsWith(string(proc.UnitFeatureTable.Properties.VariableNames), 'Parent_');
+fprintf('Parent feature columns added: %d\n', sum(parent_cols));
+
+%% 8  Compute network features
+
+proc.computeNetworkFeatures();
+
+disp(proc.NetworkFeatureTable);
+
+%% 9  Compute connectivity (CCG / STTC)
+
+proc.computeConnectivity();
+
+%% 10  Shortcut: run all steps in sequence
+
+proc2 = RecordingProcessor(sd);
+proc2.runAll();   % runQC + computeUnitFeatures + computeParentFeatures
+                  %       + computeNetworkFeatures + computeConnectivity
+
+%% 11  Save and load
+
+proc_file = fullfile(save_dir, 'RecordingProcessor.mat');
+proc.save(proc_file);
+
+proc_loaded = RecordingProcessor.load(proc_file);
+fprintf('Loaded %d units from disk.\n', numel(proc_loaded.Units));
+
+% Inspect status flags
+disp(proc_loaded.Status);
+
+%% 12  Batch loading with parallel workers
+
+% Supply a cell array or string array of saved RecordingProcessor .mat paths
+proc_paths = {proc_file};   % replace with your full list
+procs = RecordingProcessor.loadMany(proc_paths);
+fprintf('Batch-loaded %d processors.\n', numel(procs));
+
+%% 13  Assemble FeatureStore from multiple processors
+
+fs = FeatureStore.fromProcessors(procs);
+
+% Three tables
+fprintf('UnitTable     : %d rows × %d cols\n', height(fs.UnitTable),      width(fs.UnitTable));
+fprintf('RecordingTable: %d rows × %d cols\n', height(fs.RecordingTable), width(fs.RecordingTable));
+fprintf('MetadataTable : %d rows × %d cols\n', height(fs.MetadataTable),  width(fs.MetadataTable));
+
+%% 14  Inspect table structure
+
+% Column names in UnitTable
+disp(string(fs.UnitTable.Properties.VariableNames)');
+
+% First few rows
+disp(fs.UnitTable(1:min(5, height(fs.UnitTable)), 1:8));
+
+%% 15  Save and load FeatureStore
+
+fs_file = fullfile(save_dir, 'FeatureStore.mat');
+fs.save(fs_file);
+
+fs2 = FeatureStore.load(fs_file);
+fprintf('Loaded FeatureStore: %d units, %d recordings.\n', ...
+    height(fs2.UnitTable), height(fs2.RecordingTable));

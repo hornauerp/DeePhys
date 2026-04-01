@@ -1,27 +1,28 @@
-function [target_labels, target_ctc] = applyTo(ctc, target_rg, opts)
-% APPLYTO  Apply a trained CellTypeClassifier to a different RecordingGroup.
+function [target_labels, target_ctc] = applyTo(ctc, target_fs, target_ud, opts)
+% APPLYTO  Apply a trained CellTypeClassifier to a different dataset.
 %
 % Takes the training labels from this CTC and classifies all units in the
-% target RecordingGroup, producing a new CellTypeClassifier for the target.
+% target FeatureStore + UnitData array, producing a new CellTypeClassifier.
 %
-% The trained CTC must have TrainLabels and UnitList set (i.e., you must
-% have run generateTrainLabels() or equivalent). The target RG does not
-% need responsive unit identification — all its units are treated as test.
+% The trained CTC must have TrainLabels and UnitDataArray set (i.e., you must
+% have run generateTrainLabels() or equivalent). All target units are treated
+% as test — no responsive-unit identification is performed on the target.
 %
 % USAGE:
-%   ctc_source = CellTypeClassifier(rg_source, params);
 %   ctc_source.identifyResponsiveUnits();
 %   ctc_source.generateTrainLabels();
 %
-%   % Apply to a completely different RecordingGroup:
-%   [labels, ctc_target] = ctc_source.applyTo(rg_target);
+%   % Apply to a completely different dataset:
+%   [labels, ctc_target] = ctc_source.applyTo(fs_target, ud_target);
 %
-%   % Apply with metadata-based normalization on the target:
-%   [labels, ctc_target] = ctc_source.applyTo(rg_target, NormalizationVar="ChipID");
+%   % Apply with a different normalization variable on the target:
+%   [labels, ctc_target] = ctc_source.applyTo(fs_target, ud_target, ...
+%                              NormalizationVar="ChipID");
 %
 % INPUTS:
 %   ctc       - trained CellTypeClassifier (source)
-%   target_rg - RecordingGroup to classify
+%   target_fs - FeatureStore for the target dataset (provides metadata for normalisation)
+%   target_ud - UnitData array for the target dataset
 %
 % NAME-VALUE:
 %   NormalizationVar - metadata field for within-group z-score on target
@@ -29,48 +30,37 @@ function [target_labels, target_ctc] = applyTo(ctc, target_rg, opts)
 %
 % OUTPUTS:
 %   target_labels - (1 x N_target) 1=excitatory, 2=inhibitory
-%   target_ctc    - CellTypeClassifier for the target RG with labels,
+%   target_ctc    - CellTypeClassifier for the target dataset with labels,
 %                   reductions, and harmonized data populated
 
 arguments
     ctc        CellTypeClassifier
-    target_rg  RecordingGroup
+    target_fs  FeatureStore
+    target_ud  UnitData
     opts.NormalizationVar string = ctc.Parameters.UMAP.NormalizationVar
 end
 
 assert(~isempty(ctc.TrainLabels), ...
     'Source CTC has no TrainLabels — run generateTrainLabels() first.');
-assert(~isempty(ctc.UnitList), ...
-    'Source CTC has no UnitList — run identifyResponsiveUnits() first.');
+assert(~isempty(ctc.UnitDataArray), ...
+    'Source CTC has no UnitDataArray — run identifyResponsiveUnits() first.');
 
 labels  = ctc.TrainLabels;
-p_umap  = ctc.Parameters.UMAP;
 
-% ── Create target CTC (inherits harmonization parameters) ──────────────
-target_ctc = CellTypeClassifier(target_rg, ctc.Parameters);
-
-% ── Build unit list for target RG ──────────────────────────────────────
-% Collect all units across all recordings (same as identifyResponsiveUnits)
-target_units = [];
-for r = 1:numel(target_rg.Recordings)
-    rec = target_rg.Recordings(r);
-    if ~isempty(rec.Units)
-        target_units = [target_units, rec.Units]; %#ok<AGROW>
-    end
-end
-assert(~isempty(target_units), 'Target RecordingGroup has no units.');
-target_ctc.UnitList = target_units;
+% ── Create target CTC (inherits all harmonization parameters) ──────────────
+target_ctc = CellTypeClassifier(target_fs, target_ud, ctc.Parameters);
 
 fprintf('Applying trained classifier (%d train units) to %d target units\n', ...
-    sum(labels.umap_train_idx), numel(target_units));
+    sum(labels.umap_train_idx), numel(target_ud));
 
 % ── Extract training features (from source CTC, cached) ───────────────
-[wf_train, acg_train, sr_train] = ctc.getOrExtract(ctc.UnitList);
+[wf_train, acg_train, sr_train] = ctc.getOrExtract(ctc.UnitDataArray);
 [X_train_raw, feat_names]       = buildFeatureMatrix(ctc, wf_train, acg_train, sr_train);
 
 % ── Extract target features ────────────────────────────────────────────
-[wf_target, acg_target, sr_target] = extractUnitWaveformsAndACGs(target_ctc, target_units);
-[X_target_raw, feat_names_target, aligned_wf, norm_acgs] = buildFeatureMatrix(target_ctc, wf_target, acg_target, sr_target);
+[wf_target, acg_target, sr_target] = target_ctc.getOrExtract(target_ud);
+[X_target_raw, feat_names_target, aligned_wf, norm_acgs] = buildFeatureMatrix( ...
+    target_ctc, wf_target, acg_target, sr_target);
 
 assert(isequal(feat_names, feat_names_target), ...
     'Feature mismatch: source (%d) vs target (%d). Check Harmonization parameters.', ...
@@ -81,47 +71,43 @@ target_ctc.HarmonizedWaveforms = aligned_wf;
 target_ctc.HarmonizedACGs      = norm_acgs;
 target_ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
-% ── Normalization ──────────────────────────────────────────────────────
-X_train_raw(isnan(X_train_raw)) = 0;
+% ── Step 1: per-group normalisation (source and target normalized independently) ─
+X_train_raw(isnan(X_train_raw))   = 0;
 X_target_raw(isnan(X_target_raw)) = 0;
 
-% Step 1a: within-group z-score on training data (source RG)
-rg_source = ctc.RecordingGroup;
-[iG_train, G_train] = rg_source.combineMetadataIndices(ctc.UnitList, p_umap.NormalizationVar);
-g_idx_train = unique(iG_train);
-for g = 1:length(g_idx_train)
-    mask = (iG_train == g_idx_train(g));
-    X_train_raw(mask, :) = normalize(X_train_raw(mask, :));
+norm_var = opts.NormalizationVar;
+
+if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
+    group_col = ctc.FeatureStore.UnitTable.(norm_var);
+    [~, ~, iG] = unique(string(group_col), 'stable');
+    for g = 1:max(iG)
+        mask = (iG == g);
+        X_train_raw(mask, :) = normalize(X_train_raw(mask, :));
+    end
+elseif ~isempty(norm_var)
+    warning('CellTypeClassifier:normVarNotFound', ...
+        'NormalizationVar "%s" not found in source UnitTable — per-group z-score skipped.', norm_var);
 end
 
-% Step 1b: within-group z-score on target data (target RG)
-[iG_target, G_target] = target_rg.combineMetadataIndices(target_units, opts.NormalizationVar);
-g_idx_target = unique(iG_target);
-for g = 1:length(g_idx_target)
-    mask = (iG_target == g_idx_target(g));
-    X_target_raw(mask, :) = normalize(X_target_raw(mask, :));
+if ~isempty(norm_var) && ismember(norm_var, string(target_fs.UnitTable.Properties.VariableNames))
+    group_col = target_fs.UnitTable.(norm_var);
+    [~, ~, iG] = unique(string(group_col), 'stable');
+    for g = 1:max(iG)
+        mask = (iG == g);
+        X_target_raw(mask, :) = normalize(X_target_raw(mask, :));
+    end
+elseif ~isempty(norm_var)
+    warning('CellTypeClassifier:normVarNotFound', ...
+        'NormalizationVar "%s" not found in target UnitTable — per-group z-score skipped.', norm_var);
 end
 
 % Select training subset
 X_train = X_train_raw(labels.umap_train_idx, :);
 y_train = labels.sorted_y_train;
 
-% Step 2: global z-score — fit on train, apply to target
-[X_train, mu, sigma] = normalize(X_train);
-X_target = normalize(X_target_raw, 'center', mu, 'scale', sigma);
-
-% Step 3: remove NaN/Inf columns
-bad_cols = any(isnan(X_train) | isinf(X_train), 1) | ...
-           any(isnan(X_target) | isinf(X_target), 1);
-X_train(:, bad_cols)    = [];
-X_target(:, bad_cols)   = [];
-feat_names(bad_cols)    = [];
-
-% Step 4: scale by max(abs(train))
-scale = max(abs(X_train), [], 1);
-scale(scale == 0) = 1;
-X_train  = X_train  ./ scale;
-X_target = X_target ./ scale;
+% ── Steps 2–4: global z-score, drop bad columns, scale ────────────────────
+[X_train, X_target, feat_names] = CellTypeClassifier.normalizeForClassification( ...
+    X_train, X_target_raw, feat_names);
 
 % ── Supervised UMAP classification ─────────────────────────────────────
 [target_labels, ~, ~, target_reduction, train_reduction] = supervisedUMAP(ctc, ...
@@ -131,6 +117,17 @@ target_ctc.UnitLabels      = target_labels;
 target_ctc.TrainLabels     = labels;  % preserve source training info
 target_ctc.Reduction.Train = train_reduction;
 target_ctc.Reduction.Test  = target_reduction;
+
+% ── kNN confidence for target units ─────────────────────────────────────
+conf_k   = ctc.Parameters.UMAP.ConfidenceK;
+k_actual = min(conf_k, size(train_reduction, 1));
+[nn_idx, ~] = knnsearch(train_reduction, target_reduction, 'K', k_actual);
+target_confidence = zeros(1, numel(target_labels));
+for i = 1:numel(target_labels)
+    neighbor_labels = y_train(nn_idx(i,:));
+    target_confidence(i) = sum(neighbor_labels == target_labels(i)) / k_actual;
+end
+target_ctc.UnitConfidence = target_confidence;
 
 n_exc = sum(target_labels == 1);
 n_inh = sum(target_labels == 2);
