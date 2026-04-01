@@ -19,6 +19,7 @@ function response = bootstrapFiringRateResponse(pre_mat, post_mat, n_iter, alpha
 %              .increase  - indices of units with significant firing rate increase
 %              .decrease  - indices of units with significant firing rate decrease
 %              .unchanged - indices of units with no significant change
+%              .strength  - (1 x N_units) effect size per unit (|emp_diff| / null_std)
 
 arguments
     pre_mat  (:,:) double
@@ -63,5 +64,12 @@ for u = 1:n_units
     end
 end
 
-response = struct('increase', increase, 'decrease', decrease, 'unchanged', unchanged);
+% Effect size: |empirical difference| normalized by bootstrap null std.
+% Higher values = stronger evidence, regardless of direction.
+null_std = std(bootstrp_diff, 0, 2);
+null_std(null_std == 0) = 1;  % avoid division by zero
+strength = (abs(emp_diff) ./ null_std)';
+
+response = struct('increase', increase, 'decrease', decrease, ...
+    'unchanged', unchanged, 'strength', strength);
 end

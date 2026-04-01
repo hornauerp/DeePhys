@@ -4,9 +4,10 @@ function [target_labels, target_ctc] = applyTo(ctc, target_rg, opts)
 % Takes the training labels from this CTC and classifies all units in the
 % target RecordingGroup, producing a new CellTypeClassifier for the target.
 %
-% The trained CTC must have TrainLabels and UnitList set (i.e., you must
-% have run generateTrainLabels() or equivalent). The target RG does not
-% need responsive unit identification — all its units are treated as test.
+% Uses stored NormalizationParams from generateTrainLabels for the source data,
+% ensuring the same feature space as the unsupervised and supervised UMAPs.
+% Target data receives its own chip-level z-score, then the source's global
+% z-score parameters are applied for cross-dataset consistency.
 %
 % USAGE:
 %   ctc_source = CellTypeClassifier(rg_source, params);
@@ -42,15 +43,17 @@ assert(~isempty(ctc.TrainLabels), ...
     'Source CTC has no TrainLabels — run generateTrainLabels() first.');
 assert(~isempty(ctc.UnitList), ...
     'Source CTC has no UnitList — run identifyResponsiveUnits() first.');
+assert(~isempty(ctc.NormalizationParams), ...
+    'Source CTC has no NormalizationParams — re-run generateTrainLabels() to store them.');
 
 labels  = ctc.TrainLabels;
 p_umap  = ctc.Parameters.UMAP;
+np      = ctc.NormalizationParams;
 
 % ── Create target CTC (inherits harmonization parameters) ──────────────
 target_ctc = CellTypeClassifier(target_rg, ctc.Parameters);
 
 % ── Build unit list for target RG ──────────────────────────────────────
-% Collect all units across all recordings (same as identifyResponsiveUnits)
 target_units = [];
 for r = 1:numel(target_rg.Recordings)
     rec = target_rg.Recordings(r);
@@ -82,12 +85,10 @@ target_ctc.HarmonizedACGs      = norm_acgs;
 target_ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
 % ── Normalization ──────────────────────────────────────────────────────
-X_train_raw(isnan(X_train_raw)) = 0;
-X_target_raw(isnan(X_target_raw)) = 0;
 
 % Step 1a: within-group z-score on training data (source RG)
 rg_source = ctc.RecordingGroup;
-[iG_train, G_train] = rg_source.combineMetadataIndices(ctc.UnitList, p_umap.NormalizationVar);
+[iG_train, ~] = rg_source.combineMetadataIndices(ctc.UnitList, p_umap.NormalizationVar);
 g_idx_train = unique(iG_train);
 for g = 1:length(g_idx_train)
     mask = (iG_train == g_idx_train(g));
@@ -95,42 +96,50 @@ for g = 1:length(g_idx_train)
 end
 
 % Step 1b: within-group z-score on target data (target RG)
-[iG_target, G_target] = target_rg.combineMetadataIndices(target_units, opts.NormalizationVar);
+[iG_target, ~] = target_rg.combineMetadataIndices(target_units, opts.NormalizationVar);
 g_idx_target = unique(iG_target);
 for g = 1:length(g_idx_target)
     mask = (iG_target == g_idx_target(g));
     X_target_raw(mask, :) = normalize(X_target_raw(mask, :));
 end
 
+% Step 2: Apply stored global z-score from generateTrainLabels
+% Source training data uses stored parameters for consistency
+X_train_all = normalize(X_train_raw, 'center', np.mu_global, 'scale', np.sigma_global);
+X_target = normalize(X_target_raw, 'center', np.mu_global, 'scale', np.sigma_global);
+
+% Step 3: Remove same NaN columns as generateTrainLabels
+X_train_all(:, np.nan_cols) = [];
+X_target(:, np.nan_cols)    = [];
+feat_names(np.nan_cols)     = [];
+
+% Step 4: Apply same scaling
+X_train_all = X_train_all ./ np.scale;
+X_target    = X_target    ./ np.scale;
+
 % Select training subset
-X_train = X_train_raw(labels.umap_train_idx, :);
+X_train = X_train_all(labels.umap_train_idx, :);
 y_train = labels.sorted_y_train;
 
-% Step 2: global z-score — fit on train, apply to target
-[X_train, mu, sigma] = normalize(X_train);
-X_target = normalize(X_target_raw, 'center', mu, 'scale', sigma);
-
-% Step 3: remove NaN/Inf columns
+% Handle any remaining NaN/Inf from target (different data may have edge cases)
 bad_cols = any(isnan(X_train) | isinf(X_train), 1) | ...
            any(isnan(X_target) | isinf(X_target), 1);
-X_train(:, bad_cols)    = [];
-X_target(:, bad_cols)   = [];
-feat_names(bad_cols)    = [];
-
-% Step 4: scale by max(abs(train))
-scale = max(abs(X_train), [], 1);
-scale(scale == 0) = 1;
-X_train  = X_train  ./ scale;
-X_target = X_target ./ scale;
+if any(bad_cols)
+    X_train(:, bad_cols)    = [];
+    X_target(:, bad_cols)   = [];
+    feat_names(bad_cols)    = [];
+end
 
 % ── Supervised UMAP classification ─────────────────────────────────────
-[target_labels, ~, ~, target_reduction, train_reduction] = supervisedUMAP(ctc, ...
+[target_labels, ~, ~, target_reduction, train_reduction, extras] = supervisedUMAP(ctc, ...
     X_train, y_train, feat_names, X_target);
 
 target_ctc.UnitLabels      = target_labels;
 target_ctc.TrainLabels     = labels;  % preserve source training info
-target_ctc.Reduction.Train = train_reduction;
-target_ctc.Reduction.Test  = target_reduction;
+target_ctc.NormalizationParams = np;  % preserve source normalization
+target_ctc.Reduction.Train  = train_reduction;
+target_ctc.Reduction.Test   = target_reduction;
+target_ctc.Reduction.Extras = extras;
 
 n_exc = sum(target_labels == 1);
 n_inh = sum(target_labels == 2);

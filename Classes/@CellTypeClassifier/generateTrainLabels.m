@@ -3,24 +3,31 @@ function generateTrainLabels(ctc)
 %
 % Projects units into a low-dimensional UMAP space, then uses an isolation
 % forest to remove outliers from the responsive-unit candidates. Selects
-% counterexamples (non-responsive units far from the responsive cluster centroid)
-% to form a balanced training set (class 1 = excitatory, class 2 = inhibitory).
+% counterexamples (non-responsive units) via farthest-point sampling in
+% normalised feature space to form a balanced training set
+% (class 1 = excitatory, class 2 = inhibitory).
+%
+% Counterexample selection uses farthest-point sampling (k-center greedy)
+% starting from the responsive cluster centroid. This ensures spatial
+% diversity across the excitatory population without relying on UMAP
+% distances (which distort global structure). The approach is deterministic
+% and avoids arbitrary distance-percentile thresholds.
 %
 % When TrainingCultureIdx is set, only units from those cultures are used for
-% the unsupervised UMAP and label selection (matching the main-branch behaviour
-% where only specific recording dates feed label generation). When empty (default),
-% all units are used.
+% the unsupervised UMAP and label selection. When empty (default), all units
+% are used.
 %
-% Normalisation matches the main-branch pipeline:
+% Normalisation pipeline:
 %   1. Z-score within each NormalizationVar group (e.g. ChipID) across all units
 %   2. Global z-score on the UMAP subset
 %   3. Remove NaN columns, scale by max(abs)
+%   4. Store normalisation parameters for carryover to classifyUnits/applyTo
 %
 % Feature extraction uses ctc.Parameters.Harmonization so DeePhys ACGs are
 % recomputed at the configured bin size and lag (default: 0.5 ms / 100 ms).
 %
 % Requires ctc.ResponsiveUnitIdx to be set (run identifyResponsiveUnits first).
-% Sets: ctc.TrainLabels, ctc.UMAP
+% Sets: ctc.TrainLabels, ctc.UMAP, ctc.NormalizationParams
 
 arguments
     ctc CellTypeClassifier
@@ -40,8 +47,9 @@ rng(ctc.Parameters.RNGSeed, 'twister');
 [wf, acg, sr] = ctc.getOrExtract(ctc.UnitList);
 [X_raw, ~]    = buildFeatureMatrix(ctc, wf, acg, sr);
 
-% ── Chip-level normalisation (all units, matching main branch) ───────────────
-X_raw(isnan(X_raw)) = 0;
+% ── Chip-level normalisation (all units) ──────────────────────────────────────
+% NaN handling: leave as NaN so they propagate to column removal (step 3).
+% This avoids bias from replacing NaN with 0 before z-scoring.
 [iG, G] = rg.combineMetadataIndices(ctc.UnitList, p_umap.NormalizationVar);
 g_idx = unique(iG);
 for g = 1:length(g_idx)
@@ -59,15 +67,27 @@ end
 
 X_subset = X_raw(subset_mask, :);
 
-% Global z-score on subset (matching main branch: train-only z-score + scale)
+% Global z-score on subset — store parameters for carryover
 if length(G) > 1
-    [X_subset, ~, ~] = normalize(X_subset);
+    [X_subset, mu_global, sigma_global] = normalize(X_subset);
+else
+    mu_global    = zeros(1, size(X_subset, 2));
+    sigma_global = ones(1, size(X_subset, 2));
 end
+
+% Remove NaN columns and store which ones
 nan_cols = any(isnan(X_subset), 1);
 X_subset(:, nan_cols) = [];
 scale = max(abs(X_subset), [], 1);
 scale(scale == 0) = 1;
 X_subset = X_subset ./ scale;
+
+% ── Store normalisation parameters for carryover ─────────────────────────────
+ctc.NormalizationParams = struct( ...
+    'mu_global',    mu_global, ...
+    'sigma_global', sigma_global, ...
+    'nan_cols',     nan_cols, ...
+    'scale',        scale);
 
 % ── UMAP embedding (unsupervised, on subset only) ───────────────────────────
 template_file = fullfile(p_umap.TemplateDir, 'ctc_umap_template.mat');
@@ -99,26 +119,54 @@ if isempty(clean_candidates)
     clean_candidates = candidate_reduction;
     tf_forest = false(size(tf_forest));
 end
-centroid = mean(clean_candidates, 1);
 
-% Find counterexamples: units far from interneuron centroid (in subset space)
-dists = pdist2(centroid, reduction);
-candidate_dists = pdist2(centroid, clean_candidates);
-dist_threshold = prctile(candidate_dists, p_outlr.DistancePercentile);
-
-far_idx_local = find(dists > dist_threshold);
-n_candidates = sum(~tf_forest);
+% ── Counterexample selection via farthest-point sampling in feature space ─────
+% Work in normalised feature space (X_subset) where distances are meaningful,
+% rather than UMAP space where global distances are distorted.
+n_candidates     = sum(~tf_forest);
 n_counterexamples = p_outlr.CounterexampleRatio * n_candidates;
-counterexample_idx_local = randsample(far_idx_local, min(n_counterexamples, length(far_idx_local)), false);
+
+% Identify non-responsive units in subset (pool for counterexamples)
+responsive_in_subset = find(subset_responsive);
+clean_responsive_local = responsive_in_subset(~tf_forest(:)');
+non_responsive_local = find(~subset_responsive);
+
+% Centroid of clean responsive units in feature space
+centroid = mean(X_subset(clean_responsive_local, :), 1);
+
+% Farthest-point sampling (k-center greedy):
+% Start from responsive centroid, iteratively pick the non-responsive unit
+% farthest from all already-selected points. This maximises spatial diversity
+% and naturally biases away from the inhibitory cluster.
+n_pool = length(non_responsive_local);
+n_pick = min(n_counterexamples, n_pool);
+X_pool = X_subset(non_responsive_local, :);
+
+% Initialise minimum distances from the centroid
+min_dists = pdist2(centroid, X_pool, 'euclidean')';
+selected = false(n_pool, 1);
+pick_order = zeros(n_pick, 1);
+
+for k = 1:n_pick
+    % Pick the farthest point
+    candidates_dists = min_dists;
+    candidates_dists(selected) = -Inf;
+    [~, idx] = max(candidates_dists);
+    selected(idx) = true;
+    pick_order(k) = idx;
+
+    % Update minimum distances to include the newly selected point
+    new_dists = pdist2(X_pool(idx, :), X_pool, 'euclidean')';
+    min_dists = min(min_dists, new_dists);
+end
+
+counterexample_idx_local = non_responsive_local(pick_order);
 
 % ── Map local indices back to global UnitList indices ────────────────────────
 subset_global = find(subset_mask);  % global indices of subset units
-responsive_in_subset = find(subset_responsive);  % local indices of responsive units in subset
-clean_responsive_local = responsive_in_subset(~tf_forest(:)');
 
 in_train_id = subset_global(clean_responsive_local);
-ex_train_id_global = subset_global(counterexample_idx_local);
-ex_train_id = ex_train_id_global(~ismember(ex_train_id_global, in_train_id));
+ex_train_id = subset_global(counterexample_idx_local);
 
 train_ids = [ex_train_id, in_train_id];
 y_train   = [ones(1, length(ex_train_id)), 2*ones(1, length(in_train_id))];
@@ -131,11 +179,16 @@ labels.umap_train_idx(sorted_train_ids) = true;
 labels.umap_test_idx    = ~labels.umap_train_idx;
 
 % Store outlier and counterexample info for diagnostic plotting
-% outlier_global_idx: responsive candidates removed by isolation forest
 outlier_local = responsive_in_subset(tf_forest(:)');
 labels.outlier_global_idx        = subset_global(outlier_local);
-% excitatory_candidate_global_idx: non-responsive units selected as counterexamples
 labels.excitatory_candidate_global_idx = subset_global(counterexample_idx_local);
+
+% Store responsive strength for the training inhibitory candidates (for diagnostics)
+if ~isempty(ctc.ResponsiveStrength)
+    labels.inhibitory_strength = ctc.ResponsiveStrength(in_train_id);
+else
+    labels.inhibitory_strength = ones(1, length(in_train_id));
+end
 
 ctc.TrainLabels = labels;
 fprintf('Training set: %i excitatory, %i inhibitory candidates\n', ...
@@ -144,7 +197,6 @@ end
 
 function mask = buildCultureUnitMask(ctc, culture_indices)
 % Build a logical mask over ctc.UnitList selecting units from specified cultures.
-% Culture indices refer to ctc.RecordingGroup.Cultures.
     rg = ctc.RecordingGroup;
     mask = false(1, numel(ctc.UnitList));
     offset = 0;
