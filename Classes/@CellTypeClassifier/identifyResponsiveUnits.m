@@ -61,8 +61,13 @@ culture_ids     = FeatureStore.getCultureIDsForUnits( ...
 unique_cultures = unique(culture_ids, 'stable');
 
 unit_ids_in_table = fs.UnitTable.UnitID;
-ud_ids            = string({ud.UnitID})';
-[~, ud_order]     = ismember(unit_ids_in_table, ud_ids);
+
+% Map each FeatureStore row to the correct UnitData entry using
+% (UnitID, RecordingID) as a compound key.
+% UnitID alone is ambiguous when the same unit spans multiple recordings.
+ud_keys    = string({ud.UnitID})' + "|" + string({ud.RecordingID})';
+table_keys = string(unit_ids_in_table) + "|" + string(unit_rec_ids);
+[~, ud_order] = ismember(table_keys, ud_keys);
 
 N_units              = numel(unit_ids_in_table);
 responsive_idx       = false(1, N_units);
