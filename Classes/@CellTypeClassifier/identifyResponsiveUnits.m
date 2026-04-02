@@ -228,14 +228,17 @@ if p.MinResponsiveStrength > 0
     end
 end
 
+% Count unique units (same UnitID spans multiple rows in full_curve mode)
+n_responsive = numel(unique(unit_ids_in_table(ctc.ResponsiveUnitIdx)));
+n_total      = numel(unique(unit_ids_in_table));
+
 if n_skipped > 0
     fprintf('Responsive units (%s): %i / %i (%.1f%%)  [%i / %i cultures skipped by filter]\n', ...
-        p.Direction, sum(ctc.ResponsiveUnitIdx), N_units, ...
-        100 * mean(ctc.ResponsiveUnitIdx), n_skipped, numel(unique_cultures));
+        p.Direction, n_responsive, n_total, 100 * n_responsive / n_total, ...
+        n_skipped, numel(unique_cultures));
 else
     fprintf('Responsive units (%s): %i / %i (%.1f%%)\n', ...
-        p.Direction, sum(ctc.ResponsiveUnitIdx), N_units, ...
-        100 * mean(ctc.ResponsiveUnitIdx));
+        p.Direction, n_responsive, n_total, 100 * n_responsive / n_total);
 end
 end
 
@@ -307,7 +310,7 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
             if ~any(rec_match); continue; end
             udi = uid_ud_idx(find(rec_match, 1));
             st  = ud(udi).SpikeTimes;
-            dur = ud(udi).getRecordingDuration();
+            dur = ud(udi).RecordingDuration;
             if isempty(dur) || dur <= 0
                 fr_vals(ri) = 0;
             else
@@ -318,16 +321,23 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
         valid_pts = ~isnan(fr_vals);
         if sum(valid_pts) < 2; continue; end
 
+        gv_fit = gv_valid(valid_pts)';
+        fr_fit = fr_vals(valid_pts)';
         try
-            [rho, pval] = corr(gv_valid(valid_pts)', fr_vals(valid_pts)', 'Type', 'Spearman');
+            % One-sided tests matched to each direction.
+            % Two-tailed Spearman is never significant at alpha=0.05 for n<=4,
+            % so we use one-sided p-values and flag based on direction + significance.
+            [rho, p_inc] = corr(gv_fit, fr_fit, 'Type', 'Spearman', 'Tail', 'right');
+            [~,   p_dec] = corr(gv_fit, fr_fit, 'Type', 'Spearman', 'Tail', 'left');
         catch
             continue
         end
 
         local_idx            = find(uid_row_mask);
         strengths(local_idx) = abs(rho);
-        pvals(local_idx)     = pval;
-        flag_inc(local_idx)  = pval < alpha && rho > 0;
-        flag_dec(local_idx)  = pval < alpha && rho < 0;
+        % Report the direction-matched p-value for FDR and strength filtering
+        pvals(local_idx)     = min(p_inc, p_dec);
+        flag_inc(local_idx)  = p_inc < alpha;
+        flag_dec(local_idx)  = p_dec < alpha;
     end
 end
