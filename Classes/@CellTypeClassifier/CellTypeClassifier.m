@@ -15,52 +15,31 @@ classdef CellTypeClassifier < handle
 %   ctc = CellTypeClassifier.fromLegacyGroup(rg, params);
 
     properties
-<<<<<<< HEAD
         FeatureStore            FeatureStore    % Features + metadata for all units
         UnitDataArray           UnitData        % (1 x N) raw unit data (spike times etc.)
         Parameters              struct          % Merged from returnDefaultParams + user overrides
         ResponsiveUnitIdx       logical         % (1 x N) units with a significant firing rate response
         ResponsiveUnitDirection string          % (1 x N) "none" | "increase" | "decrease" per unit
+        ResponsiveStrength      double          % (1 x N) continuous response strength (rho or effect size)
         TrainLabels             struct          % .sorted_train_ids, .sorted_y_train, etc.
         UnitLabels              double          % (1 x N): 1=excitatory, 2=inhibitory, NaN=unclassified
         UnitConfidence          double          % (1 x N): kNN confidence in [0,1]; 1.0 for training units
         UMAP                                   % Trained UMAP model from run_umap
         Reduction               struct          % Struct with Unsupervised/Train/Test/External embeddings
-        HarmonizedWaveforms     double          % (N_samples × N_units) processed waveforms
-        HarmonizedACGs          double          % (N_bins × N_units) ACGs
+        HarmonizedWaveforms     double          % (N_samples x N_units) processed waveforms
+        HarmonizedACGs          double          % (N_bins x N_units) ACGs
         HarmonizedSR            double          % Waveform sampling rate after harmonization
+        NormalizationParams     struct          % Normalization pipeline params from generateTrainLabels
+                                               %   .mu_global    (1 x F) mean from global z-score
+                                               %   .sigma_global (1 x F) std from global z-score
+                                               %   .nan_cols     (1 x F) logical mask of removed NaN columns
+                                               %   .scale        (1 x F') max(abs) scaling vector
         CachedExtraction        struct          % Cached waveform/ACG extraction
     end
 
     % Kept for backward compatibility (populated by fromLegacyGroup)
     properties (Access = private)
         LegacyRecordingGroup    % RecordingGroup, only set by fromLegacyGroup
-=======
-        RecordingGroup          % RecordingGroup with .Cultures already set
-        Parameters              % struct — merged from returnDefaultParams + user overrides
-        UnitList                % (1 x N) Unit array — all units across all cultures
-        ResponsiveUnitIdx       % (1 x N) logical — units identified as responsive (inhibitory candidates) by bootstrap
-        ResponsiveStrength      % (1 x N) double — continuous response strength per unit (Spearman rho or effect size)
-        TrainLabels             % struct: .sorted_train_ids, .sorted_y_train, .umap_train_idx, .umap_test_idx
-        UnitLabels              % (1 x N) double — 1=excitatory, 2=inhibitory, NaN=unclassified
-        UMAP                    % trained UMAP model returned by run_umap
-        Reduction = struct('Unsupervised', [], 'Train', [], 'Test', [], 'External', [], 'Extras', [])
-        HarmonizedWaveforms     % (N_samples × N_units) processed waveforms (upsampled, aligned, trimmed)
-        HarmonizedACGs          % (N_bins × N_units)   ACGs at Harmonization params
-        HarmonizedSR            % scalar — waveform sampling rate after harmonization
-        NormalizationParams     % struct caching normalization from generateTrainLabels for carryover to classifyUnits/applyTo
-                                %   .mu_global    — (1 x F) mean from global z-score
-                                %   .sigma_global — (1 x F) std from global z-score
-                                %   .nan_cols     — (1 x F) logical mask of NaN columns removed
-                                %   .scale        — (1 x F') max(abs) scaling vector (after NaN col removal)
-        Confidence              % (1 x N) double — per-unit confidence score (0-1, 1=most confident)
-        CachedExtraction        % struct caching extractUnitWaveformsAndACGs output (see getOrExtract)
-                                % struct storing UMAP embeddings:
-                                %   .Unsupervised — (N x D) from generateTrainLabels (all units, unsupervised)
-                                %   .Train        — (N_train x D) from classifyUnits (supervised training embedding)
-                                %   .Test         — (N_test  x D) from classifyUnits (supervised test projection)
-                                %   .External     — (N_ext  x D) from classifyExternalUnits
->>>>>>> claude/dreamy-varahamihira
     end
 
     methods
@@ -91,7 +70,7 @@ classdef CellTypeClassifier < handle
         end
 
         function [wf, acg, sr] = getOrExtract(ctc, unit_data)
-        % GETOREXTRACT  Three-level cache: in-memory → disk → compute.
+        % GETOREXTRACT  Three-level cache: in-memory -> disk -> compute.
         %
         % ACG source strategy (ACGSource parameter):
         %   "FullACG" — prefer Parent_ACG* columns from FeatureStore (pre-computed
@@ -102,7 +81,7 @@ classdef CellTypeClassifier < handle
             N     = numel(unit_data);
             cache = ctc.CachedExtraction;
 
-            % ── Level 1: in-memory cache ──────────────────────────────────────
+            % -- Level 1: in-memory cache -----------------------------------------
             if ~isempty(cache) ...
                     && cache.N == N ...
                     && abs(cache.ACGBinSize - ph.ACGBinSize) < 1e-12 ...
@@ -114,7 +93,7 @@ classdef CellTypeClassifier < handle
                 return
             end
 
-            % ── Level 2: disk cache ───────────────────────────────────────────
+            % -- Level 2: disk cache ----------------------------------------------
             % Unit identity encoded as a compact hash of sorted IDs (avoids
             % hashing a large cell array for datasets with many units).
             uid_hash   = paramHash(strjoin(sort(string({unit_data.UnitID})), '|'));
@@ -128,7 +107,7 @@ classdef CellTypeClassifier < handle
                 acg = s.acg;
                 sr  = s.sr;
             else
-                % ── Level 3: compute ──────────────────────────────────────────
+                % -- Level 3: compute ---------------------------------------------
                 % Waveform: always from UnitData
                 wf = double([unit_data.ReferenceWaveform]);
                 if isempty(wf)
@@ -148,7 +127,7 @@ classdef CellTypeClassifier < handle
                 end
             end
 
-            % ── Update in-memory cache ────────────────────────────────────────
+            % -- Update in-memory cache -------------------------------------------
             ctc.CachedExtraction = struct('wf', wf, 'acg', acg, 'sr', sr, ...
                 'N', N, 'ACGBinSize', ph.ACGBinSize, 'ACGLag', ph.ACGLag, ...
                 'ACGSource', ph.ACGSource);
@@ -199,44 +178,158 @@ classdef CellTypeClassifier < handle
         end
 
         function defaultParams = returnDefaultParams()
-            defaultParams.Bootstrap.PreCutout   = [0, 1200];
-            defaultParams.Bootstrap.PostCutout  = [6000, 7200];
-            defaultParams.Bootstrap.BinSize     = 20;
-            defaultParams.Bootstrap.NIter       = 1000;
-            defaultParams.Bootstrap.Alpha       = 1e-10;
-            defaultParams.Bootstrap.Direction   = "increase";  % "increase" | "decrease" | "both"
 
-            defaultParams.UMAP.NDims            = 10;
-            defaultParams.UMAP.NNeighbors       = 50;
-            defaultParams.UMAP.MinDist          = 0.1;
-            defaultParams.UMAP.Spread           = 1;
+            % ── Bootstrap: responsive unit identification ─────────────────────
+            % GroundTruthMethod: how to identify inhibitory candidates.
+            %   "two_window" — compare pre vs post spike rates (bootstrap permutation test)
+            %   "full_curve" — Spearman rank correlation across concentrations/recordings
+            %                  Falls back to "two_window" if fewer than MinRecordings recordings.
+            defaultParams.Bootstrap.GroundTruthMethod     = "two_window";
+            defaultParams.Bootstrap.PreCutout             = [0, 1200];
+            defaultParams.Bootstrap.PostCutout            = [6000, 7200];
+            defaultParams.Bootstrap.MinRecordings         = 4;
+            defaultParams.Bootstrap.BinSize               = 20;
+            defaultParams.Bootstrap.NIter                 = 1000;
+            defaultParams.Bootstrap.Alpha                 = 1e-10;
+            defaultParams.Bootstrap.Direction             = "increase";  % "increase" | "decrease" | "both"
+            defaultParams.Bootstrap.MinResponsiveStrength = 0;  % 0 = no filtering
+
+            % UseFDR: replace fixed Alpha with Benjamini-Hochberg FDR control.
+            %   Scales correctly with dataset size — large datasets get proper
+            %   multiple-comparison correction while small datasets retain power.
+            defaultParams.Bootstrap.UseFDR               = false;
+            defaultParams.Bootstrap.FDRLevel             = 0.05;
+
+            % MaxNIter / ConvergenceTol: adaptive bootstrap iterations.
+            %   When MaxNIter > NIter, bootstrap runs in batches of 500 with convergence
+            %   monitoring. Stops when Normal fit parameters stabilize within ConvergenceTol.
+            defaultParams.Bootstrap.MaxNIter             = 5000;
+            defaultParams.Bootstrap.ConvergenceTol       = 0.01;
+
+            % ── UMAP parameters ───────────────────────────────────────────────
+            defaultParams.UMAP.NDims                = 10;
+            defaultParams.UMAP.NNeighbors           = 50;
+            defaultParams.UMAP.MinDist              = 0.1;
+            defaultParams.UMAP.Spread               = 1;
             defaultParams.UMAP.SupervisedNDims      = 2;
             defaultParams.UMAP.SupervisedNNeighbors = 100;
-            defaultParams.UMAP.UnitFeatures     = ["FullACG","ReferenceWaveform"];
-            defaultParams.UMAP.NormalizationVar = "ChipID";
-            defaultParams.UMAP.GroupingVar      = "Concentration";
-            defaultParams.UMAP.GroupingValues   = 0;
-            defaultParams.UMAP.TrainingCultureIdx = [];
-            defaultParams.UMAP.TemplateDir      = tempdir;
-            defaultParams.UMAP.ConfidenceK      = 15;  % k for kNN confidence scoring
+            defaultParams.UMAP.UnitFeatures         = ["FullACG","ReferenceWaveform"];
+            defaultParams.UMAP.NormalizationVar     = "ChipID";
+            defaultParams.UMAP.GroupingVar          = "Concentration";
+            defaultParams.UMAP.GroupingValues       = 0;
+            defaultParams.UMAP.TrainingCultureIdx   = [];
+            defaultParams.UMAP.TargetWeight         = 0.5;  % 0=data topology, 1=label topology
+            defaultParams.UMAP.TemplateDir          = tempdir;
+            defaultParams.UMAP.ConfidenceK          = 15;  % k for kNN confidence scoring
 
-            defaultParams.TrainLabels.ResponsiveClassLabel = 2;  % 2=responsive→inhibitory, 1=responsive→excitatory
+            % AutoNNeighbors: UMAP n_neighbors set to max(MinNNeighbors, sqrt(N)).
+            %   Prevents n_neighbors from exceeding dataset size (small datasets) or being too
+            %   local (large datasets). The sqrt heuristic is standard in the UMAP literature.
+            defaultParams.UMAP.AutoNNeighbors       = false;
+            defaultParams.UMAP.MinNNeighbors        = 15;
 
-            defaultParams.OutlierDetection.OutlierAlpha           = 0.01;   % chi-squared / posterior threshold
-            defaultParams.OutlierDetection.MaxResponsiveComponents = 3;     % max GMM components for multimodal responsive populations
-            defaultParams.OutlierDetection.DistancePercentile     = 80;
-            defaultParams.OutlierDetection.CounterexampleRatio    = 2;
+            % AutoConfidenceK: kNN confidence k set to max(5, sqrt(N_train)).
+            %   Prevents k from approaching N_train (making all confidences identical)
+            %   while scaling with training set density.
+            defaultParams.UMAP.AutoConfidenceK      = false;
 
+            % AutoNDims: unsupervised UMAP dimensions set from PCA variance threshold.
+            %   Datasets with simpler structure get fewer dimensions (tighter embeddings),
+            %   complex datasets get more (preserving information). Clamped to [3, 20].
+            defaultParams.UMAP.AutoNDims            = false;
+            defaultParams.UMAP.VarianceThreshold    = 0.95;
+
+            % AutoTargetWeight: supervised UMAP TargetWeight adapted to train/test divergence.
+            %   Uses KS divergence between first 5 PCs of train and test feature distributions.
+            %   Similar distributions -> high TargetWeight (more label influence).
+            %   Divergent distributions -> lower TargetWeight (data-driven topology).
+            defaultParams.UMAP.AutoTargetWeight     = false;
+
+            % FeatureSelection: remove low-variance and highly correlated features before UMAP.
+            %   Reduces ~640-feature input to ~400-500 informative features, improving UMAP
+            %   stability across seeds and reducing computation time.
+            %   MinVariancePercentile: drop features in the bottom N% by variance.
+            %   MaxCorrelation: drop one of each pair with |r| above this threshold.
+            defaultParams.UMAP.FeatureSelection      = false;
+            defaultParams.UMAP.MinVariancePercentile = 10;
+            defaultParams.UMAP.MaxCorrelation        = 0.99;
+
+            % ── Training label generation ─────────────────────────────────────
+            defaultParams.TrainLabels.ResponsiveClassLabel = 2;  % 2=responsive->inhibitory, 1=responsive->excitatory
+
+            % ── Outlier detection ─────────────────────────────────────────────
+            defaultParams.OutlierDetection.OutlierAlpha            = 0.01;   % chi-squared / posterior threshold
+            defaultParams.OutlierDetection.MaxResponsiveComponents = 3;      % max GMM components for multimodal populations
+            defaultParams.OutlierDetection.DistancePercentile      = 80;
+            defaultParams.OutlierDetection.CounterexampleRatio     = 2;
+
+            % DipTestAlpha: significance level for Hartigan dip test for multimodality.
+            %   Conceptually distinct from OutlierAlpha — tests whether responsive units
+            %   form a unimodal or multimodal distribution in UMAP space.
+            defaultParams.OutlierDetection.DipTestAlpha            = 0.05;
+
+            % AutoOutlierAlpha: derive Mahalanobis/posterior outlier threshold from
+            %   responsive cluster compactness (silhouette score):
+            %   compact clusters -> stricter alpha (fewer outliers removed)
+            %   diffuse clusters -> lenient alpha (more aggressive cleanup)
+            defaultParams.OutlierDetection.AutoOutlierAlpha        = false;
+
+            % AutoCounterexampleRatio: training ratio set to
+            %   clamp(round(N_nonresponsive / N_responsive), 1, 5) instead of a fixed ratio.
+            %   Matches training class balance to the actual responsive fraction in the dataset,
+            %   which varies by culture age, density, and preparation.
+            defaultParams.OutlierDetection.AutoCounterexampleRatio = false;
+
+            % AutoDistanceThreshold: pool filter uses median(d) + MADMultiplier*MAD(d).
+            %   Tight responsive clusters -> tight pool filter; diffuse -> wider.
+            defaultParams.OutlierDetection.AutoDistanceThreshold   = false;
+            defaultParams.OutlierDetection.DistanceMADMultiplier   = 2;
+
+            % ── Classification ────────────────────────────────────────────────
+            defaultParams.Classification.UseConfidenceThreshold = false;  % mark low-confidence predictions as NaN
+            defaultParams.Classification.ConfidenceThreshold    = 0.3;    % threshold when UseConfidenceThreshold=true
+            defaultParams.Classification.UseJoinedTransform     = false;
+
+            % ── Ensemble classification ───────────────────────────────────────
+            % Enabled: run the pipeline N times with different RNG seeds and take
+            %   majority-vote labels. Confidence = fraction of seeds agreeing.
+            %   Directly addresses non-reproducibility from single-seed sensitivity.
+            %   MinAgreement: minimum vote fraction for label assignment.
+            %   Units below this threshold become NaN (unclassified).
+            defaultParams.Ensemble.Enabled      = false;
+            defaultParams.Ensemble.Seeds        = [42, 1042, 2042, 3042, 4042];
+            defaultParams.Ensemble.MinAgreement = 0.6;
+
+            % ── Bayesian optimization ─────────────────────────────────────────
+            defaultParams.BayesianOptimization.MaxEvaluations          = 30;
+            defaultParams.BayesianOptimization.NNeighborsRange          = [5, 200];
+            defaultParams.BayesianOptimization.MinDistRange             = [0.01, 1.0];
+            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 300];
+            defaultParams.BayesianOptimization.ContaminationRange       = [0.1, 0.9];
+            defaultParams.BayesianOptimization.SpreadRange              = [0.5, 5.0];
+            defaultParams.BayesianOptimization.TargetWeightRange        = [0.1, 0.9];
+            defaultParams.BayesianOptimization.NDimsRange               = [3, 20];
+            defaultParams.BayesianOptimization.CounterexampleRatioRange = [1, 5];
+            defaultParams.BayesianOptimization.ObjectiveMetric          = "silhouette";  % "silhouette" | "qf_dissimilarity" | "combined"
+            defaultParams.BayesianOptimization.UseInterneuronPenalty    = false;
+            defaultParams.BayesianOptimization.InterneuronTarget        = 0.19;
+            defaultParams.BayesianOptimization.InterneuronWeight        = 5.0;
+
+            % ── General ───────────────────────────────────────────────────────
             defaultParams.RNGSeed     = 42;
             defaultParams.CultureKeys = ["ChipID", "PlatingDate"];
 
-            defaultParams.Harmonization.WaveformTargetSamplingRate = 120000;
-            defaultParams.Harmonization.WaveformPreTrough          = 1.0;
-            defaultParams.Harmonization.WaveformPostTrough         = 1.0;
-            defaultParams.Harmonization.WaveformEdgeMode           = "trim";
-            defaultParams.Harmonization.ACGBinSize                 = 0.0005;
-            defaultParams.Harmonization.ACGLag                     = 0.1;
-            defaultParams.Harmonization.ACGSource                  = "FullACG";
+            % ── Harmonization ─────────────────────────────────────────────────
+            % Shared target spec for DeePhys and external data.
+            % buildFeatureMatrix reads these to ensure DeePhys and external units
+            % are projected into the same feature space.
+            defaultParams.Harmonization.WaveformTargetSamplingRate = 120000;  % Hz
+            defaultParams.Harmonization.WaveformPreTrough          = 1.0;     % ms before trough
+            defaultParams.Harmonization.WaveformPostTrough         = 1.0;     % ms after trough
+            defaultParams.Harmonization.WaveformEdgeMode           = "trim";  % "zero" | "edge" | "trim"
+            defaultParams.Harmonization.ACGBinSize                 = 0.0005;  % s (0.5 ms bins)
+            defaultParams.Harmonization.ACGLag                     = 0.1;     % s (+-100 ms -> 401 bins)
+            defaultParams.Harmonization.ACGSource                  = "FullACG";  % "FullACG" or "ACG"
         end
 
     end
@@ -276,10 +369,9 @@ classdef CellTypeClassifier < handle
     end
 
     methods (Static)
-<<<<<<< HEAD
 
         function binned = binnedSpikeMatrix(unit_data, time_window, bin_size)
-        % BINNEDSPIKEMATRIX  (N_units × N_bins) spike count matrix from UnitData.SpikeTimes.
+        % BINNEDSPIKEMATRIX  (N_units x N_bins) spike count matrix from UnitData.SpikeTimes.
         %   Replaces Culture.getBinnedSpikeMat without requiring Culture objects.
         %   Public so that EIAnalyzer methods can call it directly.
             bins   = time_window(1) : bin_size : time_window(2);
@@ -292,74 +384,6 @@ classdef CellTypeClassifier < handle
                     binned(u, :) = histcounts(st(in_win), bins);
                 end
             end
-=======
-        function defaultParams = returnDefaultParams()
-            defaultParams.Bootstrap.GroundTruthMethod = "full_curve"; % "full_curve" | "two_window"
-                % full_curve — Spearman correlation across all recordings/concentrations (recommended)
-                % two_window — legacy: compare pre vs post cutout windows only
-            defaultParams.Bootstrap.PreCutout   = [0, 1200];    % seconds — baseline window (two_window only)
-            defaultParams.Bootstrap.PostCutout  = [6000, 7200]; % seconds — post-treatment window (two_window only)
-            defaultParams.Bootstrap.MinRecordings = 4;          % minimum recordings per culture for full_curve (falls back to two_window)
-            defaultParams.Bootstrap.BinSize     = 20;           % seconds per bin
-            defaultParams.Bootstrap.NIter       = 1000;         % bootstrap iterations
-            defaultParams.Bootstrap.Alpha       = 1e-10;        % significance level
-            defaultParams.Bootstrap.MinResponsiveStrength = 0;  % minimum strength to accept (0 = no filtering)
-                % full_curve: absolute Spearman rho (e.g. 0.5 requires moderate monotonicity)
-                % two_window: effect size |diff|/null_std (e.g. 3.0 requires strong effect)
-
-            defaultParams.UMAP.NDims            = 10;           % unsupervised UMAP output dimensions (label generation)
-            defaultParams.UMAP.NNeighbors       = 50;           % unsupervised UMAP n_neighbors
-            defaultParams.UMAP.MinDist          = 0.1;
-            defaultParams.UMAP.Spread           = 1;
-            defaultParams.UMAP.SupervisedNDims      = 2;        % supervised UMAP output dimensions (classification)
-            defaultParams.UMAP.SupervisedNNeighbors = 100;      % supervised UMAP n_neighbors
-            defaultParams.UMAP.UnitFeatures     = ["FullACG","ReferenceWaveform"]; % feature groups to use
-            defaultParams.UMAP.NormalizationVar = "ChipID";     % metadata field for within-group normalisation
-            defaultParams.UMAP.GroupingVar      = "Concentration"; % metadata field grouping recordings (e.g. dose)
-            defaultParams.UMAP.GroupingValues   = 0;            % value(s) of GroupingVar to use (0 = baseline)
-            defaultParams.UMAP.TrainingCultureIdx = [];         % culture indices for label generation UMAP (empty = all)
-            defaultParams.UMAP.TargetWeight     = 0.5;          % balance between data topology (0) and label topology (1) in supervised UMAP
-            defaultParams.UMAP.TemplateDir      = tempdir;      % directory for UMAP template .mat file
-
-            defaultParams.OutlierDetection.ContaminationFraction = 0.5;
-            defaultParams.OutlierDetection.NObsPerLearner        = 50;
-            defaultParams.OutlierDetection.CounterexampleRatio   = 2;   % excitatory:inhibitory sampling ratio
-
-            defaultParams.Classification.UseConfidenceThreshold  = false; % set true to mark low-confidence predictions as NaN
-            defaultParams.Classification.ConfidenceThreshold     = 0.3;   % units below this confidence become unclassified (only when UseConfidenceThreshold=true)
-            defaultParams.Classification.UseJoinedTransform      = false; % set true to use UMAP joined_transform (reduces false positives for divergent train/test)
-
-            defaultParams.BayesianOptimization.MaxEvaluations     = 30;  % bayesopt iterations
-            defaultParams.BayesianOptimization.NNeighborsRange     = [5, 200];
-            defaultParams.BayesianOptimization.MinDistRange        = [0.01, 1.0];
-            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 300];
-            defaultParams.BayesianOptimization.ContaminationRange  = [0.1, 0.9];
-            defaultParams.BayesianOptimization.SpreadRange         = [0.5, 5.0];
-            defaultParams.BayesianOptimization.TargetWeightRange   = [0.1, 0.9];
-            defaultParams.BayesianOptimization.NDimsRange          = [3, 20];  % unsupervised UMAP dimensions
-            defaultParams.BayesianOptimization.CounterexampleRatioRange = [1, 5];
-            defaultParams.BayesianOptimization.ObjectiveMetric     = "silhouette"; % "silhouette" | "qf_dissimilarity" | "combined"
-            defaultParams.BayesianOptimization.UseInterneuronPenalty = false; % set true to penalise deviation from target fraction
-            defaultParams.BayesianOptimization.InterneuronTarget   = 0.19; % expected interneuron fraction (only used when UseInterneuronPenalty=true)
-            defaultParams.BayesianOptimization.InterneuronWeight   = 5.0;  % penalty weight (only used when UseInterneuronPenalty=true)
-
-            defaultParams.RNGSeed = 42;  % seed for reproducible label generation & classification
-
-            % Harmonization parameters — shared target spec for DeePhys and external data.
-            % buildFeatureMatrix and extractUnitWaveformsAndACGs both read these to
-            % ensure DeePhys and external units are projected into the same feature space.
-            % Change these to harmonize to a different ACG resolution or waveform rate.
-            defaultParams.Harmonization.WaveformTargetSamplingRate = 120000;  % Hz — output rate after interpolation
-            defaultParams.Harmonization.WaveformPreTrough          = 1.0;   % ms before trough to include
-            defaultParams.Harmonization.WaveformPostTrough         = 1.0;   % ms after  trough to include
-            defaultParams.Harmonization.WaveformEdgeMode           = "trim"; % "zero" | "edge" | "trim"
-                % zero — zero-pad regions outside available input
-                % edge — hold the boundary value (nearest-neighbor extrapolation)
-                % trim — shrink output window to the shortest available span across all units
-            defaultParams.Harmonization.ACGBinSize                 = 0.0005; % s — ACG bin width (0.5 ms)
-            defaultParams.Harmonization.ACGLag                     = 0.1;    % s — one-sided ACG lag (100 ms → 401 bins)
-            defaultParams.Harmonization.ACGSource                  = "FullACG"; % "FullACG" or "ACG" — which DeePhys ACG property to use
->>>>>>> claude/dreamy-varahamihira
         end
 
         function acg = computeACG(spike_times, bin_size, lag)
@@ -477,7 +501,7 @@ classdef CellTypeClassifier < handle
     methods (Static, Access = private)
 
         function [X_tr, X_te, feat_names] = normalizeForClassification(X_tr, X_te, feat_names)
-        % NORMALIZEFORCLASSIFICATION  Steps 2–4 of the shared normalization pipeline.
+        % NORMALIZEFORCLASSIFICATION  Steps 2-4 of the shared normalization pipeline.
         %
         %   [X_tr, X_te, feat_names] = normalizeForClassification(X_tr, X_te, feat_names)
         %

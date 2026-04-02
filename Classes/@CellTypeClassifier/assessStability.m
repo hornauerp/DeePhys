@@ -41,7 +41,7 @@ assert(~isempty(ctc.ResponsiveUnitIdx), ...
     'Run identifyResponsiveUnits() before assessStability()');
 
 N = opts.NRuns;
-n_units = numel(ctc.UnitList);
+n_units = numel(ctc.UnitDataArray);
 
 % Generate distinct seeds
 base_seed = ctc.Parameters.RNGSeed;
@@ -58,8 +58,7 @@ for r = 1:N
     temp_params = ctc.Parameters;
     temp_params.RNGSeed = seeds(r);
 
-    temp_ctc = CellTypeClassifier(ctc.RecordingGroup, temp_params);
-    temp_ctc.UnitList          = ctc.UnitList;
+    temp_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, temp_params);
     temp_ctc.ResponsiveUnitIdx = ctc.ResponsiveUnitIdx;
 
     try
