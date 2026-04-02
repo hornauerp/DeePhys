@@ -13,7 +13,9 @@
 
 %% 0 — Setup
 
-deephys_root = fileparts(fileparts(mfilename('fullpath')));
+script_path = mfilename('fullpath');
+if isempty(script_path); script_path = which(mfilename); end
+deephys_root = fileparts(fileparts(script_path));
 addpath(genpath(deephys_root));
 
 %% 1 — Configuration
