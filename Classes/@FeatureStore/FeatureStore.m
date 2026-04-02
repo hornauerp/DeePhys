@@ -55,6 +55,13 @@ classdef FeatureStore < handle
 
             for i = 1:numel(proc_array)
                 p = proc_array(i);
+                if isempty(p.SpikeData) || isempty(p.SpikeData.RecordingID)
+                    warning('FeatureStore:emptyProcessor', ...
+                        'Processor %d has no SpikeData — skipping. ' ...
+                        'If this is an old MEArecording .mat, migrate with ' ...
+                        'RecordingProcessor.fromLegacyMat(path) first.', i);
+                    continue
+                end
                 rec_id = p.SpikeData.RecordingID;
 
                 % Unit table: feature table + identity/metadata columns
