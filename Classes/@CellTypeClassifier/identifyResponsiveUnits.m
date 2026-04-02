@@ -252,92 +252,100 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
 % recordings (one FR per recording the unit appears in), then test its
 % Spearman correlation against the GroupingVar.
 %
-% The same UnitID can appear in multiple recordings (cross-recording tracking).
-% All FeatureStore rows sharing a UnitID receive the same rho / p-value.
-%
-% Outputs are indexed over unit_rows (same length as ud_indices).
+% Vectorized: pre-extracts all RecordingIDs and FRs in one pass, builds a
+% (n_unique_uids × n_valid_recs) FR matrix, then calls corr on the whole
+% matrix at once. Only units with missing recordings fall back to a scalar loop.
 
-    n_rows   = numel(unit_rows);
-    flag_inc = false(1, n_rows);
-    flag_dec = false(1, n_rows);
+    n_rows    = numel(unit_rows);
+    flag_inc  = false(1, n_rows);
+    flag_dec  = false(1, n_rows);
     strengths = zeros(1, n_rows);
     pvals     = ones(1, n_rows);
 
-    % GroupingVar value per recording
+    % ── GroupingVar value per recording ──────────────────────────────────────
     n_recs     = numel(rec_ids_here);
     group_vals = nan(1, n_recs);
     for ri = 1:n_recs
-        rid     = rec_ids_here(ri);
-        rec_row = meta(meta.RecordingID == rid, :);
+        rec_row = meta(meta.RecordingID == rec_ids_here(ri), :);
         if isempty(rec_row); continue; end
         gv = rec_row.(group_field)(1);
         if isnumeric(gv)
             group_vals(ri) = gv;
         else
             gv_num = str2double(string(gv));
-            if ~isnan(gv_num)
-                group_vals(ri) = gv_num;
-            end
+            if ~isnan(gv_num); group_vals(ri) = gv_num; end
         end
     end
 
     valid_rec_mask = ~isnan(group_vals);
     if sum(valid_rec_mask) < 2 || numel(unique(group_vals(valid_rec_mask))) < 2
-        return  % insufficient GroupingVar variation — leave defaults
+        return
     end
 
-    valid_rec_ids = rec_ids_here(valid_rec_mask);
-    gv_valid      = group_vals(valid_rec_mask);
-    n_valid_recs  = numel(valid_rec_ids);
+    valid_rec_ids   = rec_ids_here(valid_rec_mask);
+    gv_valid        = group_vals(valid_rec_mask)';   % (n_valid_recs × 1)
+    n_valid_recs    = numel(valid_rec_ids);
 
-    % Process each unique UnitID
-    row_unit_ids = unit_ids_in_table(unit_rows);
-    unique_uids  = unique(row_unit_ids, 'stable');
+    % ── Pre-extract RecordingID and FR for every UnitData in this culture ────
+    % Single vectorized pass — no per-unit string conversion in a loop.
+    all_rec_ids = string({ud(ud_indices).RecordingID})';          % (n_rows × 1)
+    all_durs    = [ud(ud_indices).RecordingDuration]';             % (n_rows × 1)
+    all_nspk    = cellfun(@numel, {ud(ud_indices).SpikeTimes})';  % (n_rows × 1)
+    all_frs     = all_nspk ./ max(all_durs, eps);                 % (n_rows × 1)
 
-    for u = 1:numel(unique_uids)
-        uid          = unique_uids(u);
-        uid_row_mask = row_unit_ids == uid;   % logical over unit_rows
-        uid_ud_idx   = ud_order(unit_rows(uid_row_mask));
-        uid_ud_idx   = uid_ud_idx(uid_ud_idx > 0);
-        if isempty(uid_ud_idx); continue; end
+    % ── Build FR matrix: (n_unique_uids × n_valid_recs) ──────────────────────
+    row_unit_ids    = unit_ids_in_table(unit_rows);
+    unique_uids     = unique(row_unit_ids, 'stable');
+    n_unique        = numel(unique_uids);
+    fr_matrix       = nan(n_unique, n_valid_recs);
 
-        % One FR value per valid recording
-        fr_vals = nan(1, n_valid_recs);
+    valid_rec_str = string(valid_rec_ids);
+    for u = 1:n_unique
+        local_mask  = row_unit_ids == unique_uids(u);  % rows of this unit in culture
+        uid_frs     = all_frs(local_mask);
+        uid_rec_ids = all_rec_ids(local_mask);
         for ri = 1:n_valid_recs
-            rid = valid_rec_ids(ri);
-            % Find the UnitData entry for this unit in this recording
-            rec_match = arrayfun(@(i) string(ud(i).RecordingID) == string(rid), uid_ud_idx);
-            if ~any(rec_match); continue; end
-            udi = uid_ud_idx(find(rec_match, 1));
-            st  = ud(udi).SpikeTimes;
-            dur = ud(udi).RecordingDuration;
-            if isempty(dur) || dur <= 0
-                fr_vals(ri) = 0;
-            else
-                fr_vals(ri) = numel(st) / dur;
+            hit = uid_rec_ids == valid_rec_str(ri);
+            if any(hit)
+                fr_matrix(u, ri) = uid_frs(find(hit, 1));
             end
         end
+    end
 
-        valid_pts = ~isnan(fr_vals);
-        if sum(valid_pts) < 2; continue; end
+    % ── Vectorized corr for fully-observed units ──────────────────────────────
+    rhos   = nan(n_unique, 1);
+    p_incs = ones(n_unique, 1);
+    p_decs = ones(n_unique, 1);
 
-        gv_fit = gv_valid(valid_pts)';
-        fr_fit = fr_vals(valid_pts)';
+    full_mask = all(~isnan(fr_matrix), 2);
+    if any(full_mask)
+        fr_full = fr_matrix(full_mask, :)';   % (n_valid_recs × n_full_units)
+        [r,  pr] = corr(gv_valid, fr_full, 'Type', 'Spearman', 'Tail', 'right');
+        [~,  pl] = corr(gv_valid, fr_full, 'Type', 'Spearman', 'Tail', 'left');
+        rhos(full_mask)   = r';
+        p_incs(full_mask) = pr';
+        p_decs(full_mask) = pl';
+    end
+
+    % Scalar fallback for units missing some recordings
+    partial_idx = find(~full_mask & sum(~isnan(fr_matrix), 2) >= 2);
+    for u = partial_idx'
+        valid_pts = ~isnan(fr_matrix(u, :));
+        gv_fit    = gv_valid(valid_pts);
+        fr_fit    = fr_matrix(u, valid_pts)';
         try
-            % One-sided tests matched to each direction.
-            % Two-tailed Spearman is never significant at alpha=0.05 for n<=4,
-            % so we use one-sided p-values and flag based on direction + significance.
-            [rho, p_inc] = corr(gv_fit, fr_fit, 'Type', 'Spearman', 'Tail', 'right');
-            [~,   p_dec] = corr(gv_fit, fr_fit, 'Type', 'Spearman', 'Tail', 'left');
+            [rhos(u),  p_incs(u)] = corr(gv_fit, fr_fit, 'Type', 'Spearman', 'Tail', 'right');
+            [~,        p_decs(u)] = corr(gv_fit, fr_fit, 'Type', 'Spearman', 'Tail', 'left');
         catch
-            continue
         end
+    end
 
-        local_idx            = find(uid_row_mask);
-        strengths(local_idx) = abs(rho);
-        % Report the direction-matched p-value for FDR and strength filtering
-        pvals(local_idx)     = min(p_inc, p_dec);
-        flag_inc(local_idx)  = p_inc < alpha;
-        flag_dec(local_idx)  = p_dec < alpha;
+    % ── Map results back to unit_rows ─────────────────────────────────────────
+    for u = 1:n_unique
+        local_idx            = find(row_unit_ids == unique_uids(u));
+        strengths(local_idx) = abs(rhos(u));
+        pvals(local_idx)     = min(p_incs(u), p_decs(u));
+        flag_inc(local_idx)  = p_incs(u) < alpha;
+        flag_dec(local_idx)  = p_decs(u) < alpha;
     end
 end
