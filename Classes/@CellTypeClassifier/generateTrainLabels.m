@@ -173,6 +173,9 @@ template_file = fullfile(p_umap.TemplateDir, 'ctc_umap_template.mat');
     'method', 'Java', 'verbose', 'none', ...
     'save_template_file', template_file);
 ctc.UMAP = umap_model;
+if isempty(ctc.Reduction)
+    ctc.Reduction = struct();
+end
 ctc.Reduction.Unsupervised = reduction;
 
 % -- Adaptive outlier detection on responsive candidates ---------------------
