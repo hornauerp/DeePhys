@@ -30,10 +30,10 @@ proc_paths = {
 bootstrap_filter = {'AAV', 128};   % metadata filter for inhibitory candidates
 
 % External data (fill in whichever side(s) are "External")
-wf_ext  = [];       % (N_samples × N_units) raw waveforms
-acg_ext = [];       % (N_bins × N_units) autocorrelograms
+wf_ext  = [];       % (N_samples x N_units) raw waveforms
+acg_ext = [];       % (N_bins x N_units) autocorrelograms
 sr_ext  = 30000;    % waveform sampling rate (Hz)
-y_ext   = [];       % (1 × N_units) labels: 1=exc, 2=inh  (train_source=="External" only)
+y_ext   = [];       % (1 x N_units) labels: 1=exc, 2=inh  (train_source=="External" only)
 
 % CellTypeClassifier parameters
 parameters = struct();
@@ -42,18 +42,30 @@ parameters.Bootstrap.PostCutout = [6000, 7200];
 parameters.Bootstrap.BinSize    = 20;
 parameters.Bootstrap.NIter      = 1000;
 parameters.Bootstrap.Alpha      = 1e-10;
+parameters.Bootstrap.Direction  = 'increase';
 parameters.UMAP.NormalizationVar   = 'ChipID';
 parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
 parameters.UMAP.NDims              = 10;
+parameters.UMAP.TargetWeight       = 0.5;
 parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
 parameters.Harmonization.ACGLag     = 0.1;
-parameters.OutlierDetection.ContaminationFraction = 0.5;
-parameters.OutlierDetection.NObsPerLearner        = 50;
-parameters.OutlierDetection.DistancePercentile    = 80;
+parameters.OutlierDetection.OutlierAlpha            = 0.01;
+parameters.OutlierDetection.DipTestAlpha            = 0.05;
+parameters.OutlierDetection.MaxResponsiveComponents = 3;
+parameters.OutlierDetection.CounterexampleRatio     = 2;
+
+% Optional adaptive parameters (uncomment to enable):
+%   parameters.UMAP.AutoNNeighbors              = true;
+%   parameters.UMAP.AutoNDims                   = true;
+%   parameters.UMAP.AutoConfidenceK             = true;
+%   parameters.UMAP.AutoTargetWeight            = true;   % useful for External test
+%   parameters.UMAP.FeatureSelection            = true;
+%   parameters.OutlierDetection.AutoCounterexampleRatio = true;
+%   parameters.Bootstrap.UseFDR                 = true;
 
 %% 2 — Load DeePhys data (when needed)
 

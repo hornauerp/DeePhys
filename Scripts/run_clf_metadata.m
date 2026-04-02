@@ -5,6 +5,10 @@
 % Use when ground-truth or proxy labels are available in recording metadata
 % (e.g. genetic markers, sorted populations, manually curated labels).
 % Bypasses the bootstrap firing-rate test and unsupervised UMAP label generation.
+%
+% Note: classifyUnits() requires NormalizationParams (normally stored by
+% generateTrainLabels). Since generateTrainLabels is skipped here, §4b
+% computes equivalent normalization parameters directly from the feature matrix.
 
 %% 0 — Setup
 
@@ -44,7 +48,11 @@ parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
 parameters.UMAP.NDims              = 10;
-parameters.Harmonization.ACGSource = 'FullACG';
+parameters.UMAP.TargetWeight       = 0.5;
+parameters.Harmonization.ACGSource  = 'FullACG';
+parameters.Harmonization.ACGBinSize = 0.0005;
+parameters.Harmonization.ACGLag     = 0.1;
+parameters.OutlierDetection.CounterexampleRatio = 2;
 
 ctc = CellTypeClassifier(fs, ud, parameters);
 
@@ -87,6 +95,45 @@ labels.umap_train_idx(sorted_train_ids) = true;
 labels.umap_test_idx    = ~labels.umap_train_idx;
 
 ctc.TrainLabels = labels;
+
+%% 4b — Compute NormalizationParams
+%
+% classifyUnits() applies stored normalization to ensure the supervised UMAP
+% feature space is consistent. Since generateTrainLabels is bypassed here,
+% we compute equivalent parameters directly from the raw feature matrix.
+
+[wf_norm, acg_norm, sr_norm] = ctc.getOrExtract(ud);
+[X_raw, ~] = buildFeatureMatrix(ctc, wf_norm, acg_norm, sr_norm);
+X_raw(isnan(X_raw)) = 0;
+
+% Per-group z-score (matches Step 1 in classifyUnits)
+norm_var = parameters.UMAP.NormalizationVar;
+if ismember(norm_var, string(fs.UnitTable.Properties.VariableNames))
+    group_col = fs.UnitTable.(norm_var);
+    [~, ~, iG] = unique(string(group_col), 'stable');
+    for g = 1:max(iG)
+        mask = iG == g;
+        X_raw(mask, :) = normalize(X_raw(mask, :));
+    end
+end
+
+% Global z-score (matches Step 2)
+[X_normed, mu_global, sigma_global] = normalize(X_raw);
+
+% NaN column mask and max-abs scaling (Steps 3-4)
+nan_cols = any(isnan(X_normed), 1);
+X_normed(:, nan_cols) = [];
+scale = max(abs(X_normed), [], 1);
+scale(scale == 0) = 1;
+
+ctc.NormalizationParams = struct( ...
+    'mu_global',              mu_global, ...
+    'sigma_global',           sigma_global, ...
+    'nan_cols',               nan_cols, ...
+    'scale',                  scale, ...
+    'feature_selection_mask', true(1, sum(~nan_cols)));
+
+clear X_raw X_normed wf_norm acg_norm
 
 %% 5 — Classify all units
 

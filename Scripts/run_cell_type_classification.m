@@ -6,7 +6,7 @@
 %   1. Load processors → assemble FeatureStore
 %   2. Initialise CellTypeClassifier
 %   3. Bootstrap firing-rate test (inhibitory candidates)
-%   4. Generate training labels (UMAP + isolation forest)
+%   4. Generate training labels (UMAP + outlier detection)
 %   5. Classify all units (supervised UMAP)
 %   6. E/I analysis (EIAnalyzer)
 %   7. Save results
@@ -47,6 +47,7 @@ parameters.Bootstrap.PostCutout = [6000, 7200];
 parameters.Bootstrap.BinSize    = 20;
 parameters.Bootstrap.NIter      = 1000;
 parameters.Bootstrap.Alpha      = 1e-10;
+parameters.Bootstrap.Direction  = 'increase';  % 'increase' | 'decrease' | 'both'
 
 % UMAP embedding
 parameters.UMAP.NormalizationVar   = 'ChipID';
@@ -55,16 +56,28 @@ parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
 parameters.UMAP.NDims              = 10;
+parameters.UMAP.TargetWeight       = 0.5;
 
 % ACG source: prefer full-recording (Parent_ACG*) from FeatureStore
 parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
 parameters.Harmonization.ACGLag     = 0.1;
 
-% Isolation forest
-parameters.OutlierDetection.ContaminationFraction = 0.5;
-parameters.OutlierDetection.NObsPerLearner        = 50;
-parameters.OutlierDetection.DistancePercentile    = 80;
+% Outlier detection (dip test + Mahalanobis/GMM — no isolation forest)
+parameters.OutlierDetection.OutlierAlpha            = 0.01;
+parameters.OutlierDetection.DipTestAlpha            = 0.05;
+parameters.OutlierDetection.MaxResponsiveComponents = 3;
+parameters.OutlierDetection.CounterexampleRatio     = 2;
+
+% Optional: data-driven adaptive parameters (all off by default)
+%   parameters.UMAP.AutoNNeighbors              = true;   % n_neighbors = max(15, sqrt(N))
+%   parameters.UMAP.AutoNDims                   = true;   % dims from PCA variance threshold
+%   parameters.UMAP.AutoConfidenceK             = true;   % kNN k = max(5, sqrt(N_train))
+%   parameters.UMAP.AutoTargetWeight            = true;   % TargetWeight from KS divergence
+%   parameters.UMAP.FeatureSelection            = true;   % remove low-var / correlated features
+%   parameters.OutlierDetection.AutoCounterexampleRatio = true;
+%   parameters.OutlierDetection.AutoOutlierAlpha        = true;
+%   parameters.Bootstrap.UseFDR                 = true;   % BH correction instead of fixed alpha
 
 ctc = CellTypeClassifier(fs, ud, parameters);
 
@@ -101,6 +114,11 @@ for c = 1:numel(chips)
     ie   = sum(ctc.UnitLabels(mask) == 2) / sum(mask);
     fprintf('  ChipID %s: I/E fraction = %.2f\n', chips(c), ie);
 end
+
+% Optional: assess label stability across seeds (requires ~5x pipeline time)
+%   stability = ctc.assessStability('NRuns', 5);
+%   fprintf('Stability: ARI = %.3f +/- %.3f  (stable=%d)\n', ...
+%       stability.meanARI, stability.stdARI, stability.isStable);
 
 %% 7 — E/I analysis
 

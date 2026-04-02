@@ -5,6 +5,10 @@
 % A subset of cultures (training_culture_idx) seeds the supervised UMAP;
 % the classifier is then applied to the remaining cultures.
 % Results are visualised as split heatmaps and mean traces.
+%
+% For cross-dataset transfer (different FeatureStore / different lab),
+% use ctc.applyTo(fs_target, ud_target) instead of classifyUnits — see
+% Tutorial 6 (TransferLearning.m) for that workflow.
 
 %% 0 — Setup
 
@@ -36,16 +40,28 @@ if ~exist('ctc', 'var')
     parameters.Bootstrap.BinSize    = 20;
     parameters.Bootstrap.NIter      = 1000;
     parameters.Bootstrap.Alpha      = 1e-10;
+    parameters.Bootstrap.Direction  = 'increase';
     parameters.UMAP.NormalizationVar   = 'ChipID';
     parameters.UMAP.GroupingVar        = 'Concentration';
     parameters.UMAP.GroupingValues     = 0;
     parameters.UMAP.NNeighbors         = 100;
     parameters.UMAP.MinDist            = 0.1;
     parameters.UMAP.NDims              = 10;
-    parameters.Harmonization.ACGSource = 'FullACG';
-    parameters.OutlierDetection.ContaminationFraction = 0.5;
-    parameters.OutlierDetection.NObsPerLearner        = 50;
-    parameters.OutlierDetection.DistancePercentile    = 80;
+    parameters.UMAP.TargetWeight       = 0.5;
+    parameters.Harmonization.ACGSource  = 'FullACG';
+    parameters.Harmonization.ACGBinSize = 0.0005;
+    parameters.Harmonization.ACGLag     = 0.1;
+    parameters.OutlierDetection.OutlierAlpha            = 0.01;
+    parameters.OutlierDetection.DipTestAlpha            = 0.05;
+    parameters.OutlierDetection.MaxResponsiveComponents = 3;
+    parameters.OutlierDetection.CounterexampleRatio     = 2;
+
+    % Optional adaptive parameters (uncomment to enable):
+    %   parameters.UMAP.AutoNNeighbors              = true;
+    %   parameters.UMAP.AutoNDims                   = true;
+    %   parameters.UMAP.AutoTargetWeight            = true;
+    %   parameters.UMAP.FeatureSelection            = true;
+    %   parameters.OutlierDetection.AutoCounterexampleRatio = true;
 
     ctc = CellTypeClassifier(fs, ud, parameters);
     ctc.identifyResponsiveUnits({'AAV', 128});
@@ -84,7 +100,7 @@ end
 
 %% 4 — ACG inspection
 
-acg_mat = ctc.HarmonizedACGs';   % (N_units × N_bins), already normalized
+acg_mat  = ctc.HarmonizedACGs';   % (N_units x N_bins), already normalized
 inh_acgs = acg_mat(ctc.UnitLabels == 2, :);
 exc_acgs = acg_mat(ctc.UnitLabels == 1, :);
 
