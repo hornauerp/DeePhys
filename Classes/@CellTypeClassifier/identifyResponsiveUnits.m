@@ -151,33 +151,106 @@ for c = 1:numel(unique_cultures)
         end
 
     else
-        % -- Two window: bootstrap pre/post comparison ------------------------
+        % -- Two window: compare FR between two recordings in the culture -----
         if strcmp(method, 'full_curve')
-            fprintf('Culture %d: %d / %d recordings (< MinRecordings=%d) or GroupingVar "%s" missing — falling back to two_window\n', ...
-                c, numel(rec_ids_here), p.MinRecordings, p.MinRecordings, group_field);
+            fprintf('Culture %d: %d recordings < MinRecordings=%d or GroupingVar "%s" missing — falling back to two_window\n', ...
+                c, numel(rec_ids_here), p.MinRecordings, group_field);
         end
 
-        pre_mat  = CellTypeClassifier.binnedSpikeMatrix(ud(ud_indices), p.PreCutout,  p.BinSize);
-        post_mat = CellTypeClassifier.binnedSpikeMatrix(ud(ud_indices), p.PostCutout, p.BinSize);
+        % Get GroupingVar value per recording in this culture
+        n_recs_here = numel(rec_ids_here);
+        gv_here     = nan(1, n_recs_here);
+        if ismember(group_field, meta.Properties.VariableNames)
+            for ri = 1:n_recs_here
+                rec_row = meta(meta.RecordingID == rec_ids_here(ri), :);
+                if isempty(rec_row); continue; end
+                gv = rec_row.(group_field)(1);
+                if isnumeric(gv)
+                    gv_here(ri) = gv;
+                else
+                    gv_num = str2double(string(gv));
+                    if ~isnan(gv_num); gv_here(ri) = gv_num; end
+                end
+            end
+        end
+
+        % Select pre and post recordings by GroupingVar value (or auto)
+        valid_gv = ~isnan(gv_here);
+        if ~isempty(p.PreGroupValue) && isnumeric(p.PreGroupValue)
+            pre_ri = find(valid_gv & gv_here == p.PreGroupValue, 1);
+        else
+            [~, pre_ri] = min(gv_here);   % lowest GroupingVar = baseline
+        end
+        if ~isempty(p.PostGroupValue) && isnumeric(p.PostGroupValue)
+            post_ri = find(valid_gv & gv_here == p.PostGroupValue, 1);
+        else
+            [~, post_ri] = max(gv_here);  % highest GroupingVar = max treatment
+        end
+
+        if isempty(pre_ri) || isempty(post_ri) || pre_ri == post_ri
+            continue
+        end
+
+        pre_rec_id  = rec_ids_here(pre_ri);
+        post_rec_id = rec_ids_here(post_ri);
+
+        % Get matched pre/post UnitData for units present in both recordings
+        tw_pre_idx  = [];  tw_post_idx  = [];  tw_rows_tw = [];
+        row_unit_ids_c = unit_ids_in_table(unit_rows);
+        unique_uids_c  = unique(row_unit_ids_c, 'stable');
+        for u = 1:numel(unique_uids_c)
+            uid       = unique_uids_c(u);
+            uid_mask  = row_unit_ids_c == uid;
+            uid_ud    = ud_order(unit_rows(uid_mask));
+            uid_ud    = uid_ud(uid_ud > 0);
+            uid_rids  = string({ud(uid_ud).RecordingID})';
+            pre_hit   = find(uid_rids == string(pre_rec_id),  1);
+            post_hit  = find(uid_rids == string(post_rec_id), 1);
+            if isempty(pre_hit) || isempty(post_hit); continue; end
+            tw_pre_idx  = [tw_pre_idx,  uid_ud(pre_hit)];   %#ok<AGROW>
+            tw_post_idx = [tw_post_idx, uid_ud(post_hit)];  %#ok<AGROW>
+            % Use the post-recording row as the representative FeatureStore row
+            uid_rows_here = unit_rows(uid_mask);
+            post_row = uid_rows_here(find(uid_ud == uid_ud(post_hit), 1));
+            tw_rows_tw = [tw_rows_tw, post_row];             %#ok<AGROW>
+        end
+
+        if isempty(tw_pre_idx); continue; end
+
+        % Build binned spike matrices using optional sub-window or full recording
+        pre_dur  = ud(tw_pre_idx(1)).RecordingDuration;
+        post_dur = ud(tw_post_idx(1)).RecordingDuration;
+        pre_win  = p.PreCutout;
+        post_win = p.PostCutout;
+        if isempty(pre_win);  pre_win  = [0, pre_dur];  end
+        if isempty(post_win); post_win = [0, post_dur]; end
+
+        % Equalise number of bins so bootstrap permutation is valid
+        n_bins   = floor(min(diff(pre_win), diff(post_win)) / p.BinSize);
+        pre_win  = [pre_win(1),  pre_win(1)  + n_bins * p.BinSize];
+        post_win = [post_win(1), post_win(1) + n_bins * p.BinSize];
+
+        pre_mat  = CellTypeClassifier.binnedSpikeMatrix(ud(tw_pre_idx),  pre_win,  p.BinSize);
+        post_mat = CellTypeClassifier.binnedSpikeMatrix(ud(tw_post_idx), post_win, p.BinSize);
         response = bootstrapFiringRateResponse(pre_mat, post_mat, p.NIter, p.Alpha);
 
         if isfield(response, 'p_values') && ~isempty(response.p_values)
-            all_pvals(unit_rows) = response.p_values;
+            all_pvals(tw_rows_tw) = response.p_values;
         end
-        responsive_strength(unit_rows) = response.strength;
+        responsive_strength(tw_rows_tw) = response.strength;
 
         switch direction
             case "increase"
-                flag_rows = unit_rows(response.increase);
+                flag_rows = tw_rows_tw(response.increase);
                 responsive_idx(flag_rows)       = true;
                 responsive_direction(flag_rows) = "increase";
             case "decrease"
-                flag_rows = unit_rows(response.decrease);
+                flag_rows = tw_rows_tw(response.decrease);
                 responsive_idx(flag_rows)       = true;
                 responsive_direction(flag_rows) = "decrease";
             case "both"
-                inc_rows = unit_rows(response.increase);
-                dec_rows = unit_rows(response.decrease);
+                inc_rows = tw_rows_tw(response.increase);
+                dec_rows = tw_rows_tw(response.decrease);
                 responsive_idx(inc_rows)        = true;
                 responsive_idx(dec_rows)        = true;
                 responsive_direction(inc_rows)  = "increase";

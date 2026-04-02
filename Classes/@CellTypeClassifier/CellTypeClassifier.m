@@ -190,10 +190,18 @@ classdef CellTypeClassifier < handle
             %                  FullCurveAlpha. Pre/PostCutout, BinSize, NIter, Alpha not used.
             %                  Falls back to "two_window" if fewer than MinRecordings recordings.
             defaultParams.Bootstrap.GroundTruthMethod     = "two_window";
-            defaultParams.Bootstrap.PreCutout             = [0, 1200];    % two_window only
-            defaultParams.Bootstrap.PostCutout            = [6000, 7200]; % two_window only
+            % two_window: compares mean FR between two recordings within a culture,
+            %   selected by their GroupingVar value.
+            %   PreGroupValue/PostGroupValue identify which recordings to compare.
+            %   [] = auto-select (lowest GroupingVar for pre, highest for post).
+            %   PreCutout/PostCutout optionally restrict to a sub-window (seconds)
+            %   within each recording; [] = full recording duration.
+            defaultParams.Bootstrap.PreGroupValue         = [];   % [] = lowest GroupingVar recording
+            defaultParams.Bootstrap.PostGroupValue        = [];   % [] = highest GroupingVar recording
+            defaultParams.Bootstrap.PreCutout             = [];   % [] = full recording; or [start, end] in seconds
+            defaultParams.Bootstrap.PostCutout            = [];   % [] = full recording; or [start, end] in seconds
             defaultParams.Bootstrap.MinRecordings         = 4;
-            defaultParams.Bootstrap.BinSize               = 20;           % two_window only
+            defaultParams.Bootstrap.BinSize               = 20;           % two_window only (seconds)
             defaultParams.Bootstrap.NIter                 = 1000;         % two_window only
             defaultParams.Bootstrap.Alpha                 = 1e-10;        % two_window only
             defaultParams.Bootstrap.FullCurveAlpha        = 0.05;         % full_curve: per-unit Spearman p-value threshold

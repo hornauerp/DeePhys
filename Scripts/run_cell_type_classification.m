@@ -41,9 +41,14 @@ fprintf('FeatureStore: %d units across %d recordings\n', ...
 
 parameters = struct();
 
-% Bootstrap firing-rate test
-parameters.Bootstrap.PreCutout  = [0, 1200];
-parameters.Bootstrap.PostCutout = [6000, 7200];
+% Bootstrap firing-rate test (two_window method)
+% Compares FR between two recordings selected by their GroupingVar value.
+% [] = auto-select (lowest GroupingVar = pre/baseline, highest = post/treatment).
+parameters.Bootstrap.PreGroupValue  = [];   % e.g. 0 for concentration=0
+parameters.Bootstrap.PostGroupValue = [];   % e.g. 128 for concentration=128
+% Optional sub-windows within the selected recordings ([] = full recording):
+parameters.Bootstrap.PreCutout  = [];
+parameters.Bootstrap.PostCutout = [];
 parameters.Bootstrap.BinSize    = 20;
 parameters.Bootstrap.NIter      = 1000;
 parameters.Bootstrap.Alpha      = 1e-10;
