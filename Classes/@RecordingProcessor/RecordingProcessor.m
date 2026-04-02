@@ -423,6 +423,17 @@ classdef RecordingProcessor < handle
 
             if isfield(s, 'SpikeDataStruct')
                 proc.SpikeData = SpikeData.fromStruct(s.SpikeDataStruct);
+            else
+                % Old MEArecording format — attempt transparent migration
+                try
+                    proc = RecordingProcessor.fromLegacyMat(file_path);
+                    fprintf('RecordingProcessor.load: auto-migrated legacy file %s\n', file_path);
+                    return
+                catch ME
+                    warning('RecordingProcessor:load', ...
+                        'No SpikeDataStruct in %s and legacy migration failed: %s', ...
+                        file_path, ME.message);
+                end
             end
             if isfield(s, 'UnitsStructArray') && ~isempty(s.UnitsStructArray)
                 proc.Units = arrayfun(@UnitData.fromStruct, s.UnitsStructArray);
