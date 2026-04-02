@@ -181,17 +181,23 @@ classdef CellTypeClassifier < handle
 
             % ── Bootstrap: responsive unit identification ─────────────────────
             % GroundTruthMethod: how to identify inhibitory candidates.
-            %   "two_window" — compare pre vs post spike rates (bootstrap permutation test)
-            %   "full_curve" — Spearman rank correlation across concentrations/recordings
+            %   "two_window" — compare pre vs post spike rates within a single recording
+            %                  (bootstrap permutation test). Uses Pre/PostCutout, BinSize,
+            %                  NIter, Alpha.
+            %   "full_curve" — per-unit Spearman rank correlation between firing rate and
+            %                  GroupingVar (e.g. Concentration) across all recordings in the
+            %                  culture. Same UnitIDs must appear across recordings. Uses
+            %                  FullCurveAlpha. Pre/PostCutout, BinSize, NIter, Alpha not used.
             %                  Falls back to "two_window" if fewer than MinRecordings recordings.
             defaultParams.Bootstrap.GroundTruthMethod     = "two_window";
-            defaultParams.Bootstrap.PreCutout             = [0, 1200];
-            defaultParams.Bootstrap.PostCutout            = [6000, 7200];
+            defaultParams.Bootstrap.PreCutout             = [0, 1200];    % two_window only
+            defaultParams.Bootstrap.PostCutout            = [6000, 7200]; % two_window only
             defaultParams.Bootstrap.MinRecordings         = 4;
-            defaultParams.Bootstrap.BinSize               = 20;
-            defaultParams.Bootstrap.NIter                 = 1000;
-            defaultParams.Bootstrap.Alpha                 = 1e-10;
-            defaultParams.Bootstrap.Direction             = "increase";  % "increase" | "decrease" | "both"
+            defaultParams.Bootstrap.BinSize               = 20;           % two_window only
+            defaultParams.Bootstrap.NIter                 = 1000;         % two_window only
+            defaultParams.Bootstrap.Alpha                 = 1e-10;        % two_window only
+            defaultParams.Bootstrap.FullCurveAlpha        = 0.05;         % full_curve: per-unit Spearman p-value threshold
+            defaultParams.Bootstrap.Direction             = "increase";   % "increase" | "decrease" | "both"
             defaultParams.Bootstrap.MinResponsiveStrength = 0;  % 0 = no filtering
 
             % UseFDR: replace fixed Alpha with Benjamini-Hochberg FDR control.
