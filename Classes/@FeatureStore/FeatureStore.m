@@ -574,8 +574,9 @@ classdef FeatureStore < handle
         % Vertically concatenate tables that may have different columns.
         % Missing columns are filled with NaN (numeric) or "" (string/categorical),
         % with type inferred by peeking at a table that already has the column.
-            all_vars = unique(vertcat(cellfun(@(t) string(t.Properties.VariableNames)', tbl_cells, 'un', 0){:}));
-            padded = cellfun(@(t) FeatureStore.padTable(t, all_vars, tbl_cells), tbl_cells, 'un', 0);
+            var_cells = cellfun(@(t) string(t.Properties.VariableNames)', tbl_cells, 'un', 0);
+            all_vars  = unique(vertcat(var_cells{:}));
+            padded    = cellfun(@(t) FeatureStore.padTable(t, all_vars, tbl_cells), tbl_cells, 'un', 0);
             T = vertcat(padded{:});
         end
 
