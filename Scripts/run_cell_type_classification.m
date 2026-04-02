@@ -55,6 +55,7 @@ parameters.Bootstrap.Alpha      = 1e-10;
 parameters.Bootstrap.Direction  = 'increase';  % 'increase' | 'decrease' | 'both'
 
 % UMAP embedding
+parameters.UMAP.TemplateDir        = 'C:/Users/pjhor/Documents/Code/DeePhys/Output';  % directory for UMAP template .mat
 parameters.UMAP.NormalizationVar   = 'ChipID';
 parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;

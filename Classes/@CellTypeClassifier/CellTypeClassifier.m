@@ -233,7 +233,7 @@ classdef CellTypeClassifier < handle
             defaultParams.UMAP.GroupingValues       = 0;
             defaultParams.UMAP.TrainingCultureIdx   = [];
             defaultParams.UMAP.TargetWeight         = 0.5;  % 0=data topology, 1=label topology
-            defaultParams.UMAP.TemplateDir          = tempdir;
+            defaultParams.UMAP.TemplateDir          = '';   % must be set by user; UMAP template saved here
             defaultParams.UMAP.ConfidenceK          = 15;  % k for kNN confidence scoring
 
             % AutoNNeighbors: UMAP n_neighbors set to max(MinNNeighbors, sqrt(N)).
