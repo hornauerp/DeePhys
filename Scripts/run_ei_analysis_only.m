@@ -7,9 +7,7 @@
 
 %% 0 — Setup
 
-script_path = mfilename('fullpath');
-if isempty(script_path); script_path = which(mfilename); end
-deephys_root = fileparts(fileparts(script_path));
+deephys_root = 'C:/Users/pjhor/Documents/Code/DeePhys';
 addpath(genpath(deephys_root));
 
 %% 1 — Load pre-computed CellTypeClassifier
