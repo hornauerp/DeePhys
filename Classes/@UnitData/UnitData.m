@@ -84,9 +84,9 @@ classdef UnitData
             ud.SpikeTimes         = unit_obj.SpikeTimes;
             ud.ReferenceWaveform  = unit_obj.ReferenceWaveform;
 
-            % Use private-cached copies to avoid re-traversing MEArecording handle
-            ud.SamplingRate       = unit_obj.SamplingRate;
-            ud.RecordingDuration  = unit_obj.RecordingDuration;
+            % SamplingRate / RecordingDuration are private in Unit — use public getters
+            ud.SamplingRate       = unit_obj.getSamplingRate();
+            ud.RecordingDuration  = unit_obj.getRecordingDuration();
             ud.KSLabel            = unit_obj.KSLabel;
 
             if ~isempty(unit_obj.BombcellType)
