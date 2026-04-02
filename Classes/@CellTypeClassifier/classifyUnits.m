@@ -32,8 +32,22 @@ labels = ctc.TrainLabels;
 p_umap = ctc.Parameters.UMAP;
 np     = ctc.NormalizationParams;
 
-% -- Extract features via harmonized path -------------------------------------
-[wf, acg, sr]                        = ctc.getOrExtract(ctc.UnitDataArray);
+% -- Use same unique-unit deduplication as generateTrainLabels ----------------
+% labels.all_to_unique maps each full-array row to its unique-unit index.
+% We rebuild unique_ud via uniqueUnitMap (same logic, same baseline selection).
+[unique_ud, all_to_unique, ~] = ctc.uniqueUnitMap();
+n_unique     = numel(unique_ud);
+n_units_full = numel(ctc.UnitDataArray);
+
+% Recover unique_to_rep (representative row index for each unique unit)
+unique_to_rep = zeros(1, n_unique);
+for u = 1:n_unique
+    rows = find(all_to_unique == u);
+    unique_to_rep(u) = rows(1);
+end
+
+% -- Extract features via harmonized path (unique units only) -----------------
+[wf, acg, sr]                        = ctc.getOrExtract(unique_ud);
 [X_raw, feat_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, wf, acg, sr);
 
 % Store harmonized data for downstream inspection / plotting
@@ -41,13 +55,14 @@ ctc.HarmonizedWaveforms = aligned_wf;
 ctc.HarmonizedACGs      = norm_acgs;
 ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
-% -- Step 1: per-group normalisation using FeatureStore table column ----------
+% -- Step 1: per-group normalisation using representative FeatureStore rows ---
 X_raw(isnan(X_raw)) = 0;
 
 norm_var = p_umap.NormalizationVar;
 if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
-    group_col = ctc.FeatureStore.UnitTable.(norm_var);
-    [~, ~, iG] = unique(string(group_col), 'stable');
+    group_col        = ctc.FeatureStore.UnitTable.(norm_var);
+    group_col_unique = group_col(unique_to_rep);
+    [~, ~, iG] = unique(string(group_col_unique), 'stable');
     for g = 1:max(iG)
         mask = (iG == g);
         X_raw(mask, :) = normalize(X_raw(mask, :));
@@ -124,39 +139,44 @@ else
     conf_k = p_umap.ConfidenceK;
 end
 
-full_confidence = nan(1, numel(ctc.UnitDataArray));
-full_confidence(labels.sorted_train_ids) = 1.0;
+% All indices are in unique-unit space
+unique_confidence = nan(1, n_unique);
+unique_confidence(labels.sorted_train_ids) = 1.0;
 
+test_global_idx = find(test_idx);
 if ~isempty(test_reduction) && ~isempty(train_reduction)
     k_actual = min(conf_k, size(train_reduction, 1));
     [nn_idx, ~] = knnsearch(train_reduction, test_reduction, 'K', k_actual);
-    test_global_idx = find(test_idx);
     for i = 1:numel(test_global_idx)
         neighbor_labels = labels.sorted_y_train(nn_idx(i, :));
-        full_confidence(test_global_idx(i)) = sum(neighbor_labels == Y_pred(i)) / k_actual;
+        unique_confidence(test_global_idx(i)) = sum(neighbor_labels == Y_pred(i)) / k_actual;
     end
 end
 
-% -- Assemble labels ----------------------------------------------------------
-full_labels = nan(1, numel(ctc.UnitDataArray));
-full_labels(labels.sorted_train_ids) = labels.sorted_y_train;
-full_labels(test_idx)                = Y_pred;
+% -- Assemble labels in unique-unit space -------------------------------------
+unique_labels = nan(1, n_unique);
+unique_labels(labels.sorted_train_ids) = labels.sorted_y_train;
+unique_labels(test_idx)                = Y_pred;
 
-% Optional confidence threshold: mark low-confidence test predictions as NaN
+% Optional confidence threshold
 p_conf = ctc.Parameters.Classification;
 if p_conf.UseConfidenceThreshold
-    low_conf = full_confidence < p_conf.ConfidenceThreshold & ~train_idx;
-    full_labels(low_conf) = NaN;
+    low_conf = unique_confidence < p_conf.ConfidenceThreshold & ~train_idx;
+    unique_labels(low_conf) = NaN;
     fprintf('Confidence threshold %.2f: %d units set to NaN\n', ...
         p_conf.ConfidenceThreshold, sum(low_conf));
 end
 
+% -- Broadcast unique-unit results back to all (unit x recording) rows --------
+full_labels     = unique_labels(all_to_unique);
+full_confidence = unique_confidence(all_to_unique);
+
 ctc.UnitLabels     = full_labels;
 ctc.UnitConfidence = full_confidence;
 
-n_exc = sum(full_labels == 1, 'omitnan');
-n_inh = sum(full_labels == 2, 'omitnan');
-n_unc = sum(isnan(full_labels));
+n_exc = sum(unique_labels == 1, 'omitnan');
+n_inh = sum(unique_labels == 2, 'omitnan');
+n_unc = sum(isnan(unique_labels));
 fprintf('Classified %i excitatory, %i inhibitory units (%i unclassified)\n', ...
     n_exc, n_inh, n_unc);
 end

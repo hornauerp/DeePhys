@@ -353,6 +353,58 @@ classdef CellTypeClassifier < handle
     % =====================================================================
     methods (Access = private)
 
+        function [unique_ud, all_to_unique, unique_to_all] = uniqueUnitMap(ctc)
+        % UNIQUEUNITMAP  Return one representative UnitData per unique UnitID.
+        %
+        % For cultures with multiple recordings (e.g. dose-response), the same
+        % physical unit appears once per recording in UnitDataArray. Classification
+        % operates on unique units; results are then broadcast back to all rows.
+        %
+        % The representative recording is the one whose GroupingVar value matches
+        % Parameters.UMAP.GroupingValues (the baseline). Falls back to the first
+        % occurrence if no baseline recording is found.
+        %
+        % OUTPUTS:
+        %   unique_ud      - UnitData array, one entry per unique UnitID
+        %   all_to_unique  - (1 x numel(UnitDataArray)) index into unique_ud
+        %   unique_to_all  - (1 x numel(unique_ud)) cell of indices into UnitDataArray
+            ud          = ctc.UnitDataArray;
+            uid_strings = string({ud.UnitID})';
+            [unique_uids, ~, all_to_unique] = unique(uid_strings, 'stable');
+            n_unique    = numel(unique_uids);
+
+            meta         = ctc.FeatureStore.MetadataTable;
+            group_field  = string(ctc.Parameters.UMAP.GroupingVar);
+            baseline_gv  = ctc.Parameters.UMAP.GroupingValues;
+            has_group    = ismember(group_field, meta.Properties.VariableNames);
+
+            unique_to_all   = cell(1, n_unique);
+            best_idx        = zeros(1, n_unique);
+
+            for u = 1:n_unique
+                rows = find(all_to_unique == u);
+                unique_to_all{u} = rows';
+                best_idx(u) = rows(1);  % default: first occurrence
+
+                if ~has_group; continue; end
+                for ri = 1:numel(rows)
+                    rec_row = meta(meta.RecordingID == string(ud(rows(ri)).RecordingID), :);
+                    if isempty(rec_row); continue; end
+                    gv = rec_row.(group_field)(1);
+                    if isnumeric(gv) && isnumeric(baseline_gv) && gv == baseline_gv
+                        best_idx(u) = rows(ri);
+                        break
+                    elseif (ischar(gv) || isstring(gv)) && string(gv) == string(baseline_gv)
+                        best_idx(u) = rows(ri);
+                        break
+                    end
+                end
+            end
+
+            unique_ud     = ud(best_idx);
+            all_to_unique = all_to_unique';  % (1 x N)
+        end
+
         function [wf, acg, sr] = extractFromUnitData(ctc, unit_data)
         % Extract raw waveforms and ACGs from UnitData array.
         % Returns un-harmonized waveforms at the original sampling rate.

@@ -36,16 +36,37 @@ p_train = ctc.Parameters.TrainLabels;
 
 rng(ctc.Parameters.RNGSeed, 'twister');
 
-% -- Extract harmonized waveforms + ACGs from UnitDataArray ------------------
-[wf, acg, sr] = ctc.getOrExtract(ctc.UnitDataArray);
+% -- Deduplicate: one representative UnitData per unique UnitID --------------
+% UnitDataArray has one entry per (unit x recording). For dose-response cultures
+% the same unit appears N times. We classify unique units using the baseline
+% recording's features; labels are broadcast back to all rows afterwards.
+[unique_ud, all_to_unique, ~] = ctc.uniqueUnitMap();
+n_units_full = numel(ctc.UnitDataArray);
+
+% Project ResponsiveUnitIdx (indexed over all rows) into unique-unit space.
+% A unit is responsive if its representative (baseline) row is responsive.
+% unique_to_rep(u) = index in UnitDataArray of the representative row for unit u
+n_unique      = numel(unique_ud);
+unique_to_rep = zeros(1, n_unique);
+for u = 1:n_unique
+    rows = find(all_to_unique == u);
+    unique_to_rep(u) = rows(1);
+end
+resp_unique = ctc.ResponsiveUnitIdx(unique_to_rep);
+
+% -- Extract harmonized waveforms + ACGs from unique units only --------------
+[wf, acg, sr] = ctc.getOrExtract(unique_ud);
 [X_raw, ~]    = buildFeatureMatrix(ctc, wf, acg, sr);
 
-% -- Step 1: per-group normalisation using FeatureStore table column ---------
+% -- Step 1: per-group normalisation using representative FeatureStore rows --
+% Use the UnitTable rows corresponding to the representative (baseline) recording
+% for each unique unit, so group assignment is consistent with unique_ud.
 X_raw(isnan(X_raw)) = 0;
 norm_var = p_umap.NormalizationVar;
 if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
     group_col = ctc.FeatureStore.UnitTable.(norm_var);
-    [~, ~, iG] = unique(string(group_col), 'stable');
+    group_col_unique = group_col(unique_to_rep);
+    [~, ~, iG] = unique(string(group_col_unique), 'stable');
     for g = 1:max(iG)
         mask = iG == g;
         X_raw(mask, :) = normalize(X_raw(mask, :));
@@ -56,10 +77,12 @@ elseif ~isempty(norm_var)
 end
 
 % -- Determine training subset (by culture index or use all) -----------------
-n_units = size(X_raw, 1);
+% buildCultureSubsetMask operates on full FeatureStore rows; convert to unique space.
+n_units = n_unique;
 if ~isempty(p_umap.TrainingCultureIdx)
-    subset_mask = CellTypeClassifier.buildCultureSubsetMask( ...
+    subset_mask_full = CellTypeClassifier.buildCultureSubsetMask( ...
         ctc.FeatureStore, p_umap.TrainingCultureIdx, ctc.Parameters.CultureKeys);
+    subset_mask = subset_mask_full(unique_to_rep);
 else
     subset_mask = true(1, n_units);
 end
@@ -153,7 +176,7 @@ ctc.UMAP = umap_model;
 ctc.Reduction.Unsupervised = reduction;
 
 % -- Adaptive outlier detection on responsive candidates ---------------------
-subset_responsive = ctc.ResponsiveUnitIdx(subset_mask);
+subset_responsive = resp_unique(subset_mask);
 responsive_local  = find(subset_responsive);
 candidate_reduction = reduction(subset_responsive, :);
 
@@ -268,9 +291,15 @@ outlier_local = responsive_local(tf_outlier(:)');
 labels.outlier_global_idx              = subset_global(outlier_local);
 labels.excitatory_candidate_global_idx = subset_global(counterexample_idx_local);
 
+% Store mapping so classifyUnits can broadcast unique-unit results back to all rows
+labels.n_unique       = n_unique;
+labels.all_to_unique  = all_to_unique;   % (1 x n_units_full): index into unique_ud per row
+labels.n_units_full   = n_units_full;
+
 % Store responsive strength for training inhibitory candidates (for diagnostics)
+% ResponsiveStrength is indexed over all rows; map via representative row
 if ~isempty(ctc.ResponsiveStrength)
-    labels.inhibitory_strength = ctc.ResponsiveStrength(in_train_id);
+    labels.inhibitory_strength = ctc.ResponsiveStrength(unique_to_rep(in_train_id));
 else
     labels.inhibitory_strength = ones(1, numel(in_train_id));
 end
