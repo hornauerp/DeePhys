@@ -10,6 +10,11 @@ function results = optimizeHyperparameters(ctc, opts)
 % assignment or class balance (TargetWeight, CounterexampleRatio) are
 % excluded because the objective metric can be trivially gamed by these.
 %
+% Efficiency: training labels and the normalised feature matrix are generated
+% once before the optimisation loop. Each iteration only re-runs the
+% supervised UMAP (classifyUnits). The high-D kNN for trustworthiness is
+% precomputed once since the original feature space is invariant.
+%
 % Requires identifyResponsiveUnits() to have been run first (ground truth
 % is fixed during optimization).
 %
@@ -54,7 +59,7 @@ end
 assert(~isempty(ctc.ResponsiveUnitIdx), ...
     'Run identifyResponsiveUnits() before optimizeHyperparameters()');
 
-p_bo   = ctc.Parameters.BayesianOptimization;
+p_bo = ctc.Parameters.BayesianOptimization;
 
 % -- Define 3 optimizable variables ------------------------------------------
 vars = [ ...
@@ -64,6 +69,44 @@ vars = [ ...
 n_vars    = 3;
 max_evals = 30;
 
+% -- Generate training labels once (fixed across all iterations) --------------
+% Feature extraction, unsupervised UMAP, outlier detection, and training label
+% assembly happen here. Each BayOpt iteration only re-runs the supervised UMAP.
+if opts.Verbose
+    fprintf('Generating fixed training labels for optimization...\n');
+end
+ref_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, ctc.Parameters);
+ref_ctc.ResponsiveUnitIdx       = ctc.ResponsiveUnitIdx;
+ref_ctc.ResponsiveUnitDirection = ctc.ResponsiveUnitDirection;
+ref_ctc.ResponsiveStrength      = ctc.ResponsiveStrength;
+ref_ctc.CounterexampleUnitIdx   = ctc.CounterexampleUnitIdx;
+ref_ctc.generateTrainLabels();
+
+fixed_labels = ref_ctc.TrainLabels;
+fixed_np     = ref_ctc.NormalizationParams;
+fixed_nf     = ref_ctc.NormalizedFeatures;
+n_unique     = fixed_labels.n_unique;
+
+% -- Precompute high-D feature matrix and kNN (invariant across iterations) ---
+X_all_high = normalize(fixed_nf.X_pergroup, 'center', fixed_np.mu_global, 'scale', fixed_np.sigma_global);
+X_all_high(:, fixed_np.nan_cols) = [];
+X_all_high = X_all_high ./ fixed_np.scale;
+if isfield(fixed_np, 'feature_selection_mask') && ~all(fixed_np.feature_selection_mask)
+    X_all_high = X_all_high(:, fixed_np.feature_selection_mask);
+end
+train_mask = logical(fixed_labels.umap_train_idx);
+X_high     = [X_all_high(train_mask, :); X_all_high(~train_mask, :)];
+
+k_trust = 15;
+k_hi    = min(5 * k_trust, size(X_high, 1) - 1);
+[nn_high_precomputed, ~] = knnsearch(X_high, X_high, 'K', k_hi + 1);
+nn_high_precomputed = nn_high_precomputed(:, 2:end);  % exclude self
+
+if opts.Verbose
+    fprintf('Precomputed: %d unique units (%d train), %d features, high-D kNN (k_hi=%d)\n', ...
+        n_unique, sum(train_mask), size(X_high, 2), k_hi);
+end
+
 % -- Objective function -------------------------------------------------------
 function loss = objective(x)
     temp_params = ctc.Parameters;
@@ -72,18 +115,21 @@ function loss = objective(x)
     temp_params.UMAP.SupervisedNDims = x.SupervisedNDims;
 
     temp_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, temp_params);
-    temp_ctc.ResponsiveUnitIdx       = ctc.ResponsiveUnitIdx;
-    temp_ctc.ResponsiveUnitDirection = ctc.ResponsiveUnitDirection;
-    temp_ctc.ResponsiveStrength      = ctc.ResponsiveStrength;
-    temp_ctc.CounterexampleUnitIdx   = ctc.CounterexampleUnitIdx;
+    temp_ctc.TrainLabels         = fixed_labels;
+    temp_ctc.NormalizationParams = fixed_np;
+    temp_ctc.NormalizedFeatures  = fixed_nf;
+    temp_ctc.Reduction           = struct();  % classifyUnits writes .Train/.Test/.Extras
 
     try
-        temp_ctc.generateTrainLabels();
         temp_ctc.classifyUnits();
 
-        all_reduction    = [temp_ctc.Reduction.Train; temp_ctc.Reduction.Test];
-        train_labels_vec = temp_ctc.TrainLabels.sorted_y_train';
-        test_labels_vec  = temp_ctc.UnitLabels(temp_ctc.TrainLabels.umap_test_idx)';
+        all_reduction = [temp_ctc.Reduction.Train; temp_ctc.Reduction.Test];
+
+        % Reconstruct unique-unit labels (UnitLabels is broadcast to n_units_full;
+        % umap_test_idx is n_unique-length, so index via the representative row map)
+        unique_labels = temp_ctc.UnitLabels(fixed_nf.unique_to_rep);
+        train_labels_vec = unique_labels(train_mask)';
+        test_labels_vec  = unique_labels(~train_mask)';
         all_labels       = [train_labels_vec; test_labels_vec];
 
         valid = ~isnan(all_labels);
@@ -92,22 +138,10 @@ function loss = objective(x)
             return
         end
 
-        % Reconstruct high-D feature matrix (same pipeline as classifyUnits)
-        nf         = temp_ctc.NormalizedFeatures;
-        np         = temp_ctc.NormalizationParams;
-        X_all_high = normalize(nf.X_pergroup, 'center', np.mu_global, 'scale', np.sigma_global);
-        X_all_high(:, np.nan_cols) = [];
-        X_all_high = X_all_high ./ np.scale;
-        if isfield(np, 'feature_selection_mask') && ~all(np.feature_selection_mask)
-            X_all_high = X_all_high(:, np.feature_selection_mask);
-        end
-        train_idx = logical(temp_ctc.TrainLabels.umap_train_idx);
-        X_high    = [X_all_high(train_idx, :); X_all_high(~train_idx, :)];
-
         % Compute selected metric
         switch p_bo.ObjectiveMetric
             case "trustworthiness"
-                T    = computeTrustworthiness(X_high, all_reduction, 15);
+                T    = computeTrustworthinessPrecomputed(nn_high_precomputed, all_reduction, k_trust);
                 loss = 1 - T;
 
             case "silhouette"
@@ -115,7 +149,7 @@ function loss = objective(x)
                 loss     = -mean(sil_vals);
 
             case "combined"
-                T        = computeTrustworthiness(X_high, all_reduction, 15);
+                T        = computeTrustworthinessPrecomputed(nn_high_precomputed, all_reduction, k_trust);
                 sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
                 loss     = (1 - T) + (-mean(sil_vals));
 
@@ -177,27 +211,25 @@ if opts.Verbose
 end
 end
 
-% -- Helper: trustworthiness (Venna & Kaski 2006) ----------------------------
-function T = computeTrustworthiness(X_high, X_low, k)
-% COMPUTETRUSTWORTHINESS  Measure how faithfully X_low preserves X_high neighborhoods.
+% -- Helper: trustworthiness with precomputed high-D kNN ----------------------
+function T = computeTrustworthinessPrecomputed(nn_high, X_low, k)
+% COMPUTETRUSTWORTHINESSPRECOMPUTED  Venna & Kaski (2006) embedding faithfulness.
 %
-%   T = computeTrustworthiness(X_high, X_low, k)
+%   T = computeTrustworthinessPrecomputed(nn_high, X_low, k)
+%
+%   nn_high - (n x k_hi) precomputed high-D neighbor indices (self excluded)
+%   X_low   - (n x d) low-D embedding coordinates
+%   k       - neighborhood size for trustworthiness evaluation
 %
 %   For each point, counts low-D nearest neighbors that were NOT neighbors in
-%   high-D space (false neighbors), weighted by their high-D rank penalty.
-%   T = 1 is perfect (all low-D neighbors were also high-D neighbors).
-%   T = 0 is worst case.
-%
-%   k_hi = 5*k is used as the high-D search radius for rank lookup. Points
-%   outside this radius are assigned rank k_hi+1.
-    n    = size(X_high, 1);
+%   high-D space, weighted by their high-D rank penalty.
+%   T = 1 is perfect; T = 0 is worst case.
+    n    = size(X_low, 1);
     k    = min(k, n - 1);
-    k_hi = min(5 * k, n - 1);
+    k_hi = size(nn_high, 2);
 
-    [nn_low,  ~] = knnsearch(X_low,  X_low,  'K', k + 1);
-    [nn_high, ~] = knnsearch(X_high, X_high, 'K', k_hi + 1);
-    nn_low  = nn_low(:,  2:end);   % (n x k),    exclude self
-    nn_high = nn_high(:, 2:end);   % (n x k_hi), exclude self
+    [nn_low, ~] = knnsearch(X_low, X_low, 'K', k + 1);
+    nn_low = nn_low(:, 2:end);  % (n x k), exclude self
 
     penalty = 0;
     for i = 1:n
