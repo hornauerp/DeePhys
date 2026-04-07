@@ -52,7 +52,11 @@ end
 [train_reduction, umap_train, ~, ~] = run_umap([X_train, Y_train'], train_args{:});
 
 % Test call — match_supervisors=3 for label propagation, QF dissimilarity enabled
+% Append a dummy label column: the template was trained with label_column='end'
+% so it expects F+1 columns. The dummy labels are ignored by match_supervisors.
+X_test_with_label = [X_test, zeros(size(X_test, 1), 1)];
 test_args = { ...
+    'label_column',      'end', ...
     'method',            'java', ...
     'sgd_tasks',         20, ...
     'verbose',           'none', ...
@@ -66,7 +70,7 @@ if isfield(ctc.Parameters, 'Classification') && ...
         ctc.Parameters.Classification.UseJoinedTransform
     test_args = [test_args, {'joined_transform', true}];
 end
-[test_reduction, umap_test, ~, extras] = run_umap(X_test, test_args{:});
+[test_reduction, umap_test, ~, extras] = run_umap(X_test_with_label, test_args{:});
 
 Y_pred = extras.supervisorMatchedLabels;
 end

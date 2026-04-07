@@ -18,6 +18,16 @@ function identifyResponsiveUnits(ctc, metadata_filter)
 %       Cultures with fewer than MinRecordings recordings fall back to
 %       "two_window" with a printed notice.
 %
+%   "metadata"
+%       Per-unit ground truth labels read directly from a column in
+%       FeatureStore.UnitTable. No firing-rate tests are run. Both classes
+%       have explicit ground truth (pure culture scenario).
+%       Parameters used: LabelField, ResponsiveClassValue.
+%         LabelField: column name in UnitTable (e.g. "CellType")
+%         ResponsiveClassValue: value mapping to ResponsiveClassLabel
+%           (e.g. "inhibitory"). Units with other non-empty values become
+%           explicit counterexample ground truth (ctc.CounterexampleUnitIdx).
+%
 % Direction is controlled by Parameters.Bootstrap.Direction:
 %   "increase" - units whose FR increases with GroupingVar (default)
 %   "decrease" - units whose FR decreases with GroupingVar
@@ -53,6 +63,45 @@ ud          = ctc.UnitDataArray;
 direction   = lower(string(p.Direction));
 method      = lower(string(p.GroundTruthMethod));
 group_field = string(ctc.Parameters.UMAP.GroupingVar);
+
+% -- Metadata method: read labels directly from UnitTable ----------------------
+if strcmp(method, 'metadata')
+    label_field = string(p.LabelField);
+    resp_value  = string(p.ResponsiveClassValue);
+    resp_label  = ctc.Parameters.TrainLabels.ResponsiveClassLabel;
+
+    assert(~isempty(label_field) && label_field ~= "", ...
+        'CellTypeClassifier:noLabelField', ...
+        'Bootstrap.LabelField must be set when GroundTruthMethod is "metadata".');
+    assert(~isempty(resp_value) && resp_value ~= "", ...
+        'CellTypeClassifier:noResponsiveClassValue', ...
+        'Bootstrap.ResponsiveClassValue must be set when GroundTruthMethod is "metadata".');
+    assert(ismember(label_field, string(fs.UnitTable.Properties.VariableNames)), ...
+        'CellTypeClassifier:labelFieldMissing', ...
+        'LabelField "%s" not found in FeatureStore.UnitTable. Available: %s', ...
+        label_field, strjoin(string(fs.UnitTable.Properties.VariableNames), ', '));
+
+    raw_labels = string(fs.UnitTable.(label_field));
+    N_total    = numel(raw_labels);
+
+    resp_idx   = raw_labels == resp_value;
+    % Counterexamples: any unit with a non-empty label that is NOT the responsive class
+    ce_idx     = ~resp_idx & raw_labels ~= "" & raw_labels ~= "NaN";
+
+    ctc.ResponsiveUnitIdx       = resp_idx(:)';
+    ctc.ResponsiveUnitDirection = repmat("none", 1, N_total);
+    ctc.ResponsiveStrength      = double(resp_idx(:)');  % 1 for labeled, 0 otherwise
+    ctc.CounterexampleUnitIdx   = ce_idx(:)';
+
+    n_resp = sum(resp_idx);
+    n_ce   = sum(ce_idx);
+    n_unlabeled = N_total - n_resp - n_ce;
+    resp_class_name = 'inhibitory';
+    if resp_label == 1; resp_class_name = 'excitatory'; end
+    fprintf('Metadata labels: %d %s (class %d), %d counterexamples, %d unlabeled\n', ...
+        n_resp, resp_class_name, resp_label, n_ce, n_unlabeled);
+    return
+end
 
 meta            = fs.MetadataTable;
 unit_rec_ids    = fs.UnitTable.RecordingID;

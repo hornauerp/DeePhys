@@ -58,10 +58,7 @@ if ~exist('ctc', 'var')
 
     % Optional adaptive parameters (uncomment to enable):
     %   parameters.UMAP.AutoNNeighbors              = true;
-    %   parameters.UMAP.AutoNDims                   = true;
-    %   parameters.UMAP.AutoTargetWeight            = true;
     %   parameters.UMAP.FeatureSelection            = true;
-    %   parameters.OutlierDetection.AutoCounterexampleRatio = true;
 
     ctc = CellTypeClassifier(fs, ud, parameters);
     ctc.identifyResponsiveUnits({'AAV', 128});

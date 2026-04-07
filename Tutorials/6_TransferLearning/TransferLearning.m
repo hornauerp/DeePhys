@@ -86,30 +86,6 @@ eia.detectBursts();
 [target_labels2, ~] = ctc_source.applyTo(fs_target, ud_target, ...
     'NormalizationVar', 'ChipID');
 
-%% A6  Adaptive TargetWeight for divergent datasets
-%
-% When source and target datasets have different feature distributions
-% (different chips, different labs), AutoTargetWeight reduces the influence
-% of training labels to prevent forcing test data into the wrong topology.
-%
-% Internally, AutoTargetWeight computes the mean KS divergence between the
-% first 5 PCs of source training and target feature distributions, then maps
-% this divergence to a TargetWeight in [0.1, 0.9]. Similar distributions
-% retain high TargetWeight (label-driven embedding); divergent distributions
-% shift toward data-driven topology (lower false-positive rates).
-
-params_xfer = struct();
-params_xfer.UMAP.AutoTargetWeight = true;
-
-ctc_xfer = CellTypeClassifier(fs_source, ud_source, params_xfer);
-ctc_xfer.identifyResponsiveUnits();
-ctc_xfer.generateTrainLabels();
-ctc_xfer.classifyUnits();
-
-[target_labels_auto, ctc_target_auto] = ctc_xfer.applyTo(fs_target, ud_target);
-fprintf('Auto TargetWeight transfer: %d exc, %d inh\n', ...
-    sum(target_labels_auto == 1), sum(target_labels_auto == 2));
-
 %% ============================================================
 %% B  Cross-dataset transfer
 %% ============================================================

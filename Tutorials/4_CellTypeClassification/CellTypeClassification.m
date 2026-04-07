@@ -131,15 +131,6 @@ params_auto = struct();
 params_auto.UMAP.AutoNNeighbors = true;
 params_auto.UMAP.MinNNeighbors  = 15;
 
-% Adaptive UMAP dimensions — use PCA to find how many dimensions explain
-% 95% of feature variance. Clamped to [3, 20].
-params_auto.UMAP.AutoNDims         = true;
-params_auto.UMAP.VarianceThreshold = 0.95;
-
-% Adaptive counterexample ratio — set to clamp(N_nonresponsive/N_responsive, 1, 5)
-% Matches training class balance to the actual responsive fraction in the dataset.
-params_auto.OutlierDetection.AutoCounterexampleRatio = true;
-
 % Adaptive kNN confidence — set to max(5, sqrt(N_train))
 % Scales confidence scoring with training set density.
 params_auto.UMAP.AutoConfidenceK = true;
@@ -222,9 +213,7 @@ fprintf('Mean confidence: %.2f\n', mean(ctc_ens.UnitConfidence, 'omitnan'));
 
 params_opt = struct();
 params_opt.UMAP.AutoNNeighbors  = true;
-params_opt.UMAP.AutoNDims       = true;
 params_opt.UMAP.AutoConfidenceK = true;
-params_opt.OutlierDetection.AutoCounterexampleRatio = true;
 
 ctc_opt = CellTypeClassifier(fs, ud, params_opt);
 ctc_opt.identifyResponsiveUnits();

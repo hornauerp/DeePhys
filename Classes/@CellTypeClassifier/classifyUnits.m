@@ -91,8 +91,10 @@ test_idx  = ~train_idx;
 X_train   = X_all(train_idx, :);
 X_test    = X_all(test_idx, :);
 
-% -- AutoNNeighbors for supervised UMAP (Phase 1) -----------------------------
-orig_sup_nneigh = p_umap.SupervisedNNeighbors;
+% -- AutoNNeighbors + per-scenario TargetWeight for supervised UMAP -----------
+orig_sup_nneigh    = p_umap.SupervisedNNeighbors;
+orig_target_weight = p_umap.TargetWeight;
+
 if p_umap.AutoNNeighbors
     N_train = size(X_train, 1);
     auto_sup_n = max(p_umap.MinNNeighbors, round(sqrt(N_train)));
@@ -100,21 +102,12 @@ if p_umap.AutoNNeighbors
     ctc.Parameters.UMAP.SupervisedNNeighbors = auto_sup_n;
 end
 
-% -- AutoTargetWeight based on train/test distributional divergence (Phase 3) --
-orig_target_weight = p_umap.TargetWeight;
-if p_umap.AutoTargetWeight
-    n_pcs = min(5, size(X_train, 2));
-    [coeff, ~] = pca(X_train, 'NumComponents', n_pcs);
-    pc_train   = X_train * coeff;
-    pc_test    = X_test  * coeff;
-    ks_stats   = zeros(1, n_pcs);
-    for dim = 1:n_pcs
-        [~, ~, ks_stats(dim)] = kstest2(pc_train(:, dim), pc_test(:, dim));
-    end
-    divergence     = mean(ks_stats);
-    target_weight  = max(0.1, min(0.9, 0.5 * (1 - divergence)));
-    fprintf('Auto TargetWeight: %.3f (mean KS divergence=%.3f)\n', target_weight, divergence);
-    ctc.Parameters.UMAP.TargetWeight = target_weight;
+% Metadata labels are clean ground truth — higher TargetWeight is appropriate
+% (more label-driven topology). Inferred drug-response labels use the default
+% (0.5) because label noise warrants a more data-driven embedding.
+if isfield(labels, 'has_explicit_ce') && labels.has_explicit_ce
+    ctc.Parameters.UMAP.TargetWeight = p_umap.MetadataTargetWeight;
+    fprintf('Metadata labels: using TargetWeight=%.2f\n', p_umap.MetadataTargetWeight);
 end
 
 % -- Supervised UMAP classification ------------------------------------------
@@ -129,9 +122,11 @@ ctc.Reduction.Train  = train_reduction;
 ctc.Reduction.Test   = test_reduction;
 ctc.Reduction.Extras = extras;
 
-% -- kNN confidence in UMAP embedding space ----------------------------------
-% For each test unit: fraction of its k nearest training neighbors sharing
-% the predicted label. Training units get confidence = 1.0 (ground truth).
+% -- Distance-weighted kNN confidence in UMAP embedding space ----------------
+% For each test unit: sum of inverse-distance weights from k nearest training
+% neighbors sharing the predicted label, divided by total weight. Closer
+% neighbors contribute more, giving a softer signal near the decision boundary.
+% Training units get confidence = 1.0 (ground truth).
 if p_umap.AutoConfidenceK
     conf_k = max(5, round(sqrt(size(train_reduction, 1))));
     fprintf('Auto ConfidenceK: %d (N_train=%d)\n', conf_k, size(train_reduction, 1));
@@ -139,17 +134,24 @@ else
     conf_k = p_umap.ConfidenceK;
 end
 
-% All indices are in unique-unit space
 unique_confidence = nan(1, n_unique);
 unique_confidence(labels.sorted_train_ids) = 1.0;
 
 test_global_idx = find(test_idx);
 if ~isempty(test_reduction) && ~isempty(train_reduction)
     k_actual = min(conf_k, size(train_reduction, 1));
-    [nn_idx, ~] = knnsearch(train_reduction, test_reduction, 'K', k_actual);
+    [nn_idx, nn_dists] = knnsearch(train_reduction, test_reduction, 'K', k_actual);
     for i = 1:numel(test_global_idx)
         neighbor_labels = labels.sorted_y_train(nn_idx(i, :));
-        unique_confidence(test_global_idx(i)) = sum(neighbor_labels == Y_pred(i)) / k_actual;
+        d = nn_dists(i, :);
+        % Inverse-distance weights: w_j = 1 / (d_j + eps) where eps avoids
+        % division by zero for co-located points.
+        eps_d  = max(d) * 1e-6;
+        if eps_d == 0; eps_d = 1e-10; end
+        w      = 1 ./ (d + eps_d);
+        w_total = sum(w);
+        w_match = sum(w(neighbor_labels == Y_pred(i)));
+        unique_confidence(test_global_idx(i)) = w_match / w_total;
     end
 end
 

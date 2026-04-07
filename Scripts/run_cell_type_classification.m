@@ -77,12 +77,8 @@ parameters.OutlierDetection.CounterexampleRatio     = 2;
 
 % Optional: data-driven adaptive parameters (all off by default)
 %   parameters.UMAP.AutoNNeighbors              = true;   % n_neighbors = max(15, sqrt(N))
-%   parameters.UMAP.AutoNDims                   = true;   % dims from PCA variance threshold
 %   parameters.UMAP.AutoConfidenceK             = true;   % kNN k = max(5, sqrt(N_train))
-%   parameters.UMAP.AutoTargetWeight            = true;   % TargetWeight from KS divergence
 %   parameters.UMAP.FeatureSelection            = true;   % remove low-var / correlated features
-%   parameters.OutlierDetection.AutoCounterexampleRatio = true;
-%   parameters.OutlierDetection.AutoOutlierAlpha        = true;
 %   parameters.Bootstrap.UseFDR                 = true;   % BH correction instead of fixed alpha
 
 ctc = CellTypeClassifier(fs, ud, parameters);

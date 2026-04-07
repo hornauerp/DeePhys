@@ -148,29 +148,9 @@ else
     conf_k = orig_conf_k;
 end
 
-% -- AutoTargetWeight based on train/target distributional divergence (Phase 3) --
-orig_target_weight = p_umap.TargetWeight;
-if p_umap.AutoTargetWeight
-    n_pcs = min(5, size(X_train, 2));
-    [coeff, ~] = pca(X_train, 'NumComponents', n_pcs);
-    pc_train   = X_train   * coeff;
-    pc_target  = X_target  * coeff;
-    ks_stats   = zeros(1, n_pcs);
-    for dim = 1:n_pcs
-        [~, ~, ks_stats(dim)] = kstest2(pc_train(:, dim), pc_target(:, dim));
-    end
-    divergence    = mean(ks_stats);
-    target_weight = max(0.1, min(0.9, 0.5 * (1 - divergence)));
-    fprintf('Auto TargetWeight: %.3f (mean KS divergence=%.3f)\n', target_weight, divergence);
-    target_ctc.Parameters.UMAP.TargetWeight = target_weight;
-end
-
 % -- Supervised UMAP classification ------------------------------------------
 [target_labels, ~, ~, target_reduction, train_reduction, extras] = supervisedUMAP(ctc, ...
     X_train, y_train, feat_names, X_target);
-
-% Restore overridden params
-target_ctc.Parameters.UMAP.TargetWeight = orig_target_weight;
 
 target_ctc.UnitLabels          = target_labels;
 target_ctc.TrainLabels         = labels;  % preserve source training info
@@ -179,13 +159,19 @@ target_ctc.Reduction.Train     = train_reduction;
 target_ctc.Reduction.Test      = target_reduction;
 target_ctc.Reduction.Extras    = extras;
 
-% -- kNN confidence for target units -----------------------------------------
+% -- Distance-weighted kNN confidence for target units -----------------------
 k_actual = min(conf_k, size(train_reduction, 1));
-[nn_idx, ~] = knnsearch(train_reduction, target_reduction, 'K', k_actual);
+[nn_idx, nn_dists] = knnsearch(train_reduction, target_reduction, 'K', k_actual);
 target_confidence = zeros(1, numel(target_labels));
 for i = 1:numel(target_labels)
     neighbor_labels = y_train(nn_idx(i, :));
-    target_confidence(i) = sum(neighbor_labels == target_labels(i)) / k_actual;
+    d = nn_dists(i, :);
+    eps_d  = max(d) * 1e-6;
+    if eps_d == 0; eps_d = 1e-10; end
+    w      = 1 ./ (d + eps_d);
+    w_total = sum(w);
+    w_match = sum(w(neighbor_labels == target_labels(i)));
+    target_confidence(i) = w_match / w_total;
 end
 target_ctc.UnitConfidence = target_confidence;
 

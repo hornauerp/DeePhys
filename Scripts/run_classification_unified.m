@@ -60,11 +60,8 @@ parameters.OutlierDetection.CounterexampleRatio     = 2;
 
 % Optional adaptive parameters (uncomment to enable):
 %   parameters.UMAP.AutoNNeighbors              = true;
-%   parameters.UMAP.AutoNDims                   = true;
 %   parameters.UMAP.AutoConfidenceK             = true;
-%   parameters.UMAP.AutoTargetWeight            = true;   % useful for External test
 %   parameters.UMAP.FeatureSelection            = true;
-%   parameters.OutlierDetection.AutoCounterexampleRatio = true;
 %   parameters.Bootstrap.UseFDR                 = true;
 
 %% 2 — Load DeePhys data (when needed)

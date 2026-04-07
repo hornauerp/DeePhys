@@ -1,13 +1,23 @@
 classdef CellTypeClassifier < handle
 % CELLTYPECLASSIFIER  Supervised cell-type classification pipeline for MEA experiments.
 %
-% Identifies inhibitory (interneuron) vs excitatory neurons using a bootstrap
-% firing-rate response test followed by supervised UMAP classification.
+% Identifies inhibitory (interneuron) vs excitatory neurons using supervised
+% UMAP classification. Two ground truth strategies are supported:
 %
-% USAGE (new API — v2):
+%   Drug response (GroundTruthMethod = "two_window" or "full_curve"):
+%     Units that increase firing rate in response to a stimulus serve as
+%     inhibitory ground truth. Excitatory counterexamples are inferred from
+%     the non-responsive pool via farthest-point sampling.
+%
+%   Pure culture (GroundTruthMethod = "metadata"):
+%     Cell type labels come from a UnitTable column (e.g. CellType field
+%     set from culture metadata). Both classes have explicit ground truth.
+%     No firing-rate testing is performed.
+%
+% USAGE:
 %   ctc = CellTypeClassifier(featureStore, unitDataArray, params);
-%   ctc.identifyResponsiveUnits();    % bootstrap pre/post firing rate comparison
-%   ctc.generateTrainLabels();        % UMAP embedding + isolation forest label generation
+%   ctc.identifyResponsiveUnits();    % assign ground truth (FR test or metadata)
+%   ctc.generateTrainLabels();        % UMAP embedding + training label assembly
 %   ctc.classifyUnits();              % supervised UMAP projection and classification
 %   labels = ctc.UnitLabels;          % 1 = excitatory, 2 = inhibitory, NaN = unclassified
 %
@@ -21,6 +31,7 @@ classdef CellTypeClassifier < handle
         ResponsiveUnitIdx       logical         % (1 x N) units with a significant firing rate response
         ResponsiveUnitDirection string          % (1 x N) "none" | "increase" | "decrease" per unit
         ResponsiveStrength      double          % (1 x N) continuous response strength (rho or effect size)
+        CounterexampleUnitIdx   logical         % (1 x N) explicit excitatory ground truth (metadata method only)
         TrainLabels             struct          % .sorted_train_ids, .sorted_y_train, etc.
         UnitLabels              double          % (1 x N): 1=excitatory, 2=inhibitory, NaN=unclassified
         UnitConfidence          double          % (1 x N): kNN confidence in [0,1]; 1.0 for training units
@@ -189,7 +200,17 @@ classdef CellTypeClassifier < handle
             %                  culture. Same UnitIDs must appear across recordings. Uses
             %                  FullCurveAlpha. Pre/PostCutout, BinSize, NIter, Alpha not used.
             %                  Falls back to "two_window" if fewer than MinRecordings recordings.
+            %   "metadata"    — per-unit cell type labels come from a column in FeatureStore.UnitTable.
+            %                  LabelField specifies the column; ResponsiveClassValue specifies which
+            %                  value maps to ResponsiveClassLabel. Units with other non-empty values
+            %                  become explicit counterexample ground truth. No FR tests are run.
             defaultParams.Bootstrap.GroundTruthMethod     = "two_window";
+            % metadata: read cell type labels directly from UnitTable.
+            %   LabelField: column name in FeatureStore.UnitTable (e.g. "CellType")
+            %   ResponsiveClassValue: value in that column that maps to ResponsiveClassLabel
+            %     (e.g. "inhibitory"). Units with other non-empty values become counterexamples.
+            defaultParams.Bootstrap.LabelField            = "";   % e.g. "CellType"
+            defaultParams.Bootstrap.ResponsiveClassValue  = "";   % e.g. "inhibitory"
             % two_window: compares mean FR between two recordings within a culture,
             %   selected by their GroupingVar value.
             %   PreGroupValue/PostGroupValue identify which recordings to compare.
@@ -225,7 +246,7 @@ classdef CellTypeClassifier < handle
             defaultParams.UMAP.NNeighbors           = 50;
             defaultParams.UMAP.MinDist              = 0.1;
             defaultParams.UMAP.Spread               = 1;
-            defaultParams.UMAP.SupervisedNDims      = 2;
+            defaultParams.UMAP.SupervisedNDims      = 2;   % used when AutoSupervisedNDims=false
             defaultParams.UMAP.SupervisedNNeighbors = 100;
             defaultParams.UMAP.UnitFeatures         = ["FullACG","ReferenceWaveform"];
             defaultParams.UMAP.NormalizationVar     = "ChipID";
@@ -233,35 +254,35 @@ classdef CellTypeClassifier < handle
             defaultParams.UMAP.GroupingValues       = 0;
             defaultParams.UMAP.TrainingCultureIdx   = [];
             defaultParams.UMAP.TargetWeight         = 0.5;  % 0=data topology, 1=label topology
+            defaultParams.UMAP.MetadataTargetWeight = 0.8;  % higher for metadata (clean labels)
+            defaultParams.UMAP.RunUnsupervised      = true; % unsupervised UMAP for visualization
             defaultParams.UMAP.TemplateDir          = '';   % must be set by user; UMAP template saved here
             defaultParams.UMAP.ConfidenceK          = 15;  % k for kNN confidence scoring
 
             % AutoNNeighbors: UMAP n_neighbors set to max(MinNNeighbors, sqrt(N)).
-            %   Prevents n_neighbors from exceeding dataset size (small datasets) or being too
-            %   local (large datasets). The sqrt heuristic is standard in the UMAP literature.
+            %   Structural scaling: prevents n_neighbors from exceeding dataset size
+            %   (small datasets) or being too local (large datasets). Standard heuristic.
+            %   Also applies to SupervisedNNeighbors in classifyUnits.
             defaultParams.UMAP.AutoNNeighbors       = false;
             defaultParams.UMAP.MinNNeighbors        = 15;
 
+            % AutoSupervisedNDims: estimate intrinsic dimensionality of the
+            %   normalised feature manifold via the TWO-NN estimator (Facco et al.
+            %   2017). Uses nearest-neighbor distance ratios — a natural fit for
+            %   UMAP since both operate on neighborhood structure. Clamped to
+            %   [MinSupervisedNDims, MaxSupervisedNDims].
+            defaultParams.UMAP.AutoSupervisedNDims  = false;
+            defaultParams.UMAP.MinSupervisedNDims   = 2;
+            defaultParams.UMAP.MaxSupervisedNDims   = 20;
+
             % AutoConfidenceK: kNN confidence k set to max(5, sqrt(N_train)).
-            %   Prevents k from approaching N_train (making all confidences identical)
-            %   while scaling with training set density.
+            %   Structural scaling: prevents k from approaching N_train (making all
+            %   confidences identical) while scaling with training set density.
             defaultParams.UMAP.AutoConfidenceK      = false;
 
-            % AutoNDims: unsupervised UMAP dimensions set from PCA variance threshold.
-            %   Datasets with simpler structure get fewer dimensions (tighter embeddings),
-            %   complex datasets get more (preserving information). Clamped to [3, 20].
-            defaultParams.UMAP.AutoNDims            = false;
-            defaultParams.UMAP.VarianceThreshold    = 0.95;
-
-            % AutoTargetWeight: supervised UMAP TargetWeight adapted to train/test divergence.
-            %   Uses KS divergence between first 5 PCs of train and test feature distributions.
-            %   Similar distributions -> high TargetWeight (more label influence).
-            %   Divergent distributions -> lower TargetWeight (data-driven topology).
-            defaultParams.UMAP.AutoTargetWeight     = false;
-
             % FeatureSelection: remove low-variance and highly correlated features before UMAP.
-            %   Reduces ~640-feature input to ~400-500 informative features, improving UMAP
-            %   stability across seeds and reducing computation time.
+            %   Data-quality step: reduces ~640-feature input to ~200-400 informative features,
+            %   improving UMAP stability across seeds and reducing computation time.
             %   MinVariancePercentile: drop features in the bottom N% by variance.
             %   MaxCorrelation: drop one of each pair with |r| above this threshold.
             defaultParams.UMAP.FeatureSelection      = false;
@@ -275,29 +296,12 @@ classdef CellTypeClassifier < handle
             defaultParams.OutlierDetection.OutlierAlpha            = 0.01;   % chi-squared / posterior threshold
             defaultParams.OutlierDetection.MaxResponsiveComponents = 3;      % max GMM components for multimodal populations
             defaultParams.OutlierDetection.DistancePercentile      = 80;
-            defaultParams.OutlierDetection.CounterexampleRatio     = 2;
+            defaultParams.OutlierDetection.CounterexampleRatio     = 1;  % 1:1 balanced default; use actual ratio for metadata
 
             % DipTestAlpha: significance level for Hartigan dip test for multimodality.
             %   Conceptually distinct from OutlierAlpha — tests whether responsive units
             %   form a unimodal or multimodal distribution in UMAP space.
             defaultParams.OutlierDetection.DipTestAlpha            = 0.05;
-
-            % AutoOutlierAlpha: derive Mahalanobis/posterior outlier threshold from
-            %   responsive cluster compactness (silhouette score):
-            %   compact clusters -> stricter alpha (fewer outliers removed)
-            %   diffuse clusters -> lenient alpha (more aggressive cleanup)
-            defaultParams.OutlierDetection.AutoOutlierAlpha        = false;
-
-            % AutoCounterexampleRatio: training ratio set to
-            %   clamp(round(N_nonresponsive / N_responsive), 1, 5) instead of a fixed ratio.
-            %   Matches training class balance to the actual responsive fraction in the dataset,
-            %   which varies by culture age, density, and preparation.
-            defaultParams.OutlierDetection.AutoCounterexampleRatio = false;
-
-            % AutoDistanceThreshold: pool filter uses median(d) + MADMultiplier*MAD(d).
-            %   Tight responsive clusters -> tight pool filter; diffuse -> wider.
-            defaultParams.OutlierDetection.AutoDistanceThreshold   = false;
-            defaultParams.OutlierDetection.DistanceMADMultiplier   = 2;
 
             % ── Classification ────────────────────────────────────────────────
             defaultParams.Classification.UseConfidenceThreshold = false;  % mark low-confidence predictions as NaN
@@ -314,20 +318,21 @@ classdef CellTypeClassifier < handle
             defaultParams.Ensemble.Seeds        = [42, 1042, 2042, 3042, 4042];
             defaultParams.Ensemble.MinAgreement = 0.6;
 
-            % ── Bayesian optimization ─────────────────────────────────────────
-            defaultParams.BayesianOptimization.MaxEvaluations          = 30;
-            defaultParams.BayesianOptimization.NNeighborsRange          = [5, 200];
-            defaultParams.BayesianOptimization.MinDistRange             = [0.01, 1.0];
+            % ── Bayesian optimization (topology parameters only) ─────────────
+            % Optimizes MinDist, Spread, and optionally NNeighbors/NDims to
+            % produce well-structured embeddings. TargetWeight, CounterexampleRatio,
+            % and ContaminationFraction are excluded: the objective can be trivially
+            % gamed by these parameters (e.g. high TargetWeight always produces
+            % tighter clusters regardless of label quality).
+            defaultParams.BayesianOptimization.MinDistRange              = [0.01, 1.0];
+            defaultParams.BayesianOptimization.SpreadRange               = [0.5, 5.0];
+            defaultParams.BayesianOptimization.NNeighborsRange           = [5, 200];
             defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 300];
-            defaultParams.BayesianOptimization.ContaminationRange       = [0.1, 0.9];
-            defaultParams.BayesianOptimization.SpreadRange              = [0.5, 5.0];
-            defaultParams.BayesianOptimization.TargetWeightRange        = [0.1, 0.9];
-            defaultParams.BayesianOptimization.NDimsRange               = [3, 20];
-            defaultParams.BayesianOptimization.CounterexampleRatioRange = [1, 5];
-            defaultParams.BayesianOptimization.ObjectiveMetric          = "silhouette";  % "silhouette" | "qf_dissimilarity" | "combined"
-            defaultParams.BayesianOptimization.UseInterneuronPenalty    = false;
-            defaultParams.BayesianOptimization.InterneuronTarget        = 0.19;
-            defaultParams.BayesianOptimization.InterneuronWeight        = 5.0;
+            defaultParams.BayesianOptimization.NDimsRange                = [3, 20];
+            defaultParams.BayesianOptimization.ObjectiveMetric           = "qf_dissimilarity";  % "qf_dissimilarity" | "silhouette" | "combined"
+            defaultParams.BayesianOptimization.UseInterneuronPenalty     = false;
+            defaultParams.BayesianOptimization.InterneuronTarget         = 0.19;
+            defaultParams.BayesianOptimization.InterneuronWeight         = 5.0;
 
             % ── General ───────────────────────────────────────────────────────
             defaultParams.RNGSeed     = 42;

@@ -1,15 +1,19 @@
 function results = optimizeHyperparameters(ctc, opts)
-% OPTIMIZEHYPERPARAMETERS  Bayesian optimization of UMAP and outlier detection parameters.
+% OPTIMIZEHYPERPARAMETERS  Bayesian optimization of UMAP topology parameters.
 %
-% Runs bayesopt to find UMAP and outlier detection hyperparameters that
-% maximize cluster quality using a selectable objective metric.
+% Optimizes the UMAP embedding geometry parameters (MinDist, Spread,
+% NNeighbors) to produce a well-structured supervised embedding. These are
+% the parameters that directly control embedding shape — fixing problems
+% like degenerate ellipses or collapsed clusters.
 %
-% Requires identifyResponsiveUnits() to have been run first (ground truth labels
-% are fixed during optimization — only the UMAP/clustering parameters are tuned).
+% Only topology parameters are optimized. Parameters that affect label
+% assignment or class balance (TargetWeight, CounterexampleRatio) are
+% excluded because the objective metric (QF dissimilarity / silhouette)
+% can be trivially gamed by these — e.g. high TargetWeight always produces
+% tighter clusters regardless of label quality.
 %
-% When Auto* flags are enabled, those parameters are excluded from the Bayesian
-% search, focusing optimization on the remaining free parameters. MaxEvaluations
-% is adjusted to max(15, 10 * n_remaining_vars).
+% Requires identifyResponsiveUnits() to have been run first (ground truth
+% is fixed during optimization).
 %
 % USAGE:
 %   ctc = CellTypeClassifier(fs, ud, params);
@@ -22,20 +26,19 @@ function results = optimizeHyperparameters(ctc, opts)
 % NAME-VALUE:
 %   Verbose - Print progress during optimization (default true)
 %
-% OBJECTIVE METRICS (set via Parameters.BayesianOptimization.ObjectiveMetric):
-%   "silhouette"       — negative mean silhouette on supervised 2D embedding
-%   "qf_dissimilarity" — 1 - QF overlap from UMAP toolbox
-%   "combined"         — negative silhouette + (1 - QF overlap/100)
+% OBJECTIVE METRIC (set via Parameters.BayesianOptimization.ObjectiveMetric):
+%   "qf_dissimilarity" (default) — 1 - QF overlap from UMAP toolbox.
+%       Measures topology-label agreement: did UMAP find real structure
+%       that aligns with the class labels? Not gameable by topology params.
+%   "silhouette"       — negative mean silhouette on supervised embedding.
+%   "combined"         — negative silhouette + (1 - QF overlap/100).
 %
-% OPTIMIZED VARIABLES (up to 8, conditionally excluded by Auto* flags):
-%   NDims                  — unsupervised UMAP output dimensions (excluded if AutoNDims)
-%   NNeighbors             — unsupervised UMAP n_neighbors (excluded if AutoNNeighbors)
-%   MinDist                — UMAP min_dist (always included)
-%   Spread                 — UMAP spread (always included)
-%   SupervisedNNeighbors   — supervised UMAP n_neighbors (excluded if AutoNNeighbors)
-%   TargetWeight           — supervised UMAP target weight (excluded if AutoTargetWeight)
-%   ContaminationFraction  — outlier detection contamination (always included)
-%   CounterexampleRatio    — training ratio (excluded if AutoCounterexampleRatio)
+% OPTIMIZED VARIABLES (3-5, depending on Auto* flags):
+%   MinDist              — UMAP min_dist (always included, log-scaled)
+%   Spread               — UMAP spread (always included)
+%   NNeighbors           — unsupervised UMAP n_neighbors (excluded if AutoNNeighbors)
+%   SupervisedNNeighbors — supervised UMAP n_neighbors (excluded if AutoNNeighbors)
+%   NDims                — unsupervised UMAP output dimensions (excluded if AutoSupervisedNDims)
 %
 % OUTPUTS:
 %   results - struct with fields:
@@ -55,41 +58,29 @@ assert(~isempty(ctc.ResponsiveUnitIdx), ...
 
 p_bo   = ctc.Parameters.BayesianOptimization;
 p_umap = ctc.Parameters.UMAP;
-p_outlr = ctc.Parameters.OutlierDetection;
 
-% -- Define optimizable variables (conditionally, based on Auto* flags) ------
+% -- Define optimizable variables: topology parameters only ------------------
 vars = optimizableVariable.empty;
 var_names = {};
 
-if ~p_umap.AutoNDims
-    vars(end+1) = optimizableVariable('NDims', p_bo.NDimsRange, 'Type', 'integer');
-    var_names{end+1} = 'NDims';
-end
-if ~p_umap.AutoNNeighbors
-    vars(end+1) = optimizableVariable('NNeighbors', p_bo.NNeighborsRange, 'Type', 'integer');
-    var_names{end+1} = 'NNeighbors';
-end
-% MinDist and Spread always included (no auto version)
+% MinDist and Spread always included — primary geometry controls
 vars(end+1) = optimizableVariable('MinDist', p_bo.MinDistRange, 'Transform', 'log');
 var_names{end+1} = 'MinDist';
 vars(end+1) = optimizableVariable('Spread', p_bo.SpreadRange);
 var_names{end+1} = 'Spread';
 
+% NNeighbors: excluded if AutoNNeighbors handles it
 if ~p_umap.AutoNNeighbors
+    vars(end+1) = optimizableVariable('NNeighbors', p_bo.NNeighborsRange, 'Type', 'integer');
+    var_names{end+1} = 'NNeighbors';
     vars(end+1) = optimizableVariable('SupervisedNNeighbors', p_bo.SupervisedNNeighborsRange, 'Type', 'integer');
     var_names{end+1} = 'SupervisedNNeighbors';
 end
-if ~p_umap.AutoTargetWeight
-    vars(end+1) = optimizableVariable('TargetWeight', p_bo.TargetWeightRange);
-    var_names{end+1} = 'TargetWeight';
-end
-% ContaminationFraction always included (no auto version)
-vars(end+1) = optimizableVariable('ContaminationFraction', p_bo.ContaminationRange);
-var_names{end+1} = 'ContaminationFraction';
 
-if ~p_outlr.AutoCounterexampleRatio
-    vars(end+1) = optimizableVariable('CounterexampleRatio', p_bo.CounterexampleRatioRange, 'Type', 'integer');
-    var_names{end+1} = 'CounterexampleRatio';
+% NDims: excluded if AutoSupervisedNDims handles it via TWO-NN
+if ~p_umap.AutoSupervisedNDims
+    vars(end+1) = optimizableVariable('NDims', p_bo.NDimsRange, 'Type', 'integer');
+    var_names{end+1} = 'NDims';
 end
 
 n_vars    = numel(vars);
@@ -99,28 +90,28 @@ max_evals = max(15, 10 * n_vars);
 function loss = objective(x)
     temp_params = ctc.Parameters;
 
-    % Apply candidate values for each active variable
-    if ismember('NDims',               var_names); temp_params.UMAP.NDims               = x.NDims; end
+    % Apply candidate topology values
+    temp_params.UMAP.MinDist = x.MinDist;
+    temp_params.UMAP.Spread  = x.Spread;
     if ismember('NNeighbors',          var_names); temp_params.UMAP.NNeighbors          = x.NNeighbors; end
-    if ismember('MinDist',             var_names); temp_params.UMAP.MinDist             = x.MinDist; end
-    if ismember('Spread',              var_names); temp_params.UMAP.Spread              = x.Spread; end
     if ismember('SupervisedNNeighbors',var_names); temp_params.UMAP.SupervisedNNeighbors = x.SupervisedNNeighbors; end
-    if ismember('TargetWeight',        var_names); temp_params.UMAP.TargetWeight        = x.TargetWeight; end
-    if ismember('ContaminationFraction',var_names); temp_params.OutlierDetection.ContaminationFraction = x.ContaminationFraction; end
-    if ismember('CounterexampleRatio', var_names); temp_params.OutlierDetection.CounterexampleRatio   = x.CounterexampleRatio; end
+    if ismember('NDims',               var_names); temp_params.UMAP.NDims               = x.NDims; end
 
     temp_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, temp_params);
-    temp_ctc.ResponsiveUnitIdx = ctc.ResponsiveUnitIdx;
+    temp_ctc.ResponsiveUnitIdx       = ctc.ResponsiveUnitIdx;
+    temp_ctc.ResponsiveUnitDirection = ctc.ResponsiveUnitDirection;
+    temp_ctc.ResponsiveStrength      = ctc.ResponsiveStrength;
+    temp_ctc.CounterexampleUnitIdx   = ctc.CounterexampleUnitIdx;
 
     try
         temp_ctc.generateTrainLabels();
         temp_ctc.classifyUnits();
 
-        % Assemble labels and embeddings
-        all_reduction = [temp_ctc.Reduction.Train; temp_ctc.Reduction.Test];
+        % Assemble labels and embeddings from supervised UMAP
+        all_reduction    = [temp_ctc.Reduction.Train; temp_ctc.Reduction.Test];
         train_labels_vec = temp_ctc.TrainLabels.sorted_y_train';
         test_labels_vec  = temp_ctc.UnitLabels(temp_ctc.TrainLabels.umap_test_idx)';
-        all_labels = [train_labels_vec; test_labels_vec];
+        all_labels       = [train_labels_vec; test_labels_vec];
 
         valid = ~isnan(all_labels);
         if sum(valid) < 10 || numel(unique(all_labels(valid))) < 2
@@ -130,10 +121,6 @@ function loss = objective(x)
 
         % Compute selected metric
         switch p_bo.ObjectiveMetric
-            case "silhouette"
-                sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
-                loss = -mean(sil_vals);
-
             case "qf_dissimilarity"
                 extras = temp_ctc.Reduction.Extras;
                 if isempty(extras) || isempty(extras.qfd)
@@ -146,6 +133,10 @@ function loss = objective(x)
                     return
                 end
                 loss = 1 - avgOverlap / 100;
+
+            case "silhouette"
+                sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
+                loss = -mean(sil_vals);
 
             case "combined"
                 sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
@@ -186,7 +177,7 @@ end
 
 % -- Run Bayesian optimization ------------------------------------------------
 if opts.Verbose
-    fprintf('Bayesian optimization: %d variables (%s), %d evaluations, metric=%s\n', ...
+    fprintf('Bayesian optimization: %d topology variables (%s), %d evaluations, metric=%s\n', ...
         n_vars, strjoin(var_names, ', '), max_evals, p_bo.ObjectiveMetric);
 end
 
@@ -200,23 +191,19 @@ bo_result = bayesopt(@objective, vars, ...
 % -- Extract best parameters -------------------------------------------------
 best = bo_result.XAtMinObjective;
 
-best_umap   = struct('MinDist', best.MinDist, 'Spread', best.Spread);
-best_outlr  = struct('ContaminationFraction', best.ContaminationFraction);
-
-if ismember('NDims',               var_names); best_umap.NDims               = best.NDims; end
+best_umap = struct('MinDist', best.MinDist, 'Spread', best.Spread);
 if ismember('NNeighbors',          var_names); best_umap.NNeighbors          = best.NNeighbors; end
 if ismember('SupervisedNNeighbors',var_names); best_umap.SupervisedNNeighbors = best.SupervisedNNeighbors; end
-if ismember('TargetWeight',        var_names); best_umap.TargetWeight         = best.TargetWeight; end
-if ismember('CounterexampleRatio', var_names); best_outlr.CounterexampleRatio = best.CounterexampleRatio; end
+if ismember('NDims',               var_names); best_umap.NDims               = best.NDims; end
 
-results.bestParams     = struct('UMAP', best_umap, 'OutlierDetection', best_outlr);
+results.bestParams     = struct('UMAP', best_umap);
 results.bestObjective  = bo_result.MinObjective;
 results.bayesoptResult = bo_result;
 results.allObjectives  = bo_result.XTrace;
 results.nVars          = n_vars;
 
 if opts.Verbose
-    fprintf('\nBest parameters (metric=%s, %d vars optimized):\n', ...
+    fprintf('\nBest topology parameters (metric=%s, %d vars optimized):\n', ...
         p_bo.ObjectiveMetric, n_vars);
     for vi = 1:numel(var_names)
         fprintf('  %-25s %g\n', var_names{vi}, best.(var_names{vi}));
