@@ -10,6 +10,12 @@
 %   "DeePhys"    → "DeePhys"    ctc.classifyUnits()
 %   "DeePhys"    → "External"   ctc.classifyExternalUnits(wf,acg,sr)
 %   "External"   → "DeePhys"    ctc.classifyUnitsWithExternalTrain(wf,acg,y,sr)
+%
+% Pipeline (DeePhys → DeePhys):
+%   generateTrainLabels: feature extraction + per-group z-score (cached),
+%     global z-score fit on training subset, unsupervised UMAP, outlier detection
+%   classifyUnits: reuses feature cache, applies stored NormalizationParams,
+%     supervised UMAP, distance-weighted kNN confidence
 
 %% 0 — Setup
 
@@ -56,13 +62,16 @@ parameters.Harmonization.ACGLag     = 0.1;
 parameters.OutlierDetection.OutlierAlpha            = 0.01;
 parameters.OutlierDetection.DipTestAlpha            = 0.05;
 parameters.OutlierDetection.MaxResponsiveComponents = 3;
-parameters.OutlierDetection.CounterexampleRatio     = 2;
+% CounterexampleRatio: excitatory candidates per inhibitory candidate.
+% Default is 1 (balanced). Increase to 2-3 if inhibitory fraction is too high (>30%).
+parameters.OutlierDetection.CounterexampleRatio     = 1;
 
 % Optional adaptive parameters (uncomment to enable):
-%   parameters.UMAP.AutoNNeighbors              = true;
-%   parameters.UMAP.AutoConfidenceK             = true;
-%   parameters.UMAP.FeatureSelection            = true;
-%   parameters.Bootstrap.UseFDR                 = true;
+%   parameters.UMAP.AutoNNeighbors              = true;   % n_neighbors = max(15, sqrt(N))
+%   parameters.UMAP.AutoSupervisedNDims         = true;   % SupervisedNDims via TWO-NN estimator
+%   parameters.UMAP.AutoConfidenceK             = true;   % kNN k = max(5, sqrt(N_train))
+%   parameters.UMAP.FeatureSelection            = true;   % remove low-var / correlated features
+%   parameters.Bootstrap.UseFDR                 = true;   % BH correction instead of fixed alpha
 
 %% 2 — Load DeePhys data (when needed)
 

@@ -6,8 +6,12 @@
 %   1. Load processors → assemble FeatureStore
 %   2. Initialise CellTypeClassifier
 %   3. Bootstrap firing-rate test (inhibitory candidates)
-%   4. Generate training labels (UMAP + outlier detection)
-%   5. Classify all units (supervised UMAP)
+%   4. Generate training labels:
+%        - Feature extraction + per-group z-score (cached, shared with step 5)
+%        - Fits global z-score/scaling on training subset → NormalizationParams
+%        - TWO-NN dimensionality estimate (if AutoSupervisedNDims)
+%        - Unsupervised UMAP → outlier detection → counterexample selection
+%   5. Classify all units (supervised UMAP, reuses feature cache from step 4)
 %   6. E/I analysis (EIAnalyzer)
 %   7. Save results
 
@@ -69,14 +73,17 @@ parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
 parameters.Harmonization.ACGLag     = 0.1;
 
-% Outlier detection (dip test + Mahalanobis/GMM — no isolation forest)
+% Outlier detection (dip test + Mahalanobis/GMM in UMAP space)
 parameters.OutlierDetection.OutlierAlpha            = 0.01;
 parameters.OutlierDetection.DipTestAlpha            = 0.05;
 parameters.OutlierDetection.MaxResponsiveComponents = 3;
-parameters.OutlierDetection.CounterexampleRatio     = 2;
+% CounterexampleRatio: excitatory candidates per inhibitory candidate.
+% Default is 1 (balanced). Increase to 2-3 if inhibitory fraction is too high (>30%).
+parameters.OutlierDetection.CounterexampleRatio     = 1;
 
 % Optional: data-driven adaptive parameters (all off by default)
 %   parameters.UMAP.AutoNNeighbors              = true;   % n_neighbors = max(15, sqrt(N))
+%   parameters.UMAP.AutoSupervisedNDims         = true;   % SupervisedNDims via TWO-NN estimator
 %   parameters.UMAP.AutoConfidenceK             = true;   % kNN k = max(5, sqrt(N_train))
 %   parameters.UMAP.FeatureSelection            = true;   % remove low-var / correlated features
 %   parameters.Bootstrap.UseFDR                 = true;   % BH correction instead of fixed alpha

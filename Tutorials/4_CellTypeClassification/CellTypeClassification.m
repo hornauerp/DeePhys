@@ -194,15 +194,20 @@ fprintf('Inhibitory candidates: %d / %d total units\n', ...
 
 %% 4  Generate training labels
 %
-% Embeds all units with unsupervised UMAP, then:
-%   1. Detects and removes outliers from responsive candidates (in UMAP space)
-%   2. Selects counterexamples uniformly from the non-responsive pool
-%   3. Detects and removes outliers from counterexamples (in UMAP space)
-%      with top-up from a reserve pool to maintain the target count
-%   4. Stores NormalizationParams for consistent application in classifyUnits
+% Internally calls buildNormalizedFeatures (shared with classifyUnits):
+%   - Extracts harmonized waveforms + ACGs once; builds feature matrix
+%   - Applies per-group z-score (NormalizationVar groups)
+%   - HarmonizedWaveforms/HarmonizedACGs are available after this call
 %
-% SupervisedNDims is estimated here via TWO-NN if AutoSupervisedNDims = true.
-% The estimate is logged to the console.
+% Then on the training subset:
+%   1. Fits global z-score + scaling; stores NormalizationParams
+%   2. Optional feature selection (FeatureSelection flag)
+%   3. TWO-NN intrinsic dimensionality estimate → SupervisedNDims (if AutoSupervisedNDims)
+%   4. Unsupervised UMAP embedding (used for outlier detection)
+%   5. Detects and removes outliers from responsive candidates (in UMAP space)
+%   6. Selects counterexamples uniformly from the non-responsive pool
+%   7. Detects and removes outliers from counterexamples (in UMAP space)
+%      with top-up from a reserve pool to maintain the target count
 
 ctc.generateTrainLabels();
 
@@ -212,8 +217,10 @@ fprintf('Train set: %d excitatory, %d inhibitory\n', ...
 
 %% 5  Classify all units (supervised UMAP)
 %
-% Trains supervised UMAP on the labelled training set, projects all remaining
-% units into the embedding, assigns labels by nearest-neighbour lookup.
+% Reuses the NormalizedFeatures cache from generateTrainLabels (no second
+% feature extraction). Applies the stored NormalizationParams (global
+% z-score, NaN-column removal, scaling) to all unique units, then trains
+% the supervised UMAP and projects test units into the embedding.
 % Confidence = distance-weighted kNN vote fraction in [0, 1].
 
 ctc.classifyUnits();
@@ -255,6 +262,9 @@ fprintf('Metadata path: %d exc, %d inh\n', ...
     sum(ctc_meta.UnitLabels==2,'omitnan'));
 
 %% 7  Inspect harmonized features
+%
+% HarmonizedWaveforms and HarmonizedACGs are populated by generateTrainLabels
+% (via the shared feature cache). They are already available after Section 4.
 
 wf  = ctc.HarmonizedWaveforms;   % (N_samples x N_units)
 acg = ctc.HarmonizedACGs;         % (N_bins   x N_units)
