@@ -250,11 +250,11 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.ConvergenceTol       = 0.01;
 
             % ── UMAP parameters ───────────────────────────────────────────────
-            defaultParams.UMAP.NDims                = 10;
+            defaultParams.UMAP.NDims                = 5;
             defaultParams.UMAP.NNeighbors           = 50;
             defaultParams.UMAP.MinDist              = 0.1;
             defaultParams.UMAP.Spread               = 1;
-            defaultParams.UMAP.SupervisedNDims      = 2;   % used when AutoSupervisedNDims=false
+            defaultParams.UMAP.SupervisedNDims      = 2;
             defaultParams.UMAP.SupervisedNNeighbors = 100;
             defaultParams.UMAP.UnitFeatures         = ["FullACG","ReferenceWaveform"];
             defaultParams.UMAP.NormalizationVar     = "ChipID";
@@ -273,15 +273,6 @@ classdef CellTypeClassifier < handle
             %   Also applies to SupervisedNNeighbors in classifyUnits.
             defaultParams.UMAP.AutoNNeighbors       = false;
             defaultParams.UMAP.MinNNeighbors        = 15;
-
-            % AutoSupervisedNDims: estimate intrinsic dimensionality of the
-            %   normalised feature manifold via the TWO-NN estimator (Facco et al.
-            %   2017). Uses nearest-neighbor distance ratios — a natural fit for
-            %   UMAP since both operate on neighborhood structure. Clamped to
-            %   [MinSupervisedNDims, MaxSupervisedNDims].
-            defaultParams.UMAP.AutoSupervisedNDims  = false;
-            defaultParams.UMAP.MinSupervisedNDims   = 2;
-            defaultParams.UMAP.MaxSupervisedNDims   = 20;
 
             % AutoConfidenceK: kNN confidence k set to max(5, sqrt(N_train)).
             %   Structural scaling: prevents k from approaching N_train (making all
@@ -327,17 +318,16 @@ classdef CellTypeClassifier < handle
             defaultParams.Ensemble.MinAgreement = 0.6;
 
             % ── Bayesian optimization (topology parameters only) ─────────────
-            % Optimizes MinDist, Spread, and optionally NNeighbors/NDims to
-            % produce well-structured embeddings. TargetWeight, CounterexampleRatio,
-            % and ContaminationFraction are excluded: the objective can be trivially
-            % gamed by these parameters (e.g. high TargetWeight always produces
-            % tighter clusters regardless of label quality).
+            % Optimizes 3 fixed topology parameters (MinDist, Spread, SupervisedNDims)
+            % to produce well-structured supervised embeddings. TargetWeight and
+            % CounterexampleRatio are excluded — the objective can be trivially gamed
+            % by these. Objective metric: trustworthiness (Venna & Kaski 2006),
+            % which measures embedding faithfulness and works for any output dimension.
+            % 30 evaluations fixed.
             defaultParams.BayesianOptimization.MinDistRange              = [0.01, 1.0];
             defaultParams.BayesianOptimization.SpreadRange               = [0.5, 5.0];
-            defaultParams.BayesianOptimization.NNeighborsRange           = [5, 200];
-            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 300];
-            defaultParams.BayesianOptimization.NDimsRange                = [3, 20];
-            defaultParams.BayesianOptimization.ObjectiveMetric           = "qf_dissimilarity";  % "qf_dissimilarity" | "silhouette" | "combined"
+            defaultParams.BayesianOptimization.SupervisedNDimsRange      = [2, 10];
+            defaultParams.BayesianOptimization.ObjectiveMetric           = "trustworthiness";  % "trustworthiness" | "silhouette" | "combined"
             defaultParams.BayesianOptimization.UseInterneuronPenalty     = false;
             defaultParams.BayesianOptimization.InterneuronTarget         = 0.19;
             defaultParams.BayesianOptimization.InterneuronWeight         = 5.0;

@@ -1,16 +1,14 @@
 function results = optimizeHyperparameters(ctc, opts)
 % OPTIMIZEHYPERPARAMETERS  Bayesian optimization of UMAP topology parameters.
 %
-% Optimizes the UMAP embedding geometry parameters (MinDist, Spread,
-% NNeighbors) to produce a well-structured supervised embedding. These are
-% the parameters that directly control embedding shape — fixing problems
-% like degenerate ellipses or collapsed clusters.
+% Optimizes 3 UMAP topology parameters (MinDist, Spread, SupervisedNDims)
+% to produce a well-structured supervised embedding. These directly control
+% embedding shape — fixing problems like degenerate ellipses or collapsed
+% clusters.
 %
 % Only topology parameters are optimized. Parameters that affect label
 % assignment or class balance (TargetWeight, CounterexampleRatio) are
-% excluded because the objective metric (QF dissimilarity / silhouette)
-% can be trivially gamed by these — e.g. high TargetWeight always produces
-% tighter clusters regardless of label quality.
+% excluded because the objective metric can be trivially gamed by these.
 %
 % Requires identifyResponsiveUnits() to have been run first (ground truth
 % is fixed during optimization).
@@ -27,26 +25,26 @@ function results = optimizeHyperparameters(ctc, opts)
 %   Verbose - Print progress during optimization (default true)
 %
 % OBJECTIVE METRIC (set via Parameters.BayesianOptimization.ObjectiveMetric):
-%   "qf_dissimilarity" (default) — 1 - QF overlap from UMAP toolbox.
-%       Measures topology-label agreement: did UMAP find real structure
-%       that aligns with the class labels? Not gameable by topology params.
+%   "trustworthiness" (default) — 1 - T, where T (Venna & Kaski 2006) measures
+%       how faithfully the low-D embedding preserves high-D neighborhoods.
+%       T = 1 is perfect; works in any output dimension.
 %   "silhouette"       — negative mean silhouette on supervised embedding.
-%   "combined"         — negative silhouette + (1 - QF overlap/100).
+%   "combined"         — (1-T) + (-mean_sil).
 %
-% OPTIMIZED VARIABLES (3-5, depending on Auto* flags):
-%   MinDist              — UMAP min_dist (always included, log-scaled)
-%   Spread               — UMAP spread (always included)
-%   NNeighbors           — unsupervised UMAP n_neighbors (excluded if AutoNNeighbors)
-%   SupervisedNNeighbors — supervised UMAP n_neighbors (excluded if AutoNNeighbors)
-%   NDims                — unsupervised UMAP output dimensions (excluded if AutoSupervisedNDims)
+% OPTIMIZED VARIABLES (always 3):
+%   MinDist        — UMAP min_dist (log-scaled over MinDistRange)
+%   Spread         — UMAP spread (over SpreadRange)
+%   SupervisedNDims— supervised UMAP output dimensions (integer, SupervisedNDimsRange)
+%
+% Fixed: 30 Bayesian evaluations.
 %
 % OUTPUTS:
 %   results - struct with fields:
-%     .bestParams     - struct of optimal parameter values
+%     .bestParams     - struct of optimal parameter values (UMAP subfield)
 %     .bestObjective  - best (lowest) objective value achieved
 %     .bayesoptResult - full BayesianOptimization object
 %     .allObjectives  - table of all evaluations
-%     .nVars          - number of variables optimized
+%     .nVars          - number of variables optimized (always 3)
 
 arguments
     ctc CellTypeClassifier
@@ -57,45 +55,21 @@ assert(~isempty(ctc.ResponsiveUnitIdx), ...
     'Run identifyResponsiveUnits() before optimizeHyperparameters()');
 
 p_bo   = ctc.Parameters.BayesianOptimization;
-p_umap = ctc.Parameters.UMAP;
 
-% -- Define optimizable variables: topology parameters only ------------------
-vars = optimizableVariable.empty;
-var_names = {};
-
-% MinDist and Spread always included — primary geometry controls
-vars(end+1) = optimizableVariable('MinDist', p_bo.MinDistRange, 'Transform', 'log');
-var_names{end+1} = 'MinDist';
-vars(end+1) = optimizableVariable('Spread', p_bo.SpreadRange);
-var_names{end+1} = 'Spread';
-
-% NNeighbors: excluded if AutoNNeighbors handles it
-if ~p_umap.AutoNNeighbors
-    vars(end+1) = optimizableVariable('NNeighbors', p_bo.NNeighborsRange, 'Type', 'integer');
-    var_names{end+1} = 'NNeighbors';
-    vars(end+1) = optimizableVariable('SupervisedNNeighbors', p_bo.SupervisedNNeighborsRange, 'Type', 'integer');
-    var_names{end+1} = 'SupervisedNNeighbors';
-end
-
-% NDims: excluded if AutoSupervisedNDims handles it via TWO-NN
-if ~p_umap.AutoSupervisedNDims
-    vars(end+1) = optimizableVariable('NDims', p_bo.NDimsRange, 'Type', 'integer');
-    var_names{end+1} = 'NDims';
-end
-
-n_vars    = numel(vars);
-max_evals = max(15, 10 * n_vars);
+% -- Define 3 optimizable variables ------------------------------------------
+vars = [ ...
+    optimizableVariable('MinDist',         p_bo.MinDistRange,        'Transform', 'log'), ...
+    optimizableVariable('Spread',          p_bo.SpreadRange), ...
+    optimizableVariable('SupervisedNDims', p_bo.SupervisedNDimsRange, 'Type', 'integer')];
+n_vars    = 3;
+max_evals = 30;
 
 % -- Objective function -------------------------------------------------------
 function loss = objective(x)
     temp_params = ctc.Parameters;
-
-    % Apply candidate topology values
-    temp_params.UMAP.MinDist = x.MinDist;
-    temp_params.UMAP.Spread  = x.Spread;
-    if ismember('NNeighbors',          var_names); temp_params.UMAP.NNeighbors          = x.NNeighbors; end
-    if ismember('SupervisedNNeighbors',var_names); temp_params.UMAP.SupervisedNNeighbors = x.SupervisedNNeighbors; end
-    if ismember('NDims',               var_names); temp_params.UMAP.NDims               = x.NDims; end
+    temp_params.UMAP.MinDist         = x.MinDist;
+    temp_params.UMAP.Spread          = x.Spread;
+    temp_params.UMAP.SupervisedNDims = x.SupervisedNDims;
 
     temp_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, temp_params);
     temp_ctc.ResponsiveUnitIdx       = ctc.ResponsiveUnitIdx;
@@ -107,7 +81,6 @@ function loss = objective(x)
         temp_ctc.generateTrainLabels();
         temp_ctc.classifyUnits();
 
-        % Assemble labels and embeddings from supervised UMAP
         all_reduction    = [temp_ctc.Reduction.Train; temp_ctc.Reduction.Test];
         train_labels_vec = temp_ctc.TrainLabels.sorted_y_train';
         test_labels_vec  = temp_ctc.UnitLabels(temp_ctc.TrainLabels.umap_test_idx)';
@@ -119,39 +92,37 @@ function loss = objective(x)
             return
         end
 
+        % Reconstruct high-D feature matrix (same pipeline as classifyUnits)
+        nf         = temp_ctc.NormalizedFeatures;
+        np         = temp_ctc.NormalizationParams;
+        X_all_high = normalize(nf.X_pergroup, 'center', np.mu_global, 'scale', np.sigma_global);
+        X_all_high(:, np.nan_cols) = [];
+        X_all_high = X_all_high ./ np.scale;
+        if isfield(np, 'feature_selection_mask') && ~all(np.feature_selection_mask)
+            X_all_high = X_all_high(:, np.feature_selection_mask);
+        end
+        train_idx = logical(temp_ctc.TrainLabels.umap_train_idx);
+        X_high    = [X_all_high(train_idx, :); X_all_high(~train_idx, :)];
+
         % Compute selected metric
         switch p_bo.ObjectiveMetric
-            case "qf_dissimilarity"
-                extras = temp_ctc.Reduction.Extras;
-                if isempty(extras) || isempty(extras.qfd)
-                    loss = 1;
-                    return
-                end
-                [~, avgOverlap] = extras.getMatchSummary(4);
-                if isnan(avgOverlap)
-                    loss = 1;
-                    return
-                end
-                loss = 1 - avgOverlap / 100;
+            case "trustworthiness"
+                T    = computeTrustworthiness(X_high, all_reduction, 15);
+                loss = 1 - T;
 
             case "silhouette"
                 sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
-                loss = -mean(sil_vals);
+                loss     = -mean(sil_vals);
 
             case "combined"
+                T        = computeTrustworthiness(X_high, all_reduction, 15);
                 sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
-                extras = temp_ctc.Reduction.Extras;
-                if ~isempty(extras) && ~isempty(extras.qfd)
-                    [~, avgOverlap] = extras.getMatchSummary(4);
-                else
-                    avgOverlap = 0;
-                end
-                if isnan(avgOverlap); avgOverlap = 0; end
-                loss = -mean(sil_vals) + (1 - avgOverlap / 100);
+                loss     = (1 - T) + (-mean(sil_vals));
 
             otherwise
                 error('CellTypeClassifier:unknownMetric', ...
-                    'Unknown ObjectiveMetric: "%s".', p_bo.ObjectiveMetric);
+                    'Unknown ObjectiveMetric: "%s". Valid: trustworthiness, silhouette, combined.', ...
+                    p_bo.ObjectiveMetric);
         end
 
         % Optional interneuron fraction penalty
@@ -161,12 +132,8 @@ function loss = objective(x)
         end
 
         if opts.Verbose
-            active_vals = '';
-            for vi = 1:numel(var_names)
-                active_vals = [active_vals, sprintf('%s=', var_names{vi}), ...
-                    sprintf('%.3g ', x.(var_names{vi}))]; %#ok<AGROW>
-            end
-            fprintf('  %s-> loss=%.3f inh=%.1f%%\n', active_vals, loss, 100*inh_frac);
+            fprintf('  MinDist=%.3g Spread=%.3g SupervisedNDims=%d -> loss=%.3f inh=%.1f%%\n', ...
+                x.MinDist, x.Spread, x.SupervisedNDims, loss, 100*inh_frac);
         end
     catch ME
         warning('CellTypeClassifier:optimizeHyperparameters', ...
@@ -177,8 +144,8 @@ end
 
 % -- Run Bayesian optimization ------------------------------------------------
 if opts.Verbose
-    fprintf('Bayesian optimization: %d topology variables (%s), %d evaluations, metric=%s\n', ...
-        n_vars, strjoin(var_names, ', '), max_evals, p_bo.ObjectiveMetric);
+    fprintf('Bayesian optimization: 3 variables (MinDist, Spread, SupervisedNDims), %d evaluations, metric=%s\n', ...
+        max_evals, p_bo.ObjectiveMetric);
 end
 
 bo_result = bayesopt(@objective, vars, ...
@@ -191,23 +158,65 @@ bo_result = bayesopt(@objective, vars, ...
 % -- Extract best parameters -------------------------------------------------
 best = bo_result.XAtMinObjective;
 
-best_umap = struct('MinDist', best.MinDist, 'Spread', best.Spread);
-if ismember('NNeighbors',          var_names); best_umap.NNeighbors          = best.NNeighbors; end
-if ismember('SupervisedNNeighbors',var_names); best_umap.SupervisedNNeighbors = best.SupervisedNNeighbors; end
-if ismember('NDims',               var_names); best_umap.NDims               = best.NDims; end
-
-results.bestParams     = struct('UMAP', best_umap);
+results.bestParams    = struct('UMAP', struct( ...
+    'MinDist',         best.MinDist, ...
+    'Spread',          best.Spread, ...
+    'SupervisedNDims', best.SupervisedNDims));
 results.bestObjective  = bo_result.MinObjective;
 results.bayesoptResult = bo_result;
 results.allObjectives  = bo_result.XTrace;
 results.nVars          = n_vars;
 
 if opts.Verbose
-    fprintf('\nBest topology parameters (metric=%s, %d vars optimized):\n', ...
-        p_bo.ObjectiveMetric, n_vars);
-    for vi = 1:numel(var_names)
-        fprintf('  %-25s %g\n', var_names{vi}, best.(var_names{vi}));
-    end
+    fprintf('\nBest topology parameters (metric=%s, %d evaluations):\n', ...
+        p_bo.ObjectiveMetric, max_evals);
+    fprintf('  %-25s %g\n',  'MinDist',         best.MinDist);
+    fprintf('  %-25s %g\n',  'Spread',          best.Spread);
+    fprintf('  %-25s %d\n',  'SupervisedNDims', best.SupervisedNDims);
     fprintf('  Best objective:         %.4f\n', results.bestObjective);
 end
+end
+
+% -- Helper: trustworthiness (Venna & Kaski 2006) ----------------------------
+function T = computeTrustworthiness(X_high, X_low, k)
+% COMPUTETRUSTWORTHINESS  Measure how faithfully X_low preserves X_high neighborhoods.
+%
+%   T = computeTrustworthiness(X_high, X_low, k)
+%
+%   For each point, counts low-D nearest neighbors that were NOT neighbors in
+%   high-D space (false neighbors), weighted by their high-D rank penalty.
+%   T = 1 is perfect (all low-D neighbors were also high-D neighbors).
+%   T = 0 is worst case.
+%
+%   k_hi = 5*k is used as the high-D search radius for rank lookup. Points
+%   outside this radius are assigned rank k_hi+1.
+    n    = size(X_high, 1);
+    k    = min(k, n - 1);
+    k_hi = min(5 * k, n - 1);
+
+    [nn_low,  ~] = knnsearch(X_low,  X_low,  'K', k + 1);
+    [nn_high, ~] = knnsearch(X_high, X_high, 'K', k_hi + 1);
+    nn_low  = nn_low(:,  2:end);   % (n x k),    exclude self
+    nn_high = nn_high(:, 2:end);   % (n x k_hi), exclude self
+
+    penalty = 0;
+    for i = 1:n
+        for pos = 1:k
+            j     = nn_low(i, pos);
+            r_pos = find(nn_high(i, :) == j, 1);
+            if isempty(r_pos)
+                r_pos = k_hi + 1;
+            end
+            if r_pos > k
+                penalty = penalty + (r_pos - k);
+            end
+        end
+    end
+
+    denom = n * k * (2*n - 3*k - 1);
+    if denom <= 0
+        T = 0;
+        return
+    end
+    T = max(0, min(1, 1 - (2 / denom) * penalty));
 end

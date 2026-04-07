@@ -9,7 +9,6 @@
 %   4. Generate training labels:
 %        - Feature extraction + per-group z-score (cached, shared with step 5)
 %        - Fits global z-score/scaling on training subset → NormalizationParams
-%        - TWO-NN dimensionality estimate (if AutoSupervisedNDims)
 %        - Unsupervised UMAP → outlier detection → counterexample selection
 %   5. Classify all units (supervised UMAP, reuses feature cache from step 4)
 %   6. E/I analysis (EIAnalyzer)
@@ -65,7 +64,6 @@ parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
-parameters.UMAP.NDims              = 10;
 parameters.UMAP.TargetWeight       = 0.5;
 
 % ACG source: prefer full-recording (Parent_ACG*) from FeatureStore
@@ -83,7 +81,6 @@ parameters.OutlierDetection.CounterexampleRatio     = 1;
 
 % Optional: data-driven adaptive parameters (all off by default)
 %   parameters.UMAP.AutoNNeighbors              = true;   % n_neighbors = max(15, sqrt(N))
-%   parameters.UMAP.AutoSupervisedNDims         = true;   % SupervisedNDims via TWO-NN estimator
 %   parameters.UMAP.AutoConfidenceK             = true;   % kNN k = max(5, sqrt(N_train))
 %   parameters.UMAP.FeatureSelection            = true;   % remove low-var / correlated features
 %   parameters.Bootstrap.UseFDR                 = true;   % BH correction instead of fixed alpha

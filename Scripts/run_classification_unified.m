@@ -54,7 +54,6 @@ parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
-parameters.UMAP.NDims              = 10;
 parameters.UMAP.TargetWeight       = 0.5;
 parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
@@ -68,7 +67,6 @@ parameters.OutlierDetection.CounterexampleRatio     = 1;
 
 % Optional adaptive parameters (uncomment to enable):
 %   parameters.UMAP.AutoNNeighbors              = true;   % n_neighbors = max(15, sqrt(N))
-%   parameters.UMAP.AutoSupervisedNDims         = true;   % SupervisedNDims via TWO-NN estimator
 %   parameters.UMAP.AutoConfidenceK             = true;   % kNN k = max(5, sqrt(N_train))
 %   parameters.UMAP.FeatureSelection            = true;   % remove low-var / correlated features
 %   parameters.Bootstrap.UseFDR                 = true;   % BH correction instead of fixed alpha

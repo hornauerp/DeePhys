@@ -102,25 +102,10 @@ params.UMAP.NNeighbors = 30;
 
 % ── Supervised UMAP dimensionality ────────────────────────────────────────────
 %
-% AutoSupervisedNDims uses the TWO-NN intrinsic dimensionality estimator
-% (Facco et al. 2017) to set the number of supervised embedding dimensions.
-% This is strongly preferred over fixing SupervisedNDims = 2:
-%   - Real E/I separation often needs 3–6 dimensions to capture ACG, waveform,
-%     and firing-rate features simultaneously.
-%   - Forcing 2D compresses information the classifier needs and increases
-%     sensitivity to seed and geometry artifacts.
-%   - TWO-NN estimates d from the ratio of 2nd to 1st nearest-neighbor distances
-%     under a Pareto null — no tuning required.
-%
-% Alternative: AutoSupervisedNDims = false, SupervisedNDims = 2.
-%   Use this only when you need a human-interpretable 2D scatter plot and
-%   are willing to accept lower classification accuracy.
-%
-% MaxSupervisedNDims: caps the estimate at 10 to prevent runaway on noisy data.
-%   Rarely activates in practice (typical estimate is 3–6).
-params.UMAP.AutoSupervisedNDims = true;
-params.UMAP.MinSupervisedNDims  = 2;
-params.UMAP.MaxSupervisedNDims  = 10;
+% SupervisedNDims = 2 (default). Controls how many dimensions the supervised
+% UMAP embedding uses. The default is 2 for a human-interpretable scatter plot.
+% Higher values (up to 10) can be explored via optimizeHyperparameters() —
+% see Section 8, which optimizes SupervisedNDims jointly with MinDist and Spread.
 
 % ── Supervised NNeighbors ─────────────────────────────────────────────────────
 %
@@ -202,11 +187,10 @@ fprintf('Inhibitory candidates: %d / %d total units\n', ...
 % Then on the training subset:
 %   1. Fits global z-score + scaling; stores NormalizationParams
 %   2. Optional feature selection (FeatureSelection flag)
-%   3. TWO-NN intrinsic dimensionality estimate → SupervisedNDims (if AutoSupervisedNDims)
-%   4. Unsupervised UMAP embedding (used for outlier detection)
-%   5. Detects and removes outliers from responsive candidates (in UMAP space)
-%   6. Selects counterexamples uniformly from the non-responsive pool
-%   7. Detects and removes outliers from counterexamples (in UMAP space)
+%   3. Unsupervised UMAP embedding (used for outlier detection)
+%   4. Detects and removes outliers from responsive candidates (in UMAP space)
+%   5. Selects counterexamples uniformly from the non-responsive pool
+%   6. Detects and removes outliers from counterexamples (in UMAP space)
 %      with top-up from a reserve pool to maintain the target count
 
 ctc.generateTrainLabels();
@@ -283,21 +267,17 @@ sortACGsByPeak(ctc);
 % overlap completely. These artifacts arise from MinDist/Spread/NNeighbors
 % interacting badly with a particular dataset's feature density.
 %
-% What is optimized: topology parameters only (MinDist, Spread, NNeighbors,
-%   SupervisedNNeighbors). Parameters that control label assignment
-%   (TargetWeight, CounterexampleRatio) are excluded — they can trivially
-%   improve the metric (tighter clusters) without improving classification.
+% What is optimized: 3 topology parameters (MinDist, Spread, SupervisedNDims).
+%   Parameters that control label assignment (TargetWeight, CounterexampleRatio)
+%   are excluded — they can trivially improve the metric without improving
+%   classification quality.
 %
-% Objective metric: qf_dissimilarity (default) — measures topology-label
-%   agreement via QF overlap from the UMAP toolbox. Not gameable by topology
-%   parameters because it compares the embedding structure to the supplied
-%   labels, not just cluster compactness. Silhouette is the alternative if
-%   the QF metric is unavailable, but it is gameable by TargetWeight.
+% Objective metric: trustworthiness (default, Venna & Kaski 2006) — measures
+%   how faithfully the low-D embedding preserves high-D neighborhood structure.
+%   T = 1 is perfect; works in any output dimension. Loss = 1 - T.
+%   Silhouette and combined (trustworthiness + silhouette) are also available.
 %
-% Run count: max(15, 10 * n_vars) evaluations. With AutoNNeighbors = true,
-%   NNeighbors and SupervisedNNeighbors are fixed, leaving 2 free variables
-%   (MinDist, Spread) → 20 evaluations. With AutoNNeighbors = false, 4 free
-%   variables → 40 evaluations.
+% Run count: 30 evaluations (fixed).
 %
 % This should be treated as a one-time calibration step for a new experimental
 % preparation, not run on every dataset.

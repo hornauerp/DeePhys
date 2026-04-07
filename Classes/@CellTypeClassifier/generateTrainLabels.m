@@ -5,11 +5,10 @@ function generateTrainLabels(ctc)
 %   1. Build normalized feature cache (shared with classifyUnits via buildNormalizedFeatures)
 %   2. Global z-score on training subset; store NormalizationParams for classifyUnits
 %   3. Optional feature selection
-%   4. AutoSupervisedNDims: TWO-NN intrinsic dimensionality estimate on feature matrix
-%   5. Unsupervised UMAP embedding (mandatory for outlier detection)
-%   6. Outlier detection on responsive candidates in UMAP space
-%   7. Counterexample selection + outlier detection in UMAP space
-%   8. Assemble training labels
+%   4. Unsupervised UMAP embedding (mandatory for outlier detection)
+%   5. Outlier detection on responsive candidates in UMAP space
+%   6. Counterexample selection + outlier detection in UMAP space
+%   7. Assemble training labels
 %
 % Outlier detection in UMAP space (dip test + Mahalanobis/GMM):
 %   Classification happens through UMAP (supervised embedding), so outlier
@@ -29,11 +28,6 @@ function generateTrainLabels(ctc)
 %   Pure culture / metadata (explicit counterexamples):
 %     Both classes have ground truth from ctc.CounterexampleUnitIdx.
 %     Both classes are cleaned by outlier detection independently.
-%
-% AutoSupervisedNDims: estimates the intrinsic dimensionality of the normalised
-%   feature manifold via the TWO-NN estimator (Facco et al. 2017). Uses
-%   nearest-neighbor distance ratios — a natural fit for UMAP since both
-%   operate on neighborhood structure. Clamped to [MinSupervisedNDims, MaxSupervisedNDims].
 %
 % Requires ctc.ResponsiveUnitIdx to be set (run identifyResponsiveUnits first).
 % Sets: ctc.TrainLabels, ctc.NormalizationParams, ctc.Reduction.Unsupervised
@@ -111,18 +105,6 @@ ctc.NormalizationParams = struct( ...
     'nan_cols',              nan_cols, ...
     'scale',                 scale, ...
     'feature_selection_mask', feature_selection_mask);
-
-% -- AutoSupervisedNDims: TWO-NN on feature matrix ----------------------------
-% Estimates intrinsic dimensionality of the normalized feature manifold.
-% Running on the feature matrix (not the UMAP embedding) gives an unbiased
-% estimate: the UMAP embedding has at most NDims dimensions by construction,
-% which would bias a post-UMAP estimate toward smaller values.
-if p_umap.AutoSupervisedNDims
-    id_est    = estimateIntrinsicDimensionality(X_feat);
-    sup_ndims = max(p_umap.MinSupervisedNDims, min(p_umap.MaxSupervisedNDims, round(id_est)));
-    fprintf('TWO-NN intrinsic dimensionality estimate: %.1f -> SupervisedNDims = %d\n', id_est, sup_ndims);
-    ctc.Parameters.UMAP.SupervisedNDims = sup_ndims;
-end
 
 % -- Unsupervised UMAP embedding (mandatory for outlier detection) ------------
 assert(~isempty(p_umap.TemplateDir), ...
@@ -319,46 +301,6 @@ function name = labelName(label)
     elseif label == 2; name = 'inhibitory';
     else; name = sprintf('class_%d', label);
     end
-end
-
-function d_est = estimateIntrinsicDimensionality(X)
-% ESTIMATEINTRINSCDIMENSIONALITY  TWO-NN estimator (Facco et al. 2017).
-%
-% Estimates intrinsic dimensionality from the ratio of distances to the
-% second and first nearest neighbors. Fits a Pareto distribution to the
-% mu = r2/r1 ratios via maximum likelihood.
-%
-% Reference:
-%   Facco, E., d'Errico, M., Rodriguez, A. & Laio, A. (2017).
-%   Estimating the intrinsic dimension of datasets by a minimal
-%   neighborhood information. Scientific Reports, 7, 12140.
-
-    [n, ~] = size(X);
-    if n < 10
-        d_est = 2;
-        return
-    end
-
-    % Find 2 nearest neighbors (excluding self; col 1 = self, dist 0)
-    [~, nn_dists] = knnsearch(X, X, 'K', 3);
-    r1 = nn_dists(:, 2);
-    r2 = nn_dists(:, 3);
-
-    % Remove degenerate cases (identical points)
-    valid = r1 > 0;
-    r1 = r1(valid);
-    r2 = r2(valid);
-
-    if numel(r1) < 5
-        d_est = 2;
-        return
-    end
-
-    mu = r2 ./ r1;
-
-    % MLE for Pareto exponent: d = n / sum(log(mu))
-    % The CDF of mu under d-dimensional uniformity is P(mu <= x) = 1 - x^(-d)
-    d_est = numel(mu) / sum(log(mu));
 end
 
 function tf_outlier = detectOutliers(data, p)
