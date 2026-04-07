@@ -2,16 +2,18 @@ function generateTrainLabels(ctc)
 % GENERATETRAINLABELS  Build training labels via UMAP embedding and adaptive outlier detection.
 %
 % Pipeline:
-%   1. Normalise features (per-group z-score, global z-score, NaN removal, scaling)
-%   2. Unsupervised UMAP embedding
-%   3. Outlier detection on responsive candidates in UMAP space
-%   4. Counterexample selection (uniform random for drug-response; explicit for metadata)
-%   5. Outlier detection on counterexamples in UMAP space (metadata path only)
-%   6. Assemble training labels
+%   1. Build normalized feature cache (shared with classifyUnits via buildNormalizedFeatures)
+%   2. Global z-score on training subset; store NormalizationParams for classifyUnits
+%   3. Optional feature selection
+%   4. AutoSupervisedNDims: TWO-NN intrinsic dimensionality estimate on feature matrix
+%   5. Unsupervised UMAP embedding (mandatory for outlier detection)
+%   6. Outlier detection on responsive candidates in UMAP space
+%   7. Counterexample selection + outlier detection in UMAP space
+%   8. Assemble training labels
 %
 % Outlier detection in UMAP space (dip test + Mahalanobis/GMM):
-%   Since classification happens through UMAP (supervised embedding), outlier
-%   detection should operate in the same representation. This finds the
+%   Classification happens through UMAP (supervised embedding), so outlier
+%   detection in the same representation is the natural choice. This finds the
 %   well-defined main population of responsive units, deliberately accepting
 %   loss of smaller inhibitory subpopulations.
 %
@@ -28,9 +30,10 @@ function generateTrainLabels(ctc)
 %     Both classes have ground truth from ctc.CounterexampleUnitIdx.
 %     Both classes are cleaned by outlier detection independently.
 %
-% AutoSupervisedNDims: estimates the intrinsic dimensionality of the
-% normalised feature manifold via the TWO-NN estimator (Facco et al. 2017),
-% then sets SupervisedNDims accordingly.
+% AutoSupervisedNDims: estimates the intrinsic dimensionality of the normalised
+%   feature manifold via the TWO-NN estimator (Facco et al. 2017). Uses
+%   nearest-neighbor distance ratios — a natural fit for UMAP since both
+%   operate on neighborhood structure. Clamped to [MinSupervisedNDims, MaxSupervisedNDims].
 %
 % Requires ctc.ResponsiveUnitIdx to be set (run identifyResponsiveUnits first).
 % Sets: ctc.TrainLabels, ctc.NormalizationParams, ctc.Reduction.Unsupervised
@@ -48,63 +51,37 @@ p_train = ctc.Parameters.TrainLabels;
 
 rng(ctc.Parameters.RNGSeed, 'twister');
 
-% -- Deduplicate: one representative UnitData per unique UnitID --------------
-[unique_ud, all_to_unique, ~] = ctc.uniqueUnitMap();
-n_units_full = numel(ctc.UnitDataArray);
+% -- Build normalized feature cache (shared with classifyUnits) ---------------
+% Per-group z-score and feature extraction happen here once.
+% Global z-score is NOT applied here — it is fit on the training subset below
+% and stored in NormalizationParams so classifyUnits can apply it to all units.
+ctc.buildNormalizedFeatures();
+nf = ctc.NormalizedFeatures;
 
-n_unique      = numel(unique_ud);
-unique_to_rep = zeros(1, n_unique);
-for u = 1:n_unique
-    rows = find(all_to_unique == u);
-    unique_to_rep(u) = rows(1);
-end
+n_unique      = nf.n_unique;
+n_units_full  = nf.n_units_full;
+all_to_unique = nf.all_to_unique;
+unique_to_rep = nf.unique_to_rep;
+subset_mask   = nf.subset_mask;
+
 resp_unique = ctc.ResponsiveUnitIdx(unique_to_rep);
 
-% -- Extract harmonized waveforms + ACGs from unique units only --------------
-[wf, acg, sr] = ctc.getOrExtract(unique_ud);
-[X_raw, ~]    = buildFeatureMatrix(ctc, wf, acg, sr);
-
-% -- Step 1: per-group normalisation -----------------------------------------
-X_raw(isnan(X_raw)) = 0;
-norm_var = p_umap.NormalizationVar;
-if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
-    group_col = ctc.FeatureStore.UnitTable.(norm_var);
-    group_col_unique = group_col(unique_to_rep);
-    [~, ~, iG] = unique(string(group_col_unique), 'stable');
-    for g = 1:max(iG)
-        mask = iG == g;
-        X_raw(mask, :) = normalize(X_raw(mask, :));
-    end
-elseif ~isempty(norm_var)
-    warning('CellTypeClassifier:normVarNotFound', ...
-        'NormalizationVar "%s" not found in UnitTable — per-group z-score skipped.', norm_var);
-end
-
-% -- Determine training subset -----------------------------------------------
-n_units = n_unique;
-if ~isempty(p_umap.TrainingCultureIdx)
-    subset_mask_full = CellTypeClassifier.buildCultureSubsetMask( ...
-        ctc.FeatureStore, p_umap.TrainingCultureIdx, ctc.Parameters.CultureKeys);
-    subset_mask = subset_mask_full(unique_to_rep);
-else
-    subset_mask = true(1, n_units);
-end
-
-X_subset = X_raw(subset_mask, :);
-
-% -- Step 2: Global z-score --------------------------------------------------
+% -- Global z-score on training subset ----------------------------------------
+% Fit only on training cultures to prevent data leakage. Stored in
+% NormalizationParams so classifyUnits applies the same transformation to all units.
+X_subset = nf.X_pergroup(subset_mask, :);
 [X_subset, mu_global, sigma_global] = normalize(X_subset);
 
-% -- Step 3: Remove NaN columns + scale --------------------------------------
+% -- Remove NaN columns + scale -----------------------------------------------
 nan_cols = any(isnan(X_subset), 1);
 X_subset(:, nan_cols) = [];
 scale = max(abs(X_subset), [], 1);
 scale(scale == 0) = 1;
 X_subset = X_subset ./ scale;
 
-% -- Step 4: Optional feature selection --------------------------------------
+% -- Optional feature selection -----------------------------------------------
 if p_umap.FeatureSelection && size(X_subset, 2) > 1
-    feat_var  = var(X_subset, 0, 1);
+    feat_var   = var(X_subset, 0, 1);
     var_thresh = prctile(feat_var, p_umap.MinVariancePercentile);
     low_var    = feat_var <= var_thresh;
 
@@ -127,7 +104,7 @@ else
     X_feat = X_subset;
 end
 
-% -- Store normalisation parameters for carryover ----------------------------
+% -- Store NormalizationParams (classifyUnits applies these to all units) -----
 ctc.NormalizationParams = struct( ...
     'mu_global',             mu_global, ...
     'sigma_global',          sigma_global, ...
@@ -135,15 +112,19 @@ ctc.NormalizationParams = struct( ...
     'scale',                 scale, ...
     'feature_selection_mask', feature_selection_mask);
 
-% -- AutoSupervisedNDims: TWO-NN intrinsic dimensionality estimation ----------
+% -- AutoSupervisedNDims: TWO-NN on feature matrix ----------------------------
+% Estimates intrinsic dimensionality of the normalized feature manifold.
+% Running on the feature matrix (not the UMAP embedding) gives an unbiased
+% estimate: the UMAP embedding has at most NDims dimensions by construction,
+% which would bias a post-UMAP estimate toward smaller values.
 if p_umap.AutoSupervisedNDims
-    id_est = estimateIntrinsicDimensionality(X_feat);
+    id_est    = estimateIntrinsicDimensionality(X_feat);
     sup_ndims = max(p_umap.MinSupervisedNDims, min(p_umap.MaxSupervisedNDims, round(id_est)));
     fprintf('TWO-NN intrinsic dimensionality estimate: %.1f -> SupervisedNDims = %d\n', id_est, sup_ndims);
     ctc.Parameters.UMAP.SupervisedNDims = sup_ndims;
 end
 
-% -- Unsupervised UMAP embedding (mandatory for outlier detection) -----------
+% -- Unsupervised UMAP embedding (mandatory for outlier detection) ------------
 assert(~isempty(p_umap.TemplateDir), ...
     ['CellTypeClassifier:noTemplateDir  ', ...
     'Parameters.UMAP.TemplateDir must be set before calling generateTrainLabels. ' ...
@@ -151,7 +132,6 @@ assert(~isempty(p_umap.TemplateDir), ...
 assert(isfolder(p_umap.TemplateDir), ...
     'CellTypeClassifier:templateDirMissing  %s does not exist.', p_umap.TemplateDir);
 
-n_dims = p_umap.NDims;
 N_feat = size(X_feat, 1);
 if p_umap.AutoNNeighbors
     n_neighbors = max(p_umap.MinNNeighbors, round(sqrt(N_feat)));
@@ -162,7 +142,7 @@ end
 
 template_file = fullfile(p_umap.TemplateDir, 'ctc_umap_template.mat');
 [reduction, umap_model, ~, ~] = run_umap(X_feat, ...
-    'n_components',  n_dims, ...
+    'n_components',  p_umap.NDims, ...
     'n_neighbors',   n_neighbors, ...
     'min_dist',      p_umap.MinDist, ...
     'spread',        p_umap.Spread, ...
@@ -173,10 +153,10 @@ ctc.UMAP = umap_model;
 if isempty(ctc.Reduction); ctc.Reduction = struct(); end
 ctc.Reduction.Unsupervised = reduction;
 
-% -- Adaptive outlier detection on responsive candidates (UMAP space) --------
-% Outlier detection in UMAP space matches the representation where
-% classification will happen. This finds the well-defined main population
-% and accepts loss of smaller inhibitory subpopulations.
+% -- Adaptive outlier detection on responsive candidates (UMAP space) ---------
+% Outlier detection in UMAP space matches the representation where classification
+% will happen. This finds the well-defined main population, accepting the loss
+% of smaller inhibitory subpopulations that don't cluster clearly.
 subset_responsive = resp_unique(subset_mask);
 responsive_local  = find(subset_responsive);
 candidate_reduction = reduction(subset_responsive, :);
@@ -196,22 +176,22 @@ if isempty(clean_resp_local)
     warning('CellTypeClassifier:generateTrainLabels', ...
         'All responsive candidates flagged as outliers — using all candidates.');
     clean_resp_local = responsive_local;
-    tf_resp_outlier = false(size(tf_resp_outlier));
+    tf_resp_outlier  = false(size(tf_resp_outlier));
 end
 
-% -- Counterexample selection ---------------------------------------------------
+% -- Counterexample selection --------------------------------------------------
 n_responsive = numel(clean_resp_local);
 
 has_explicit_ce = ~isempty(ctc.CounterexampleUnitIdx) && any(ctc.CounterexampleUnitIdx);
 
 if has_explicit_ce
     % Metadata method: use explicit ground-truth counterexamples directly.
-    ce_unique  = ctc.CounterexampleUnitIdx(unique_to_rep);
-    ce_subset  = ce_unique(subset_mask);
+    ce_unique    = ctc.CounterexampleUnitIdx(unique_to_rep);
+    ce_subset    = ce_unique(subset_mask);
     ce_local_all = find(ce_subset);
 
     % Outlier detection on counterexample class in UMAP space.
-    ce_reduction = reduction(ce_subset, :);
+    ce_reduction  = reduction(ce_subset, :);
     tf_ce_outlier = detectOutliers(ce_reduction, p_outlr);
     n_ce_rejected = sum(tf_ce_outlier);
     if n_ce_rejected > 0
@@ -229,23 +209,21 @@ if has_explicit_ce
         numel(ce_local_all), numel(counterexample_idx_local));
 else
     % Inferred method: uniform random sampling from non-responsive pool,
-    % followed by outlier detection in UMAP space. Removed units are replaced
-    % by drawing additional candidates from the remaining pool so that the
-    % target count (ce_ratio * n_responsive) is preserved where possible.
+    % followed by outlier detection in UMAP space with top-up from reserve.
     % Contaminating inhibitory units that failed to respond cluster near the
     % inhibitory region in UMAP space and appear as a separate mode; the
     % dip test + GMM approach detects and removes them.
     non_responsive_local = find(~subset_responsive);
-    ce_ratio          = p_outlr.CounterexampleRatio;
-    n_target          = ce_ratio * n_responsive;
-    n_pool            = numel(non_responsive_local);
-    n_pick            = min(n_target, n_pool);
+    ce_ratio             = p_outlr.CounterexampleRatio;
+    n_target             = ce_ratio * n_responsive;
+    n_pool               = numel(non_responsive_local);
+    n_pick               = min(n_target, n_pool);
 
     if n_pick > 0
         % Draw initial sample
-        pool_order    = randperm(n_pool);
-        sampled_pos   = pool_order(1:n_pick);       % positions into non_responsive_local
-        reserve_pos   = pool_order(n_pick+1:end);   % remaining pool for top-up
+        pool_order  = randperm(n_pool);
+        sampled_pos = pool_order(1:n_pick);
+        reserve_pos = pool_order(n_pick+1:end);
 
         sampled_local = non_responsive_local(sampled_pos);
 
@@ -263,7 +241,7 @@ else
 
             % Top-up from reserve pool if units were removed
             if n_needed > 0 && ~isempty(reserve_pos)
-                n_topup    = min(n_needed, numel(reserve_pos));
+                n_topup     = min(n_needed, numel(reserve_pos));
                 topup_local = non_responsive_local(reserve_pos(1:n_topup));
 
                 % Outlier-check top-up candidates before accepting
@@ -291,7 +269,7 @@ else
     end
 end
 
-% -- Map local indices back to global UnitDataArray indices ------------------
+% -- Map local indices back to global unique-unit indices ---------------------
 subset_global = find(subset_mask);
 
 resp_label    = p_train.ResponsiveClassLabel;  % default 2 (inhibitory)
@@ -307,7 +285,7 @@ y_train   = [counter_label * ones(1, numel(ex_train_id)), ...
 
 labels.sorted_train_ids  = sorted_train_ids;
 labels.sorted_y_train    = y_train(sort_idx);
-labels.umap_train_idx    = false(1, n_units);
+labels.umap_train_idx    = false(1, n_unique);
 labels.umap_train_idx(sorted_train_ids) = true;
 labels.umap_test_idx     = ~labels.umap_train_idx;
 
@@ -316,12 +294,12 @@ labels.outlier_global_idx              = subset_global(outlier_local);
 labels.excitatory_candidate_global_idx = subset_global(counterexample_idx_local);
 
 % Store mapping so classifyUnits can broadcast unique-unit results back to all rows
-labels.n_unique         = n_unique;
-labels.all_to_unique    = all_to_unique;
-labels.n_units_full     = n_units_full;
-labels.has_explicit_ce  = has_explicit_ce;
+labels.n_unique        = n_unique;
+labels.all_to_unique   = all_to_unique;
+labels.n_units_full    = n_units_full;
+labels.has_explicit_ce = has_explicit_ce;
 
-% Store responsive strength for training inhibitory candidates (for diagnostics)
+% Responsive strength for training inhibitory candidates (for diagnostics)
 if ~isempty(ctc.ResponsiveStrength)
     labels.inhibitory_strength = ctc.ResponsiveStrength(unique_to_rep(in_train_id));
 else
@@ -361,10 +339,10 @@ function d_est = estimateIntrinsicDimensionality(X)
         return
     end
 
-    % Find 2 nearest neighbors (excluding self)
-    [~, nn_dists] = knnsearch(X, X, 'K', 3);  % col 1 = self (dist 0)
-    r1 = nn_dists(:, 2);  % distance to 1st neighbor
-    r2 = nn_dists(:, 3);  % distance to 2nd neighbor
+    % Find 2 nearest neighbors (excluding self; col 1 = self, dist 0)
+    [~, nn_dists] = knnsearch(X, X, 'K', 3);
+    r1 = nn_dists(:, 2);
+    r2 = nn_dists(:, 3);
 
     % Remove degenerate cases (identical points)
     valid = r1 > 0;
@@ -408,8 +386,7 @@ function tf_outlier = detectOutliers(data, p)
     end
     [~, p_dip] = diptest(pc1);
 
-    dip_alpha = p.DipTestAlpha;
-    is_multimodal = p_dip < dip_alpha;
+    is_multimodal = p_dip < p.DipTestAlpha;
     outlier_alpha = p.OutlierAlpha;
 
     if is_multimodal
@@ -433,10 +410,10 @@ function tf_outlier = mahalOutliers(data, d, outlier_alpha)
 end
 
 function tf_outlier = gmmOutliers(data, p, outlier_alpha)
-    n         = size(data, 1);
-    max_k     = min(p.MaxResponsiveComponents, floor(n / 3));
-    bic_vals  = inf(1, max_k);
-    gmm_fits  = cell(1, max_k);
+    n        = size(data, 1);
+    max_k    = min(p.MaxResponsiveComponents, floor(n / 3));
+    bic_vals = inf(1, max_k);
+    gmm_fits = cell(1, max_k);
 
     for k = 1:max_k
         try
@@ -458,7 +435,7 @@ function tf_outlier = gmmOutliers(data, p, outlier_alpha)
         return
     end
 
-    gmm = gmm_fits{best_k};
+    gmm       = gmm_fits{best_k};
     posterior  = gmm.posterior(data);
     max_post   = max(posterior, [], 2);
     tf_outlier = max_post < outlier_alpha;
@@ -473,16 +450,16 @@ function [dip, p_value] = diptest(x)
     n = numel(x);
 
     if n < 4
-        dip = 0;
+        dip     = 0;
         p_value = 1;
         return
     end
 
     ecdf_y = (1:n)' / n;
-    gcm = ecdfGCM(ecdf_y);
-    lcm = ecdfLCM(ecdf_y);
+    gcm    = ecdfGCM(ecdf_y);
+    lcm    = ecdfLCM(ecdf_y);
 
-    dip = max(lcm - gcm) / 2;
+    dip        = max(lcm - gcm) / 2;
     dip_scaled = sqrt(n) * dip;
 
     alpha_table = [0.01, 0.02, 0.05, 0.10, 0.20, 0.50, 1.00];

@@ -46,6 +46,14 @@ classdef CellTypeClassifier < handle
                                                %   .nan_cols     (1 x F) logical mask of removed NaN columns
                                                %   .scale        (1 x F') max(abs) scaling vector
         CachedExtraction        struct          % Cached waveform/ACG extraction
+        NormalizedFeatures      struct          % Shared preprocessing cache (populated by buildNormalizedFeatures)
+                                               %   .X_pergroup   (n_unique x F) after NaN-fill + per-group z-score
+                                               %   .feat_names   (1 x F) feature name strings
+                                               %   .unique_ud    (1 x n_unique) UnitData, one per unique UnitID
+                                               %   .all_to_unique(1 x N_full) index from full array into unique_ud
+                                               %   .unique_to_rep(1 x n_unique) representative row in UnitDataArray
+                                               %   .subset_mask  (1 x n_unique) training-culture logical mask
+                                               %   .n_unique, .n_units_full
     end
 
     % Kept for backward compatibility (populated by fromLegacyGroup)
@@ -357,6 +365,9 @@ classdef CellTypeClassifier < handle
     % Private helpers
     % =====================================================================
     methods (Access = private)
+
+        % Declared here; implemented in buildNormalizedFeatures.m
+        buildNormalizedFeatures(ctc)
 
         function [unique_ud, all_to_unique, unique_to_all] = uniqueUnitMap(ctc)
         % UNIQUEUNITMAP  Return one representative UnitData per unique UnitID.
