@@ -243,12 +243,6 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.UseFDR               = false;
             defaultParams.Bootstrap.FDRLevel             = 0.05;
 
-            % MaxNIter / ConvergenceTol: adaptive bootstrap iterations.
-            %   When MaxNIter > NIter, bootstrap runs in batches of 500 with convergence
-            %   monitoring. Stops when Normal fit parameters stabilize within ConvergenceTol.
-            defaultParams.Bootstrap.MaxNIter             = 5000;
-            defaultParams.Bootstrap.ConvergenceTol       = 0.01;
-
             % ── UMAP parameters ───────────────────────────────────────────────
             defaultParams.UMAP.NDims                = 5;
             defaultParams.UMAP.NNeighbors           = 50;
@@ -263,7 +257,6 @@ classdef CellTypeClassifier < handle
             defaultParams.UMAP.TrainingCultureIdx   = [];
             defaultParams.UMAP.TargetWeight         = 0.5;  % 0=data topology, 1=label topology
             defaultParams.UMAP.MetadataTargetWeight = 0.8;  % higher for metadata (clean labels)
-            defaultParams.UMAP.RunUnsupervised      = true; % unsupervised UMAP for visualization
             defaultParams.UMAP.TemplateDir          = '';   % must be set by user; UMAP template saved here
             defaultParams.UMAP.ConfidenceK          = 15;  % k for kNN confidence scoring
 
@@ -294,7 +287,6 @@ classdef CellTypeClassifier < handle
             % ── Outlier detection ─────────────────────────────────────────────
             defaultParams.OutlierDetection.OutlierAlpha            = 0.01;   % chi-squared / posterior threshold
             defaultParams.OutlierDetection.MaxResponsiveComponents = 3;      % max GMM components for multimodal populations
-            defaultParams.OutlierDetection.DistancePercentile      = 80;
             defaultParams.OutlierDetection.CounterexampleRatio     = 1;  % 1:1 balanced default; use actual ratio for metadata
 
             % DipTestAlpha: significance level for Hartigan dip test for multimodality.

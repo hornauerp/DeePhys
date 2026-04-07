@@ -18,7 +18,7 @@ function [Y_pred, umap_train, umap_test, test_reduction, train_reduction, extras
 %   umap_test       - UMAP model used for test projection
 %   test_reduction  - (N_test  x SupervisedNDims) embedding coordinates for test units
 %   train_reduction - (N_train x SupervisedNDims) embedding coordinates for training units
-%   extras          - UMAP_extra_results; QF dissimilarity only populated when SupervisedNDims <= 2
+%   extras          - UMAP_extra_results
 
 arguments
     ctc CellTypeClassifier
@@ -51,30 +51,25 @@ if isfield(p, 'TargetWeight')
 end
 [train_reduction, umap_train, ~, ~] = run_umap([X_train, Y_train'], train_args{:});
 
-% Test call — match_supervisors=3 for label propagation, QF dissimilarity enabled
-% Append a dummy label column: the template was trained with label_column='end'
-% so it expects F+1 columns. The dummy labels are ignored by match_supervisors.
-% QF dissimilarity and match_scenarios are both histogram-based and only
-% reliable in 2D with small sample sizes. match_supervisors (label assignment
-% via nearest training centroid) is independent and always needed.
-run_qf = p.SupervisedNDims <= 2;
-X_test_with_label = [X_test, zeros(size(X_test, 1), 1)];
+% Test call — match_supervisors=3 for label propagation via nearest training centroid.
+% The training UMAP stripped the label column and built an F-dimensional template,
+% so the test data is passed as F features (no dummy column needed). Omitting
+% label_column prevents the UMAP toolbox from auto-enabling QF dissimilarity,
+% which is histogram-based and fails above 2D with MEA sample sizes.
+% Embedding quality is assessed via trustworthiness instead.
 test_args = { ...
-    'label_column',      'end', ...
     'method',            'java', ...
     'sgd_tasks',         20, ...
     'verbose',           'none', ...
     'cluster_detail',    'adaptive', ...
     'match_supervisors', 3, ...
-    'qf_dissimilarity',  run_qf, ...
-    'match_scenarios',   4 * run_qf, ...
     'template_file',     template_file};
 if isfield(ctc.Parameters, 'Classification') && ...
         isfield(ctc.Parameters.Classification, 'UseJoinedTransform') && ...
         ctc.Parameters.Classification.UseJoinedTransform
     test_args = [test_args, {'joined_transform', true}];
 end
-[test_reduction, umap_test, ~, extras] = run_umap(X_test_with_label, test_args{:});
+[test_reduction, umap_test, ~, extras] = run_umap(X_test, test_args{:});
 
 Y_pred = extras.supervisorMatchedLabels;
 end
