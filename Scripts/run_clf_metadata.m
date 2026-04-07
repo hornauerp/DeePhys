@@ -48,7 +48,7 @@ parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
 parameters.UMAP.NDims              = 10;
-parameters.UMAP.TargetWeight       = 0.5;
+parameters.UMAP.TargetWeight       = 0.3;
 parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
 parameters.Harmonization.ACGLag     = 0.1;
@@ -103,7 +103,7 @@ ctc.TrainLabels = labels;
 % we compute equivalent parameters directly from the raw feature matrix.
 
 [wf_norm, acg_norm, sr_norm] = ctc.getOrExtract(ud);
-[X_raw, ~] = buildFeatureMatrix(ctc, wf_norm, acg_norm, sr_norm);
+[X_raw, feat_names] = buildFeatureMatrix(ctc, wf_norm, acg_norm, sr_norm);
 X_raw(isnan(X_raw)) = 0;
 
 % Per-group z-score (matches Step 1 in classifyUnits)
@@ -123,6 +123,7 @@ end
 % NaN column mask and max-abs scaling (Steps 3-4)
 nan_cols = any(isnan(X_normed), 1);
 X_normed(:, nan_cols) = [];
+feat_names_trimmed = feat_names(~nan_cols);   % needed for ACG/WF group weighting in classifyUnits
 scale = max(abs(X_normed), [], 1);
 scale(scale == 0) = 1;
 
@@ -131,6 +132,7 @@ ctc.NormalizationParams = struct( ...
     'sigma_global',           sigma_global, ...
     'nan_cols',               nan_cols, ...
     'scale',                  scale, ...
+    'feat_names_trimmed',     feat_names_trimmed, ...
     'feature_selection_mask', true(1, sum(~nan_cols)));
 
 clear X_raw X_normed wf_norm acg_norm

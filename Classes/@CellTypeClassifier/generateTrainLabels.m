@@ -1,29 +1,28 @@
 function generateTrainLabels(ctc)
-% GENERATETRAINLABELS  Build training labels via UMAP embedding and adaptive outlier detection.
+% GENERATETRAINLABELS  Build training labels via outlier detection and feature-space operations.
 %
 % Pipeline:
 %   1. Build normalized feature cache (shared with classifyUnits via buildNormalizedFeatures)
 %   2. Global z-score on training subset; store NormalizationParams for classifyUnits
 %   3. Optional feature selection
-%   4. Unsupervised UMAP embedding (mandatory for outlier detection)
-%   5. Outlier detection on responsive candidates in UMAP space
-%   6. Counterexample selection + outlier detection in UMAP space
-%   7. Assemble training labels
+%   4. Unsupervised UMAP embedding (always computed; used for diagnostics and "umap" domain)
+%   5. Outlier detection on responsive candidates (domain: "pca" or "umap")
+%   6. Geometric consistency filter (feature space)
+%   7. Counterexample selection: farthest-from-inhibitory-centroid (feature space)
+%   8. Counterexample outlier detection (domain: "pca" or "umap")
+%   9. Assemble training labels
 %
-% Outlier detection in UMAP space (dip test + Mahalanobis/GMM):
-%   Classification happens through UMAP (supervised embedding), so outlier
-%   detection in the same representation is the natural choice. This finds the
-%   well-defined main population of responsive units, deliberately accepting
-%   loss of smaller inhibitory subpopulations.
+% Outlier detection domain (OutlierDetection.Domain):
+%   "pca"  — top NPCAComponents of candidate feature matrix (default).
+%            Decouples labels from UMAP hyperparameters; PCA is deterministic.
+%   "umap" — unsupervised UMAP embedding (legacy behavior).
 %
 % Two label-source strategies:
 %
 %   Drug response (inferred counterexamples):
 %     Responsive units form one-class ground truth (e.g. inhibitory).
-%     Counterexamples are uniformly randomly sampled from the non-responsive
-%     pool. Uniform sampling preserves the natural excitatory distribution;
-%     contaminating inhibitory non-responders are caught by the subsequent
-%     outlier detection step.
+%     Counterexamples selected farthest from inhibitory centroid in normalized
+%     feature space (correlation distance), ensuring unambiguously excitatory units.
 %
 %   Pure culture / metadata (explicit counterexamples):
 %     Both classes have ground truth from ctc.CounterexampleUnitIdx.
@@ -46,9 +45,6 @@ p_train = ctc.Parameters.TrainLabels;
 rng(ctc.Parameters.RNGSeed, 'twister');
 
 % -- Build normalized feature cache (shared with classifyUnits) ---------------
-% Per-group z-score and feature extraction happen here once.
-% Global z-score is NOT applied here — it is fit on the training subset below
-% and stored in NormalizationParams so classifyUnits can apply it to all units.
 ctc.buildNormalizedFeatures();
 nf = ctc.NormalizedFeatures;
 
@@ -61,8 +57,6 @@ subset_mask   = nf.subset_mask;
 resp_unique = ctc.ResponsiveUnitIdx(unique_to_rep);
 
 % -- Global z-score on training subset ----------------------------------------
-% Fit only on training cultures to prevent data leakage. Stored in
-% NormalizationParams so classifyUnits applies the same transformation to all units.
 X_subset = nf.X_pergroup(subset_mask, :);
 [X_subset, mu_global, sigma_global] = normalize(X_subset);
 
@@ -72,6 +66,9 @@ X_subset(:, nan_cols) = [];
 scale = max(abs(X_subset), [], 1);
 scale(scale == 0) = 1;
 X_subset = X_subset ./ scale;
+
+% Track feature names through removal
+feat_names_trimmed = nf.feat_names(~nan_cols);
 
 % -- Optional feature selection -----------------------------------------------
 if p_umap.FeatureSelection && size(X_subset, 2) > 1
@@ -91,6 +88,7 @@ if p_umap.FeatureSelection && size(X_subset, 2) > 1
     remove_feat = low_var | high_corr;
     feature_selection_mask = ~remove_feat;
     X_feat = X_subset(:, feature_selection_mask);
+    feat_names_trimmed = feat_names_trimmed(feature_selection_mask);
     fprintf('Feature selection: removed %d low-var + %d redundant = %d total (kept %d)\n', ...
         sum(low_var), sum(high_corr & ~low_var), sum(remove_feat), size(X_feat, 2));
 else
@@ -98,15 +96,16 @@ else
     X_feat = X_subset;
 end
 
-% -- Store NormalizationParams (classifyUnits applies these to all units) -----
+% -- Store NormalizationParams -------------------------------------------------
 ctc.NormalizationParams = struct( ...
-    'mu_global',             mu_global, ...
-    'sigma_global',          sigma_global, ...
-    'nan_cols',              nan_cols, ...
-    'scale',                 scale, ...
-    'feature_selection_mask', feature_selection_mask);
+    'mu_global',              mu_global, ...
+    'sigma_global',           sigma_global, ...
+    'nan_cols',               nan_cols, ...
+    'scale',                  scale, ...
+    'feature_selection_mask', feature_selection_mask, ...
+    'feat_names_trimmed',     feat_names_trimmed);
 
-% -- Unsupervised UMAP embedding (mandatory for outlier detection) ------------
+% -- Unsupervised UMAP embedding (always computed) ----------------------------
 assert(~isempty(p_umap.TemplateDir), ...
     ['CellTypeClassifier:noTemplateDir  ', ...
     'Parameters.UMAP.TemplateDir must be set before calling generateTrainLabels. ' ...
@@ -135,21 +134,34 @@ ctc.UMAP = umap_model;
 if isempty(ctc.Reduction); ctc.Reduction = struct(); end
 ctc.Reduction.Unsupervised = reduction;
 
-% -- Adaptive outlier detection on responsive candidates (UMAP space) ---------
-% Outlier detection in UMAP space matches the representation where classification
-% will happen. This finds the well-defined main population, accepting the loss
-% of smaller inhibitory subpopulations that don't cluster clearly.
+% -- Determine outlier detection inputs ---------------------------------------
 subset_responsive = resp_unique(subset_mask);
 responsive_local  = find(subset_responsive);
-candidate_reduction = reduction(subset_responsive, :);
+use_pca = string(p_outlr.Domain) == "pca";
 
-tf_resp_outlier = detectOutliers(candidate_reduction, p_outlr);
+if use_pca
+    % PCA on candidate feature matrix; near-zero variance columns removed first
+    candidate_features = X_feat(responsive_local, :);
+    col_var = var(candidate_features, 0, 1);
+    candidate_features_pca = candidate_features(:, col_var > 1e-10);
+    n_pca = min([p_outlr.NPCAComponents, size(candidate_features_pca, 1) - 1, size(candidate_features_pca, 2)]);
+    if n_pca >= 1
+        [~, inh_detection_data] = pca(candidate_features_pca, 'NumComponents', n_pca, 'Algorithm', 'eig');
+    else
+        inh_detection_data = candidate_features_pca;
+    end
+else
+    inh_detection_data = reduction(subset_responsive, :);
+end
+
+% -- Outlier detection on responsive candidates -------------------------------
+tf_resp_outlier = detectOutliers(inh_detection_data, p_outlr);
 
 n_rejected = sum(tf_resp_outlier);
 n_total    = numel(tf_resp_outlier);
 if n_rejected > 0
-    fprintf('Responsive outlier detection (UMAP space): %d/%d flagged (%.0f%%)\n', ...
-        n_rejected, n_total, n_rejected / n_total * 100);
+    fprintf('Responsive outlier detection (%s space): %d/%d flagged (%.0f%%)\n', ...
+        p_outlr.Domain, n_rejected, n_total, n_rejected / n_total * 100);
 end
 
 clean_resp_local = responsive_local(~tf_resp_outlier(:)');
@@ -161,26 +173,72 @@ if isempty(clean_resp_local)
     tf_resp_outlier  = false(size(tf_resp_outlier));
 end
 
+% -- Geometric consistency filter on responsive candidates --------------------
+% Remove candidates whose feature profile is closer to the excitatory centroid
+% than the inhibitory centroid (correlation distance). These are likely false
+% positives whose FR changed due to network effects, not direct DREADD activation.
+inh_centroid = mean(X_feat(clean_resp_local, :), 1);
+exc_centroid = mean(X_feat(~subset_responsive, :), 1);
+d_to_inh = pdist2(inh_centroid, X_feat(clean_resp_local, :), 'correlation');
+d_to_exc = pdist2(exc_centroid, X_feat(clean_resp_local, :), 'correlation');
+geom_consistent = d_to_inh(:) < d_to_exc(:);
+n_geom_removed = sum(~geom_consistent);
+if n_geom_removed > 0
+    fprintf('Geometric consistency: removed %d/%d responsive candidates\n', ...
+        n_geom_removed, numel(clean_resp_local));
+end
+resp_geom_mask = ~geom_consistent(:)';   % true = removed by geometric filter
+clean_resp_local = clean_resp_local(geom_consistent);
+
+if isempty(clean_resp_local)
+    warning('CellTypeClassifier:generateTrainLabels', ...
+        'All responsive candidates removed by geometric filter — skipping filter.');
+    clean_resp_local = responsive_local(~tf_resp_outlier(:)');
+    resp_geom_mask   = false(1, numel(clean_resp_local));
+    inh_centroid     = mean(X_feat(clean_resp_local, :), 1);
+end
+
 % -- Counterexample selection --------------------------------------------------
 n_responsive = numel(clean_resp_local);
 
 has_explicit_ce = ~isempty(ctc.CounterexampleUnitIdx) && any(ctc.CounterexampleUnitIdx);
 
+% Initialize diagnostic storage for CE
+ce_distances_from_inh = [];
+ce_outlier_mask_diag  = logical([]);
+
 if has_explicit_ce
-    % Metadata method: use explicit ground-truth counterexamples directly.
+    % Metadata method: explicit ground-truth counterexamples.
     ce_unique    = ctc.CounterexampleUnitIdx(unique_to_rep);
     ce_subset    = ce_unique(subset_mask);
     ce_local_all = find(ce_subset);
 
-    % Outlier detection on counterexample class in UMAP space.
-    ce_reduction  = reduction(ce_subset, :);
-    tf_ce_outlier = detectOutliers(ce_reduction, p_outlr);
+    % Outlier detection on counterexample class.
+    if use_pca
+        ce_feat = X_feat(ce_local_all, :);
+        col_var_ce = var(ce_feat, 0, 1);
+        ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
+        n_pca_ce = min([p_outlr.NPCAComponents, size(ce_feat_pca, 1) - 1, size(ce_feat_pca, 2)]);
+        if n_pca_ce >= 1
+            [~, ce_detection_data] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
+        else
+            ce_detection_data = ce_feat_pca;
+        end
+    else
+        ce_detection_data = reduction(ce_subset, :);
+    end
+
+    tf_ce_outlier = detectOutliers(ce_detection_data, p_outlr);
     n_ce_rejected = sum(tf_ce_outlier);
     if n_ce_rejected > 0
-        fprintf('Counterexample outlier detection (UMAP space): %d/%d flagged (%.0f%%)\n', ...
-            n_ce_rejected, numel(tf_ce_outlier), n_ce_rejected / numel(tf_ce_outlier) * 100);
+        fprintf('Counterexample outlier detection (%s space): %d/%d flagged (%.0f%%)\n', ...
+            p_outlr.Domain, n_ce_rejected, numel(tf_ce_outlier), n_ce_rejected / numel(tf_ce_outlier) * 100);
     end
     counterexample_idx_local = ce_local_all(~tf_ce_outlier(:)');
+    ce_outlier_mask_diag = tf_ce_outlier(:)';
+
+    % Distances for diagnostic
+    ce_distances_from_inh = pdist2(inh_centroid, X_feat(ce_local_all, :), 'correlation');
 
     if isempty(counterexample_idx_local)
         warning('CellTypeClassifier:generateTrainLabels', ...
@@ -190,11 +248,8 @@ if has_explicit_ce
     fprintf('Metadata counterexamples: %d labeled, %d after outlier cleaning\n', ...
         numel(ce_local_all), numel(counterexample_idx_local));
 else
-    % Inferred method: uniform random sampling from non-responsive pool,
-    % followed by outlier detection in UMAP space with top-up from reserve.
-    % Contaminating inhibitory units that failed to respond cluster near the
-    % inhibitory region in UMAP space and appear as a separate mode; the
-    % dip test + GMM approach detects and removes them.
+    % Inferred method: farthest-from-inhibitory-centroid selection,
+    % then outlier detection with top-up from reserve.
     non_responsive_local = find(~subset_responsive);
     ce_ratio             = p_outlr.CounterexampleRatio;
     n_target             = ce_ratio * n_responsive;
@@ -202,33 +257,62 @@ else
     n_pick               = min(n_target, n_pool);
 
     if n_pick > 0
-        % Draw initial sample
-        pool_order  = randperm(n_pool);
-        sampled_pos = pool_order(1:n_pick);
-        reserve_pos = pool_order(n_pick+1:end);
+        % Select farthest from inhibitory centroid (most unambiguously excitatory)
+        pool_dists = pdist2(inh_centroid, X_feat(non_responsive_local, :), 'correlation');
+        [~, dist_order] = sort(pool_dists, 'descend');
+        sampled_pos = dist_order(1:n_pick);
+        reserve_pos = dist_order(n_pick+1:end);
+
+        % Store all distances for diagnostic
+        ce_distances_from_inh = pool_dists;
 
         sampled_local = non_responsive_local(sampled_pos);
 
         % Outlier detection on initial sample
-        ce_reduction  = reduction(sampled_local, :);
-        tf_ce_outlier = detectOutliers(ce_reduction, p_outlr);
+        if use_pca
+            ce_feat = X_feat(sampled_local, :);
+            col_var_ce = var(ce_feat, 0, 1);
+            ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
+            n_pca_ce = min([p_outlr.NPCAComponents, size(ce_feat_pca, 1) - 1, size(ce_feat_pca, 2)]);
+            if n_pca_ce >= 1
+                [~, ce_detection_data] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
+            else
+                ce_detection_data = ce_feat_pca;
+            end
+        else
+            ce_detection_data = reduction(sampled_local, :);
+        end
+
+        tf_ce_outlier = detectOutliers(ce_detection_data, p_outlr);
         n_ce_rejected = sum(tf_ce_outlier);
+        ce_outlier_mask_diag = tf_ce_outlier(:)';
 
         if n_ce_rejected > 0
-            fprintf('Counterexample outlier detection (UMAP space): %d/%d flagged (%.0f%%)\n', ...
-                n_ce_rejected, n_pick, n_ce_rejected / n_pick * 100);
+            fprintf('Counterexample outlier detection (%s space): %d/%d flagged (%.0f%%)\n', ...
+                p_outlr.Domain, n_ce_rejected, n_pick, n_ce_rejected / n_pick * 100);
 
             clean_local = sampled_local(~tf_ce_outlier(:)');
             n_needed    = n_pick - numel(clean_local);
 
-            % Top-up from reserve pool if units were removed
             if n_needed > 0 && ~isempty(reserve_pos)
                 n_topup     = min(n_needed, numel(reserve_pos));
                 topup_local = non_responsive_local(reserve_pos(1:n_topup));
 
-                % Outlier-check top-up candidates before accepting
-                topup_reduction  = reduction(topup_local, :);
-                tf_topup_outlier = detectOutliers(topup_reduction, p_outlr);
+                if use_pca
+                    tu_feat = X_feat(topup_local, :);
+                    col_var_tu = var(tu_feat, 0, 1);
+                    tu_feat_pca = tu_feat(:, col_var_tu > 1e-10);
+                    n_pca_tu = min([p_outlr.NPCAComponents, size(tu_feat_pca, 1) - 1, size(tu_feat_pca, 2)]);
+                    if n_pca_tu >= 1
+                        [~, topup_detection_data] = pca(tu_feat_pca, 'NumComponents', n_pca_tu, 'Algorithm', 'eig');
+                    else
+                        topup_detection_data = tu_feat_pca;
+                    end
+                else
+                    topup_detection_data = reduction(topup_local, :);
+                end
+
+                tf_topup_outlier = detectOutliers(topup_detection_data, p_outlr);
                 topup_clean      = topup_local(~tf_topup_outlier(:)');
 
                 clean_local = [clean_local, topup_clean];
@@ -254,8 +338,8 @@ end
 % -- Map local indices back to global unique-unit indices ---------------------
 subset_global = find(subset_mask);
 
-resp_label    = p_train.ResponsiveClassLabel;  % default 2 (inhibitory)
-counter_label = 3 - resp_label;                % 1 if resp=2, 2 if resp=1
+resp_label    = p_train.ResponsiveClassLabel;
+counter_label = 3 - resp_label;
 
 in_train_id = subset_global(clean_resp_local);
 ex_train_id = subset_global(counterexample_idx_local);
@@ -275,13 +359,37 @@ outlier_local = responsive_local(tf_resp_outlier(:)');
 labels.outlier_global_idx              = subset_global(outlier_local);
 labels.excitatory_candidate_global_idx = subset_global(counterexample_idx_local);
 
-% Store mapping so classifyUnits can broadcast unique-unit results back to all rows
+% Store mapping so classifyUnits can broadcast results back to all rows
 labels.n_unique        = n_unique;
 labels.all_to_unique   = all_to_unique;
 labels.n_units_full    = n_units_full;
 labels.has_explicit_ce = has_explicit_ce;
 
-% Responsive strength for training inhibitory candidates (for diagnostics)
+% -- Diagnostic storage -------------------------------------------------------
+% resp_outlier_mask: (1 x numel(responsive_local)) — true = removed by outlier detection
+labels.resp_outlier_mask = tf_resp_outlier(:)';
+
+% resp_geom_mask: (1 x numel(clean_resp_after_outlier)) — true = removed by geometric filter
+labels.resp_geom_mask = resp_geom_mask;
+
+% ce_outlier_mask: (1 x n_ce_sampled) — true = removed by outlier detection
+labels.ce_outlier_mask = ce_outlier_mask_diag;
+
+% ce_distances_from_inh_centroid: correlation distances of all CE pool from inh centroid
+labels.ce_distances_from_inh_centroid = ce_distances_from_inh;
+
+% inh_centroid: (1 x F) centroid of clean inhibitory training set in feature space
+labels.inh_centroid = inh_centroid;
+
+% filter_counts for diagnostic funnel
+labels.filter_counts = struct( ...
+    'n_responsive_in',    numel(responsive_local), ...
+    'n_after_outlier',    numel(responsive_local) - sum(tf_resp_outlier), ...
+    'n_after_geometric',  numel(clean_resp_local), ...
+    'n_ce_in',            n_responsive, ...
+    'n_ce_after_outlier', numel(counterexample_idx_local));
+
+% Responsive strength for training inhibitory candidates
 if ~isempty(ctc.ResponsiveStrength)
     labels.inhibitory_strength = ctc.ResponsiveStrength(unique_to_rep(in_train_id));
 else
@@ -292,6 +400,11 @@ ctc.TrainLabels = labels;
 fprintf('Training set: %i %s, %i %s candidates\n', ...
     sum(y_train == counter_label), labelName(counter_label), ...
     sum(y_train == resp_label),    labelName(resp_label));
+
+% -- Optional diagnostic ------------------------------------------------------
+if ctc.Parameters.Diagnostics.Enable
+    ctc.diagnosticTrainLabels();
+end
 end
 
 %% -- Helper functions --------------------------------------------------------

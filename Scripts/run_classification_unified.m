@@ -54,7 +54,7 @@ parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
-parameters.UMAP.TargetWeight       = 0.5;
+parameters.UMAP.TargetWeight       = 0.3;
 parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
 parameters.Harmonization.ACGLag     = 0.1;
@@ -63,6 +63,7 @@ parameters.OutlierDetection.DipTestAlpha            = 0.05;
 parameters.OutlierDetection.MaxResponsiveComponents = 3;
 % CounterexampleRatio: excitatory candidates per inhibitory candidate.
 % Default is 1 (balanced). Increase to 2-3 if inhibitory fraction is too high (>30%).
+% Outlier detection runs in PCA space (default). Set Domain = 'umap' for legacy behavior.
 parameters.OutlierDetection.CounterexampleRatio     = 1;
 
 % Optional adaptive parameters (uncomment to enable):

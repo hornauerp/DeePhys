@@ -48,8 +48,8 @@ end
 [X_raw, feat_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, wf, acg, sr);
 
 % Store harmonized data for downstream inspection / plotting
-ctc.HarmonizedWaveforms = aligned_wf;
-ctc.HarmonizedACGs      = norm_acgs;
+ctc.HarmonizedWaveforms = aligned_wf(:, all_to_unique);
+ctc.HarmonizedACGs      = norm_acgs(:, all_to_unique);
 ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
 % -- Fill NaN before per-group z-score (missing features treated as mean) -----

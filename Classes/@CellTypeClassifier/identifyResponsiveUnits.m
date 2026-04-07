@@ -316,6 +316,13 @@ ctc.ResponsiveUnitIdx       = responsive_idx;
 ctc.ResponsiveUnitDirection = responsive_direction;
 ctc.ResponsiveStrength      = responsive_strength;
 
+% -- Store ResponsivenessDetail for diagnostics --------------------------------
+% Build per-unit FR-vs-dose matrix from UnitData. For full_curve method this
+% reuses the already-computed FR values via a lightweight pass over UnitData.
+% For two_window, only pre and post FR are stored (2-point dose response).
+ctc.ResponsivenessDetail = buildResponsivenessDetail(ctc, unit_ids_in_table, ...
+    ud, ud_order, meta, group_field, method, p);
+
 % -- FDR correction across all unit p-values ---------------------------------
 if p.UseFDR
     valid_pval = ~isnan(all_pvals);
@@ -367,6 +374,76 @@ else
     fprintf('Responsive units (%s): %i / %i (%.1f%%)\n', ...
         p.Direction, n_responsive, n_total, 100 * n_responsive / n_total);
 end
+
+% -- Optional diagnostic ------------------------------------------------------
+if ctc.Parameters.Diagnostics.Enable
+    ctc.diagnosticResponsiveUnits();
+end
+end
+
+%% ── Helper: build ResponsivenessDetail struct ─────────────────────────────
+
+function detail = buildResponsivenessDetail(ctc, unit_ids_in_table, ud, ud_order, ...
+        meta, group_field, method, p)
+% Builds per-unit FR-vs-dose matrix for diagnostic plotting.
+% For full_curve: extracts FR across all recordings sorted by GroupingVar.
+% For two_window / metadata: stores 2-point FR (pre=col1, post=col2) with
+%   dose_values = [pre_gv, post_gv], or [0, 1] as a placeholder.
+
+    unique_ids  = unique(unit_ids_in_table, 'stable');
+    n_units     = numel(unique_ids);
+    unit_rec_ids = ctc.FeatureStore.UnitTable.RecordingID;
+
+    if strcmp(method, 'metadata')
+        detail = struct('fr_matrix', [], 'dose_values', [], 'unit_ids', {unique_ids});
+        return
+    end
+
+    % Gather all unique GroupingVar values (sorted)
+    if ismember(group_field, meta.Properties.VariableNames)
+        all_gv = unique(meta.(group_field), 'sorted');
+        if iscell(all_gv); all_gv = cell2mat(all_gv); end
+        all_gv = all_gv(~isnan(all_gv));
+    else
+        all_gv = [0, 1];
+    end
+    n_doses = numel(all_gv);
+
+    fr_matrix = nan(n_units, n_doses);
+
+    for u = 1:n_units
+        uid      = unique_ids(u);
+        uid_rows = find(unit_ids_in_table == uid);
+        if isempty(uid_rows); continue; end
+
+        for ri = 1:numel(uid_rows)
+            row    = uid_rows(ri);
+            ud_idx = ud_order(row);
+            if ud_idx <= 0; continue; end
+
+            rec_id  = unit_rec_ids(row);
+            rec_row = meta(meta.RecordingID == rec_id, :);
+            if isempty(rec_row); continue; end
+
+            if ismember(group_field, meta.Properties.VariableNames)
+                gv = rec_row.(group_field)(1);
+                if ~isnumeric(gv); gv = str2double(string(gv)); end
+            else
+                gv = NaN;
+            end
+
+            dose_col = find(all_gv == gv, 1);
+            if isempty(dose_col); continue; end
+
+            st = ud(ud_idx).SpikeTimes;
+            dur = ud(ud_idx).RecordingDuration;
+            fr_matrix(u, dose_col) = numel(st) / max(dur, eps);
+        end
+    end
+
+    detail = struct('fr_matrix',  fr_matrix, ...
+                    'dose_values', all_gv(:)', ...
+                    'unit_ids',    {unique_ids});
 end
 
 %% ── Helper: per-unit full-curve dose-response ─────────────────────────────

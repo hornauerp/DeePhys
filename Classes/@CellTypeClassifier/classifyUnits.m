@@ -13,6 +13,7 @@ function classifyUnits(ctc)
 %   3. Remove same NaN columns as generateTrainLabels
 %   4. Apply same max(abs) scaling
 %   5. Apply feature_selection_mask if FeatureSelection was enabled
+%   6. Apply dimension-normalised ACG/Waveform group weighting
 %
 % Requires ctc.TrainLabels and ctc.NormalizationParams to be set
 % (run generateTrainLabels first).
@@ -34,8 +35,6 @@ p_umap = ctc.Parameters.UMAP;
 np     = ctc.NormalizationParams;
 
 % -- Get normalized features (shared with generateTrainLabels) ----------------
-% buildNormalizedFeatures is idempotent: returns immediately if already run.
-% The cache holds X_pergroup (after per-group z-score) + deduplication info.
 ctc.buildNormalizedFeatures();
 nf = ctc.NormalizedFeatures;
 
@@ -45,10 +44,6 @@ all_to_unique = nf.all_to_unique;
 unique_to_rep = nf.unique_to_rep; %#ok<NASGU>
 
 % -- Apply stored NormalizationParams to ALL unique units ---------------------
-% The global z-score, NaN removal, and scaling were fit on the training subset
-% in generateTrainLabels. Applying the same parameters here (rather than
-% refitting) ensures the supervised UMAP sees the same feature space as the
-% unsupervised UMAP used for label generation.
 X_all = normalize(nf.X_pergroup, 'center', np.mu_global, 'scale', np.sigma_global);
 X_all(:, np.nan_cols)  = [];
 X_all = X_all ./ np.scale;
@@ -57,14 +52,32 @@ if isfield(np, 'feature_selection_mask') && ~all(np.feature_selection_mask)
     X_all = X_all(:, np.feature_selection_mask);
 end
 
+% -- Dimension-normalised feature group weighting ----------------------------
+% Scales ACG and Waveform groups so their total L2 contribution is
+% proportional to ACGWeight / WaveformWeight regardless of group size.
+% Applied here (not in generateTrainLabels) so training labels are unaffected
+% and BayOpt can optimize weights independently.
+if isfield(np, 'feat_names_trimmed') && ~isempty(np.feat_names_trimmed)
+    feat_names_final = np.feat_names_trimmed;
+    is_acg = startsWith(feat_names_final, "FullACG") | startsWith(feat_names_final, "ACG");
+    is_wf  = startsWith(feat_names_final, "Waveform") | startsWith(feat_names_final, "ReferenceWaveform");
+    n_acg  = sum(is_acg);
+    n_wf   = sum(is_wf);
+    if n_acg > 0
+        X_all(:, is_acg) = X_all(:, is_acg) * sqrt(p_umap.ACGWeight / n_acg);
+    end
+    if n_wf > 0
+        X_all(:, is_wf)  = X_all(:, is_wf)  * sqrt(p_umap.WaveformWeight / n_wf);
+    end
+end
+
 train_idx = logical(labels.umap_train_idx);
 test_idx  = ~train_idx;
 X_train   = X_all(train_idx, :);
 X_test    = X_all(test_idx, :);
 
 % -- AutoNNeighbors for supervised UMAP ---------------------------------------
-orig_sup_nneigh    = p_umap.SupervisedNNeighbors;
-orig_target_weight = p_umap.TargetWeight;
+orig_sup_nneigh = p_umap.SupervisedNNeighbors;
 
 if p_umap.AutoNNeighbors
     N_train    = size(X_train, 1);
@@ -73,12 +86,15 @@ if p_umap.AutoNNeighbors
     ctc.Parameters.UMAP.SupervisedNNeighbors = auto_sup_n;
 end
 
-% Metadata labels are clean ground truth — higher TargetWeight is appropriate.
-% Inferred drug-response labels use the default (0.5) because label noise
-% warrants a more data-driven embedding.
-if isfield(labels, 'has_explicit_ce') && labels.has_explicit_ce
-    ctc.Parameters.UMAP.TargetWeight = p_umap.MetadataTargetWeight;
-    fprintf('Metadata labels: using TargetWeight=%.2f\n', p_umap.MetadataTargetWeight);
+% -- Minority class ceiling on SupervisedNNeighbors ---------------------------
+% Prevents n_neighbors from spanning a large fraction of the minority class,
+% which causes UMAP to tear the manifold into disconnected components.
+n_inh   = sum(labels.sorted_y_train == 2);
+safe_nn = floor(n_inh / 5);
+if safe_nn > 0 && ctc.Parameters.UMAP.SupervisedNNeighbors > safe_nn
+    fprintf('Minority class ceiling: SupervisedNNeighbors %d -> %d (n_inh=%d)\n', ...
+        ctc.Parameters.UMAP.SupervisedNNeighbors, safe_nn, n_inh);
+    ctc.Parameters.UMAP.SupervisedNNeighbors = safe_nn;
 end
 
 % -- Supervised UMAP classification ------------------------------------------
@@ -87,17 +103,12 @@ end
 
 % Restore overridden params
 ctc.Parameters.UMAP.SupervisedNNeighbors = orig_sup_nneigh;
-ctc.Parameters.UMAP.TargetWeight         = orig_target_weight;
 
 ctc.Reduction.Train  = train_reduction;
 ctc.Reduction.Test   = test_reduction;
 ctc.Reduction.Extras = extras;
 
 % -- Distance-weighted kNN confidence in UMAP embedding space -----------------
-% For each test unit: sum of inverse-distance weights from k nearest training
-% neighbors sharing the predicted label, divided by total weight. Closer
-% neighbors contribute more, giving a softer signal near the decision boundary.
-% Training units get confidence = 1.0 (ground truth).
 if p_umap.AutoConfidenceK
     conf_k = max(5, round(sqrt(size(train_reduction, 1))));
     fprintf('Auto ConfidenceK: %d (N_train=%d)\n', conf_k, size(train_reduction, 1));
@@ -146,8 +157,13 @@ ctc.UnitLabels     = full_labels;
 ctc.UnitConfidence = full_confidence;
 
 n_exc = sum(unique_labels == 1, 'omitnan');
-n_inh = sum(unique_labels == 2, 'omitnan');
+n_inh_final = sum(unique_labels == 2, 'omitnan');
 n_unc = sum(isnan(unique_labels));
 fprintf('Classified %i excitatory, %i inhibitory units (%i unclassified)\n', ...
-    n_exc, n_inh, n_unc);
+    n_exc, n_inh_final, n_unc);
+
+% -- Optional diagnostic ------------------------------------------------------
+if ctc.Parameters.Diagnostics.Enable
+    ctc.diagnosticClassification();
+end
 end

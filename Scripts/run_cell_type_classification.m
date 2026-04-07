@@ -64,14 +64,15 @@ parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;
 parameters.UMAP.NNeighbors         = 100;
 parameters.UMAP.MinDist            = 0.1;
-parameters.UMAP.TargetWeight       = 0.5;
+parameters.UMAP.TargetWeight       = 0.3;
 
 % ACG source: prefer full-recording (Parent_ACG*) from FeatureStore
 parameters.Harmonization.ACGSource  = 'FullACG';
 parameters.Harmonization.ACGBinSize = 0.0005;
 parameters.Harmonization.ACGLag     = 0.1;
 
-% Outlier detection (dip test + Mahalanobis/GMM in UMAP space)
+% Outlier detection (dip test + Mahalanobis/GMM in PCA space by default; set
+% OutlierDetection.Domain = 'umap' to use the unsupervised UMAP embedding instead)
 parameters.OutlierDetection.OutlierAlpha            = 0.01;
 parameters.OutlierDetection.DipTestAlpha            = 0.05;
 parameters.OutlierDetection.MaxResponsiveComponents = 3;

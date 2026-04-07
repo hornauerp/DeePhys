@@ -5,7 +5,7 @@
 %
 %   Drug-response (default): Bootstrap firing-rate test identifies units that
 %   increase firing after stimulus — these are the inhibitory ground-truth set.
-%   Counterexamples are sampled uniformly from the non-responsive pool.
+%   Counterexamples are selected farthest from the inhibitory centroid in feature space.
 %
 %   Metadata (pure cultures): Both classes supplied directly from a UnitTable
 %   column (e.g. optogenetics tag, genetic marker). Skips bootstrap entirely.
@@ -53,11 +53,27 @@ params.Harmonization.ACGSource  = 'FullACG';
 
 % ── Bootstrap firing-rate test ─────────────────────────────────────────────────
 %
-% Alpha: 1e-10 is deliberately strict. The downstream UMAP outlier detection
+% GroundTruthMethod controls how inhibitory candidates are identified:
+%   'two_window' (default): bootstrap permutation test comparing pre vs post
+%     firing rate within each culture. Requires distinct baseline and treatment
+%     recordings selectable by GroupingVar.
+%   'full_curve': per-unit Spearman rank correlation between firing rate and
+%     GroupingVar across all recordings of the culture. Requires the same
+%     UnitIDs across recordings. More robust for multi-concentration dose-response
+%     experiments (e.g. 0, 1, 10, 100 µM). Falls back to 'two_window' if fewer
+%     than Bootstrap.MinRecordings recordings are available.
+%   'metadata': read labels directly from UnitTable — see Section 6.
+params.Bootstrap.GroundTruthMethod = 'two_window';
+
+% Alpha: 1e-10 is deliberately strict. The downstream PCA outlier detection
 %   handles impure candidates, but over-inclusion here (weak alpha) floods the
 %   training set with ambiguous units and degrades embedding quality more than
 %   under-inclusion. If you get fewer than ~10 responsive units per culture,
 %   consider relaxing to 1e-6 before enabling UseFDR.
+%
+% FullCurveAlpha: equivalent threshold for 'full_curve' (Spearman p-value).
+%   0.05 is appropriate since the Spearman test is already conservative for
+%   monotonic dose-response and the small N (usually 4-6 recordings).
 %
 % UseFDR: Not recommended as default. BH correction scales with test count and
 %   can be over-conservative on small datasets. The fixed alpha with strict
@@ -66,16 +82,27 @@ params.Harmonization.ACGSource  = 'FullACG';
 % Direction: 'increase' targets inhibitory units (disinhibition → FR increase).
 %   Use 'both' only if your stimulus elicits both excitatory and inhibitory
 %   activity-dependent responses simultaneously (uncommon in acute pharmacology).
-params.Bootstrap.Alpha     = 1e-10;
-params.Bootstrap.NIter     = 1000;
-params.Bootstrap.Direction = 'increase';
+params.Bootstrap.Alpha          = 1e-10;
+params.Bootstrap.FullCurveAlpha = 0.05;
+params.Bootstrap.NIter          = 1000;
+params.Bootstrap.Direction      = 'increase';
 
-% ── Normalization ──────────────────────────────────────────────────────────────
+% ── Normalization and recording selection ──────────────────────────────────────
 %
 % Per-chip z-score before the global z-score removes chip-level offsets in
 % feature distributions (different electrode impedances, culture densities).
 % Set NormalizationVar = '' to skip per-group normalization on single-chip datasets.
 params.UMAP.NormalizationVar = 'ChipID';
+
+% GroupingVar / GroupingValues: controls which recordings contribute to the
+% feature matrix and the bootstrap test. Only recordings whose GroupingVar
+% value is in GroupingValues are included. For dose-response experiments,
+% GroupingValues = 0 (baseline/vehicle) is correct — you want features from
+% the untreated state so that drug-response changes do not contaminate the
+% feature space. If you want features from all recordings, set GroupingValues
+% to [] or to the full range. Must match the metadata column name exactly.
+params.UMAP.GroupingVar    = 'Concentration';
+params.UMAP.GroupingValues = 0;
 
 % ── UMAP geometry ─────────────────────────────────────────────────────────────
 %
@@ -91,30 +118,23 @@ params.UMAP.NormalizationVar = 'ChipID';
 %
 % Spread: 1.0 is the UMAP default. Adjust jointly with MinDist — changing one
 %   without the other often produces no useful change.
-%
-% NNeighbors: 30 for the unsupervised embedding. More neighbors → more global
-%   structure preserved; fewer → more local clusters. AutoNNeighbors = true
-%   sets this to max(15, sqrt(N)) which is useful when dataset size varies
-%   greatly across experiments.
-params.UMAP.MinDist    = 0.1;
-params.UMAP.Spread     = 1.0;
-params.UMAP.NNeighbors = 30;
+params.UMAP.MinDist = 0.1;
+params.UMAP.Spread  = 1.0;
 
-% ── Supervised UMAP dimensionality ────────────────────────────────────────────
+% ── UMAP neighbor counts ───────────────────────────────────────────────────────
 %
-% SupervisedNDims = 2 (default). Controls how many dimensions the supervised
-% UMAP embedding uses. The default is 2 for a human-interpretable scatter plot.
-% Higher values (up to 10) can be explored via optimizeHyperparameters() —
-% see Section 8, which optimizes SupervisedNDims jointly with MinDist and Spread.
-
-% ── Supervised NNeighbors ─────────────────────────────────────────────────────
+% AutoNNeighbors = true: sets n_neighbors for both the unsupervised and supervised
+%   UMAP passes to max(MinNNeighbors, sqrt(N)), scaling automatically with dataset
+%   size. Recommended — prevents n_neighbors from exceeding N on small datasets or
+%   being too local on large ones. When enabled, explicit NNeighbors is ignored.
 %
-% AutoNNeighbors = true also applies to the supervised pass, setting
-% SupervisedNNeighbors = max(15, sqrt(N_train)). This prevents k > N_train
-% on small training sets.
+% SupervisedNDims = 2: embedding dimensionality for supervised UMAP. 2 gives a
+%   human-interpretable scatter plot. BayOpt can explore higher values (up to 10).
 %
-% We recommend keeping this on: supervised UMAP training set size varies
-% substantially across experiments and the sqrt heuristic is well-calibrated.
+% SupervisedNNeighbors is additionally clamped at runtime by a minority-class
+%   ceiling: floor(n_inh / 5). This prevents manifold tearing when the inhibitory
+%   training set is small. BayOpt searches the range [5, 50]; the ceiling is then
+%   applied to whatever value it selects.
 params.UMAP.AutoNNeighbors   = true;
 params.UMAP.MinNNeighbors    = 15;
 
@@ -131,31 +151,77 @@ params.UMAP.AutoConfidenceK = true;
 % ── TargetWeight ──────────────────────────────────────────────────────────────
 %
 % Controls how strongly label information pulls the supervised topology.
-% 0.5 (default) balances label influence against data geometry — appropriate
-% for noisy drug-response labels where the training set is not pure.
-%
-% MetadataTargetWeight (0.8) is used automatically when ground truth comes from
-% metadata (Section 6) because those labels are externally verified and cleaner.
-%
-% Do not set TargetWeight very high (>0.8) for drug-response labels: if labels
-% are noisy the embedding will force false separation.
-params.UMAP.TargetWeight         = 0.5;
-params.UMAP.MetadataTargetWeight = 0.8;
+% 0.3 (default) is deliberately conservative — drug-response labels are noisy
+% (network effects, spike sorting errors, contaminated responsive units) and a
+% lower weight prevents the embedding from forcing false separation.
+% BayOpt can tune this jointly with the topology parameters (Section 8).
+params.UMAP.TargetWeight = 0.3;
 
 % ── Counterexample selection ───────────────────────────────────────────────────
 %
 % CounterexampleRatio = 1: one excitatory candidate per inhibitory candidate.
-% Uniform random selection from the non-responsive pool (not farthest-point,
-% not boundary-weighted). Outlier detection in UMAP space cleans both classes
-% after selection, so the sampling strategy only needs to be unbiased.
-%
-% Farthest-point sampling was rejected: it preferentially picks extreme
-% feature values and artifact-like units that happen to be far from the
-% responsive cluster but are not representative excitatory neurons.
+% Counterexamples are selected by farthest-from-inhibitory-centroid in normalized
+% feature space (correlation distance). This ensures the excitatory training set
+% is well-separated from the inhibitory cluster and avoids boundary-ambiguous units.
 %
 % Increase ratio to 2–3 if you consistently observe too many false inhibitory
 % labels (inhibitory fraction > 30%).
 params.OutlierDetection.CounterexampleRatio = 1;
+
+% ── Outlier detection domain ──────────────────────────────────────────────────
+%
+% Outlier detection runs in PCA space (top 15 components, default) rather than
+% UMAP space. This decouples training label generation from UMAP hyperparameters,
+% avoiding a circular dependency where BayOpt changes indirectly affect labels.
+% Set Domain = 'umap' to use the unsupervised UMAP embedding instead.
+params.OutlierDetection.Domain = 'pca';
+
+% ── Reproducibility ───────────────────────────────────────────────────────────
+%
+% RNGSeed controls the random seed used for UMAP and bootstrap permutations.
+% Change to verify stability: if results change substantially across seeds,
+% either training set is too small or the embedding geometry is degenerate
+% (in which case run optimizeHyperparameters). Default: 42.
+params.RNGSeed = 42;
+
+% ── Confidence threshold (optional) ───────────────────────────────────────────
+%
+% By default all units are classified even if the kNN vote is narrow.
+% Enable UseConfidenceThreshold to mark low-confidence predictions as NaN.
+% ConfidenceThreshold = 0.3 is a conservative floor (near-random boundary for
+% binary classification). Units below this threshold are genuinely ambiguous.
+% Adjust after inspecting ctc.UnitConfidence distribution (Section 9).
+%
+% params.Classification.UseConfidenceThreshold = true;
+% params.Classification.ConfidenceThreshold    = 0.3;
+
+% ── Ensemble classification (optional) ────────────────────────────────────────
+%
+% Runs the full pipeline N times with different UMAP seeds and assigns labels
+% by majority vote. Confidence = fraction of seeds agreeing on the winning class.
+% MinAgreement sets the minimum vote fraction for label assignment — units below
+% it are marked NaN. Substantially increases runtime (Nx pipeline cost).
+%
+% Use when single-run results are unstable (ARI < 0.9 in assessStability) or
+% when downstream analysis is sensitive to occasional label flips.
+%
+% params.Ensemble.Enabled      = true;
+% params.Ensemble.Seeds        = [42, 1042, 2042, 3042, 4042];
+% params.Ensemble.MinAgreement = 0.6;
+
+% ── Diagnostics (optional) ────────────────────────────────────────────────────
+%
+% When enabled, each pipeline stage automatically generates a diagnostic figure:
+%   identifyResponsiveUnits → diagnosticResponsiveUnits  (responsive unit check)
+%   generateTrainLabels     → diagnosticTrainLabels       (label quality check)
+%   classifyUnits           → diagnosticClassification    (prediction plausibility)
+%   optimizeHyperparameters → diagnosticOptimization      (BayOpt convergence)
+%
+% Each diagnostic can also be called manually: ctc.diagnosticResponsiveUnits()
+%
+% params.Diagnostics.Enable      = true;    % master toggle (default false)
+% params.Diagnostics.SaveDir     = '/path/to/output';   % save PNGs here
+% params.Diagnostics.ShowFigures = true;    % false suppresses display (batch mode)
 
 % Construct classifier with recommended parameters
 ctc = CellTypeClassifier(fs, ud, params);
@@ -188,9 +254,9 @@ fprintf('Inhibitory candidates: %d / %d total units\n', ...
 %   1. Fits global z-score + scaling; stores NormalizationParams
 %   2. Optional feature selection (FeatureSelection flag)
 %   3. Unsupervised UMAP embedding (used for outlier detection)
-%   4. Detects and removes outliers from responsive candidates (in UMAP space)
-%   5. Selects counterexamples uniformly from the non-responsive pool
-%   6. Detects and removes outliers from counterexamples (in UMAP space)
+%   4. Detects and removes outliers from responsive candidates (PCA space by default)
+%   5. Selects counterexamples farthest from inhibitory centroid in feature space
+%   6. Detects and removes outliers from counterexamples (PCA space by default)
 %      with top-up from a reserve pool to maintain the target count
 
 ctc.generateTrainLabels();
@@ -227,10 +293,6 @@ fprintf('Excitatory: %d  Inhibitory: %d  Unclassified: %d\n', n_exc, n_inh, n_na
 % LabelField:           column in fs.UnitTable containing cell type labels
 % ResponsiveClassValue: the string value that denotes the inhibitory class
 %
-% The MetadataTargetWeight (0.8) is applied automatically for this path
-% because metadata labels are cleaner and warrant stronger label influence
-% in the supervised UMAP.
-
 params_meta = params;  % inherit all recommended parameters above
 params_meta.Bootstrap.GroundTruthMethod    = 'metadata';
 params_meta.Bootstrap.LabelField           = 'CellType';   % column in UnitTable
@@ -264,20 +326,29 @@ sortACGsByPeak(ctc);
 %
 % Use this when the supervised embedding produces poor geometry: thin ellipses
 % along a single axis, collapsed clusters, or a layout where E/I populations
-% overlap completely. These artifacts arise from MinDist/Spread/NNeighbors
-% interacting badly with a particular dataset's feature density.
+% overlap completely. These artifacts arise from UMAP hyperparameters and feature
+% group imbalances interacting badly with a particular dataset.
 %
-% What is optimized: 3 topology parameters (MinDist, Spread, SupervisedNDims).
-%   Parameters that control label assignment (TargetWeight, CounterexampleRatio)
-%   are excluded — they can trivially improve the metric without improving
-%   classification quality.
+% What is optimized: 7 parameters (MinDist, Spread, SupervisedNDims,
+%   SupervisedNNeighbors, TargetWeight, ACGWeight, WaveformWeight).
 %
-% Objective metric: trustworthiness (default, Venna & Kaski 2006) — measures
-%   how faithfully the low-D embedding preserves high-D neighborhood structure.
-%   T = 1 is perfect; works in any output dimension. Loss = 1 - T.
-%   Silhouette and combined (trustworthiness + silhouette) are also available.
+%   ACGWeight / WaveformWeight: the ACG feature group has ~1001 dimensions vs
+%   ~241 for waveforms. Without correction UMAP treats each dimension equally,
+%   so ACG dominates ~81% of all pairwise distances. BayOpt finds the optimal
+%   per-group scaling; starting values default to 1.0 (equal group contribution).
+%   These cannot be chosen by intuition — only BayOpt can find a non-trivial value.
 %
-% Run count: 30 evaluations (fixed).
+%   SupervisedNNeighbors is additionally clamped at runtime by the minority
+%   class ceiling (floor(n_inh / 5)) to prevent manifold tearing.
+%
+% Objective metric: weighted silhouette (default) — evaluates cluster separation
+%   on the test embedding only, with asymmetric weighting (0.7 inhibitory +
+%   0.3 excitatory). The inhibitory class is harder to classify (minority class),
+%   so it receives more weight. Evaluated on test units only to avoid conflating
+%   parameter quality with the strength of the supervised signal in train units.
+%   Trustworthiness, silhouette, and combined are also available.
+%
+% Run count: 60 evaluations (10 per variable).
 %
 % This should be treated as a one-time calibration step for a new experimental
 % preparation, not run on every dataset.

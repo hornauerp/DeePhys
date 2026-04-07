@@ -105,12 +105,7 @@ else
     cv_n_neighbors = p_umap.SupervisedNNeighbors;
 end
 
-% Per-scenario TargetWeight
-if isfield(labels, 'has_explicit_ce') && labels.has_explicit_ce
-    cv_target_weight = p_umap.MetadataTargetWeight;
-else
-    cv_target_weight = p_umap.TargetWeight;
-end
+cv_target_weight = p_umap.TargetWeight;
 
 % -- Leave-one-culture-out loop -----------------------------------------------
 predicted_labels = nan(1, numel(train_ids));
@@ -171,7 +166,7 @@ for ci = 1:n_cultures
             'sgd_tasks',         20, ...
             'verbose',           'none', ...
             'cluster_detail',    'adaptive', ...
-            'match_supervisors', 3, ...
+            'match_supervisors', 1, ...
             'match_scenarios',   4, ...
             'template_file',     template_file};
         [~, ~, ~, extras_cv] = run_umap(X_held_with_label, test_args{:});

@@ -31,8 +31,15 @@ classdef CellTypeClassifier < handle
         ResponsiveUnitIdx       logical         % (1 x N) units with a significant firing rate response
         ResponsiveUnitDirection string          % (1 x N) "none" | "increase" | "decrease" per unit
         ResponsiveStrength      double          % (1 x N) continuous response strength (rho or effect size)
+        ResponsivenessDetail    struct          % Per-unit dose-response data for diagnostics
+                                               %   .fr_matrix  (n_unique_units x n_doses) firing rates
+                                               %   .dose_values (1 x n_doses) GroupingVar values
+                                               %   .unit_ids   (1 x n_unique_units) UnitID strings
         CounterexampleUnitIdx   logical         % (1 x N) explicit excitatory ground truth (metadata method only)
         TrainLabels             struct          % .sorted_train_ids, .sorted_y_train, etc.
+                                               %   Diagnostic fields: .resp_outlier_mask, .resp_geom_mask,
+                                               %   .ce_outlier_mask, .ce_distances_from_inh_centroid,
+                                               %   .inh_centroid, .filter_counts
         UnitLabels              double          % (1 x N): 1=excitatory, 2=inhibitory, NaN=unclassified
         UnitConfidence          double          % (1 x N): kNN confidence in [0,1]; 1.0 for training units
         UMAP                                   % Trained UMAP model from run_umap
@@ -41,10 +48,11 @@ classdef CellTypeClassifier < handle
         HarmonizedACGs          double          % (N_bins x N_units) ACGs
         HarmonizedSR            double          % Waveform sampling rate after harmonization
         NormalizationParams     struct          % Normalization pipeline params from generateTrainLabels
-                                               %   .mu_global    (1 x F) mean from global z-score
-                                               %   .sigma_global (1 x F) std from global z-score
-                                               %   .nan_cols     (1 x F) logical mask of removed NaN columns
-                                               %   .scale        (1 x F') max(abs) scaling vector
+                                               %   .mu_global       (1 x F) mean from global z-score
+                                               %   .sigma_global    (1 x F) std from global z-score
+                                               %   .nan_cols        (1 x F) logical mask of removed NaN columns
+                                               %   .scale           (1 x F') max(abs) scaling vector
+                                               %   .feat_names_trimmed (1 x F') feature names after NaN removal
         CachedExtraction        struct          % Cached waveform/ACG extraction
         NormalizedFeatures      struct          % Shared preprocessing cache (populated by buildNormalizedFeatures)
                                                %   .X_pergroup   (n_unique x F) after NaN-fill + per-group z-score
@@ -255,9 +263,18 @@ classdef CellTypeClassifier < handle
             defaultParams.UMAP.GroupingVar          = "Concentration";
             defaultParams.UMAP.GroupingValues       = 0;
             defaultParams.UMAP.TrainingCultureIdx   = [];
-            defaultParams.UMAP.TargetWeight         = 0.5;  % 0=data topology, 1=label topology
-            defaultParams.UMAP.MetadataTargetWeight = 0.8;  % higher for metadata (clean labels)
+            defaultParams.UMAP.TargetWeight         = 0.3;  % 0=data topology, 1=label topology
             defaultParams.UMAP.TemplateDir          = '';   % must be set by user; UMAP template saved here
+
+            % ACGWeight / WaveformWeight: dimension-normalised feature group scaling.
+            %   Each group's total L2 contribution is proportional to its weight
+            %   regardless of group size. sqrt(w/n) is applied column-wise so that
+            %   sum-of-squared contributions = w for each group.
+            %   1.0 = equal contribution per group (default); 2.0 = double contribution.
+            %   Applied only before supervised UMAP (not unsupervised) so training
+            %   labels are unaffected and BayOpt can optimize weights independently.
+            defaultParams.UMAP.ACGWeight            = 1.0;
+            defaultParams.UMAP.WaveformWeight       = 1.0;
             defaultParams.UMAP.ConfidenceK          = 15;  % k for kNN confidence scoring
 
             % AutoNNeighbors: UMAP n_neighbors set to max(MinNNeighbors, sqrt(N)).
@@ -291,8 +308,17 @@ classdef CellTypeClassifier < handle
 
             % DipTestAlpha: significance level for Hartigan dip test for multimodality.
             %   Conceptually distinct from OutlierAlpha — tests whether responsive units
-            %   form a unimodal or multimodal distribution in UMAP space.
+            %   form a unimodal or multimodal distribution in detection space.
             defaultParams.OutlierDetection.DipTestAlpha            = 0.05;
+
+            % Domain: space in which outlier detection is performed.
+            %   "pca"  — top NPCAComponents of the candidate feature matrix (default).
+            %            Decouples training labels from UMAP hyperparameters; PCA is
+            %            deterministic and scales well to high-dimensional features.
+            %   "umap" — 2D/nD unsupervised UMAP embedding (legacy behavior).
+            %            More sensitive to UMAP parameter choices.
+            defaultParams.OutlierDetection.Domain          = "pca";
+            defaultParams.OutlierDetection.NPCAComponents  = 15;
 
             % ── Classification ────────────────────────────────────────────────
             defaultParams.Classification.UseConfidenceThreshold = false;  % mark low-confidence predictions as NaN
@@ -309,20 +335,34 @@ classdef CellTypeClassifier < handle
             defaultParams.Ensemble.Seeds        = [42, 1042, 2042, 3042, 4042];
             defaultParams.Ensemble.MinAgreement = 0.6;
 
-            % ── Bayesian optimization (topology parameters only) ─────────────
-            % Optimizes 3 fixed topology parameters (MinDist, Spread, SupervisedNDims)
-            % to produce well-structured supervised embeddings. TargetWeight and
-            % CounterexampleRatio are excluded — the objective can be trivially gamed
-            % by these. Objective metric: trustworthiness (Venna & Kaski 2006),
-            % which measures embedding faithfulness and works for any output dimension.
-            % 30 evaluations fixed.
+            % ── Bayesian optimization ────────────────────────────────────────
+            % Optimizes 6 parameters to produce well-structured supervised embeddings.
+            % Objective: "weighted_silhouette" (default) — evaluates cluster separation
+            % on the TEST embedding only (not train, which is directly shaped by the
+            % supervised signal). Asymmetric weighting 0.7*inh + 0.3*exc because the
+            % minority inhibitory class is the harder classification target.
+            % 60 evaluations (10 per variable).
             defaultParams.BayesianOptimization.MinDistRange              = [0.01, 1.0];
             defaultParams.BayesianOptimization.SpreadRange               = [0.5, 5.0];
             defaultParams.BayesianOptimization.SupervisedNDimsRange      = [2, 10];
-            defaultParams.BayesianOptimization.ObjectiveMetric           = "trustworthiness";  % "trustworthiness" | "silhouette" | "combined"
+            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 50];
+            defaultParams.BayesianOptimization.TargetWeightRange         = [0.05, 0.5];
+            defaultParams.BayesianOptimization.ACGWeightRange            = [0.5, 3.0];
+            defaultParams.BayesianOptimization.WaveformWeightRange       = [0.5, 3.0];
+            defaultParams.BayesianOptimization.ObjectiveMetric           = "weighted_silhouette";  % "weighted_silhouette" | "trustworthiness" | "silhouette" | "combined"
             defaultParams.BayesianOptimization.UseInterneuronPenalty     = false;
             defaultParams.BayesianOptimization.InterneuronTarget         = 0.19;
             defaultParams.BayesianOptimization.InterneuronWeight         = 5.0;
+
+            % ── Diagnostics ───────────────────────────────────────────────────
+            % Enable: when true, each pipeline method generates a diagnostic figure
+            %   at the end of its execution. Each diagnostic method is also callable
+            %   independently: ctc.diagnosticResponsiveUnits(), etc.
+            % SaveDir: when non-empty, figures are saved as PNG to this directory.
+            % ShowFigures: set false for headless/batch runs (saves without display).
+            defaultParams.Diagnostics.Enable      = false;
+            defaultParams.Diagnostics.SaveDir     = '';
+            defaultParams.Diagnostics.ShowFigures = true;
 
             % ── General ───────────────────────────────────────────────────────
             defaultParams.RNGSeed     = 42;
@@ -344,12 +384,34 @@ classdef CellTypeClassifier < handle
     end
 
     % =====================================================================
+    % Diagnostic methods (callable independently or auto-triggered)
+    % =====================================================================
+    methods
+
+        % Declared here; implemented in diagnosticResponsiveUnits.m
+        diagnosticResponsiveUnits(ctc)
+
+        % Declared here; implemented in diagnosticTrainLabels.m
+        diagnosticTrainLabels(ctc)
+
+        % Declared here; implemented in diagnosticClassification.m
+        diagnosticClassification(ctc)
+
+        % Declared here; implemented in diagnosticOptimization.m
+        diagnosticOptimization(ctc, results)
+
+    end
+
+    % =====================================================================
     % Private helpers
     % =====================================================================
     methods (Access = private)
 
         % Declared here; implemented in buildNormalizedFeatures.m
         buildNormalizedFeatures(ctc)
+
+        % Declared here; implemented in saveDiagnosticFigure.m
+        saveDiagnosticFigure(ctc, fig, stage_name)
 
         function [unique_ud, all_to_unique, unique_to_all] = uniqueUnitMap(ctc)
         % UNIQUEUNITMAP  Return one representative UnitData per unique UnitID.

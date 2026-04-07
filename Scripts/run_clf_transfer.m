@@ -47,7 +47,7 @@ if ~exist('ctc', 'var')
     parameters.UMAP.NNeighbors         = 100;
     parameters.UMAP.MinDist            = 0.1;
     parameters.UMAP.NDims              = 10;
-    parameters.UMAP.TargetWeight       = 0.5;
+    parameters.UMAP.TargetWeight       = 0.3;
     parameters.Harmonization.ACGSource  = 'FullACG';
     parameters.Harmonization.ACGBinSize = 0.0005;
     parameters.Harmonization.ACGLag     = 0.1;
