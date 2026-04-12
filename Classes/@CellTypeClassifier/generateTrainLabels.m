@@ -151,9 +151,12 @@ ctc.Reduction.Unsupervised = reduction;
 fprintf('Unsupervised UMAP: %d units, %d features, %d dimensions\n', ...
     N_all, size(X_all, 2), p_umap.NDims);
 
-% -- Isolation Forest on inhibitory candidates in PCA space -------------------
-% Decouples training labels from UMAP hyperparameters (prerequisite for stable
-% Bayesian optimization). Near-zero variance columns removed before PCA.
+% -- Isolation Forest on inhibitory candidates --------------------------------
+outlier_domain    = lower(string(p_outlr.Domain));
+contamination     = p_outlr.ContaminationFraction;
+gmm_sep           = p_outlr.AutoGMMSeparation;
+subset_global_idx = find(subset_mask);  % maps subset-local → global unique-unit index
+
 subset_responsive = resp_unique(subset_mask);
 responsive_local  = find(subset_responsive);
 
@@ -171,23 +174,17 @@ if isempty(responsive_local)
         n_resp_total, sum(subset_mask));
 end
 
-candidate_features     = X_feat(responsive_local, :);
-col_var                = var(candidate_features, 0, 1);
-candidate_features_pca = candidate_features(:, col_var > 1e-10);
-n_pca = min([p_outlr.NPCAComponents, size(candidate_features_pca, 1) - 1, size(candidate_features_pca, 2)]);
-if n_pca >= 1
-    [~, inh_pca_scores] = pca(candidate_features_pca, 'NumComponents', n_pca, 'Algorithm', 'eig');
-else
-    inh_pca_scores = candidate_features_pca;
-end
+inh_iforest_input = prepareIforestInput(X_feat, responsive_local, ...
+    reduction, subset_global_idx, outlier_domain, p_outlr);
 
-[~, tf_resp_outlier] = iforest(inh_pca_scores, ...
-    'ContaminationFraction', p_outlr.ContaminationFraction);
+[tf_resp_outlier, resp_outlier_info] = runOutlierDetection( ...
+    inh_iforest_input, contamination, gmm_sep);
 
 n_rejected = sum(tf_resp_outlier);
 n_total    = numel(tf_resp_outlier);
-fprintf('Isolation forest (inh, PCA space): %d/%d flagged (%.0f%%)\n', ...
-    n_rejected, n_total, n_rejected / n_total * 100);
+fprintf('Isolation forest (inh, %s, %s): %d/%d flagged (%.0f%%)%s\n', ...
+    outlier_domain, resp_outlier_info.mode, n_rejected, n_total, ...
+    n_rejected / n_total * 100, resp_outlier_info.detail);
 
 clean_resp_local = responsive_local(~tf_resp_outlier(:)');
 
@@ -243,21 +240,17 @@ if has_explicit_ce
     ce_subset    = ce_unique(subset_mask);
     ce_local_all = find(ce_subset);
 
-    % Isolation forest on counterexample class (PCA space).
-    ce_feat     = X_feat(ce_local_all, :);
-    col_var_ce  = var(ce_feat, 0, 1);
-    ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
-    n_pca_ce    = min([p_outlr.NPCAComponents, size(ce_feat_pca,1)-1, size(ce_feat_pca,2)]);
-    if n_pca_ce >= 1
-        [~, ce_pca_scores] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
-    else
-        ce_pca_scores = ce_feat_pca;
-    end
-    [~, tf_ce_outlier] = iforest(ce_pca_scores, 'ContaminationFraction', p_outlr.ContaminationFraction);
+    % Isolation forest on counterexample class.
+    ce_iforest_input = prepareIforestInput(X_feat, ce_local_all, ...
+        reduction, subset_global_idx, outlier_domain, p_outlr);
+    [tf_ce_outlier, ce_outlier_info] = runOutlierDetection( ...
+        ce_iforest_input, contamination, gmm_sep);
     n_ce_rejected = sum(tf_ce_outlier);
     if n_ce_rejected > 0
-        fprintf('Isolation forest (CE, PCA space): %d/%d flagged (%.0f%%)\n', ...
-            n_ce_rejected, numel(tf_ce_outlier), n_ce_rejected / numel(tf_ce_outlier) * 100);
+        fprintf('Isolation forest (CE, %s, %s): %d/%d flagged (%.0f%%)%s\n', ...
+            outlier_domain, ce_outlier_info.mode, ...
+            n_ce_rejected, numel(tf_ce_outlier), ...
+            n_ce_rejected / numel(tf_ce_outlier) * 100, ce_outlier_info.detail);
     end
     counterexample_idx_local = ce_local_all(~tf_ce_outlier(:)');
     ce_outlier_mask_diag = tf_ce_outlier(:)';
@@ -308,23 +301,18 @@ else
         n_pick_actual = min(n_pick, numel(far_pool));
         sampled_local = far_pool(perm_order(1:n_pick_actual));
 
-        % Isolation forest on selected counterexamples (PCA space).
-        ce_feat     = X_feat(sampled_local, :);
-        col_var_ce  = var(ce_feat, 0, 1);
-        ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
-        n_pca_ce    = min([p_outlr.NPCAComponents, size(ce_feat_pca,1)-1, size(ce_feat_pca,2)]);
-        if n_pca_ce >= 1
-            [~, ce_pca_scores] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
-        else
-            ce_pca_scores = ce_feat_pca;
-        end
-        [~, tf_ce_outlier]   = iforest(ce_pca_scores, 'ContaminationFraction', p_outlr.ContaminationFraction);
+        % Isolation forest on selected counterexamples.
+        ce_iforest_input = prepareIforestInput(X_feat, sampled_local, ...
+            reduction, subset_global_idx, outlier_domain, p_outlr);
+        [tf_ce_outlier, ce_outlier_info] = runOutlierDetection( ...
+            ce_iforest_input, contamination, gmm_sep);
         n_ce_rejected        = sum(tf_ce_outlier);
         ce_outlier_mask_diag = tf_ce_outlier(:)';
 
         if n_ce_rejected > 0
-            fprintf('Isolation forest (CE, PCA space): %d/%d flagged\n', ...
-                n_ce_rejected, n_pick_actual);
+            fprintf('Isolation forest (CE, %s, %s): %d/%d flagged%s\n', ...
+                outlier_domain, ce_outlier_info.mode, ...
+                n_ce_rejected, n_pick_actual, ce_outlier_info.detail);
             counterexample_idx_local = sampled_local(~tf_ce_outlier(:)');
         else
             counterexample_idx_local = sampled_local;
@@ -422,6 +410,104 @@ function name = labelName(label)
     if label == 1; name = 'excitatory';
     elseif label == 2; name = 'inhibitory';
     else; name = sprintf('class_%d', label);
+    end
+end
+
+function coords = prepareIforestInput(X_feat, local_indices, ...
+        reduction, subset_global_idx, domain, p_outlr)
+% PREPAREIFORESTINPUT  Get coordinates for iforest based on domain.
+%   "umap" — index into the full UMAP embedding using global indices
+%   "pca"  — PCA on candidate features (legacy behavior)
+
+    if domain == "umap"
+        global_idx = subset_global_idx(local_indices);
+        coords = reduction(global_idx, :);
+    else
+        candidate_features = X_feat(local_indices, :);
+        col_var = var(candidate_features, 0, 1);
+        candidate_features_clean = candidate_features(:, col_var > 1e-10);
+        n_pca = min([p_outlr.NPCAComponents, ...
+                     size(candidate_features_clean, 1) - 1, ...
+                     size(candidate_features_clean, 2)]);
+        if n_pca >= 1
+            [~, coords] = pca(candidate_features_clean, ...
+                'NumComponents', n_pca, 'Algorithm', 'eig');
+        else
+            coords = candidate_features_clean;
+        end
+    end
+end
+
+function [tf_outlier, info] = runOutlierDetection(candidate_coords, contamination, gmm_sep)
+% RUNOUTLIERDETECTION  Isolation forest with fixed or auto contamination.
+%   Fixed mode (contamination is numeric): iforest with that ContaminationFraction.
+%   Auto mode (contamination == "auto"): iforest without ContaminationFraction,
+%     then fit 2-component GMM on anomaly scores. Flag the high-score component
+%     only if the two components are well-separated (> gmm_sep pooled stds apart).
+
+    n = size(candidate_coords, 1);
+
+    if isstring(contamination) || ischar(contamination)
+        is_auto = lower(string(contamination)) == "auto";
+    else
+        is_auto = false;
+    end
+
+    if ~is_auto
+        % Fixed contamination fraction
+        [forest, tf_outlier] = iforest(candidate_coords, ...
+            'ContaminationFraction', contamination);
+        info.mode   = sprintf('fixed=%.2f', contamination);
+        info.detail = '';
+        return
+    end
+
+    % Auto mode: infer contamination from anomaly score distribution
+    if n < 10
+        % Too few samples for reliable GMM — skip outlier detection
+        tf_outlier = false(n, 1);
+        info.mode   = 'auto';
+        info.detail = ' — skipped (n < 10)';
+        return
+    end
+
+    % Train iforest and get anomaly scores
+    [forest, ~] = iforest(candidate_coords);
+    [~, scores] = isanomaly(forest, candidate_coords);
+
+    % Fit 2-component GMM on anomaly scores
+    try
+        gmm = fitgmdist(scores(:), 2, 'RegularizationValue', 1e-6, ...
+            'Options', statset('MaxIter', 200, 'TolFun', 1e-6));
+    catch
+        % GMM failed — no outliers
+        tf_outlier = false(n, 1);
+        info.mode   = 'auto';
+        info.detail = ' — GMM fit failed, no outliers removed';
+        return
+    end
+
+    % Identify the high-score (outlier) component
+    [~, outlier_comp] = max(gmm.mu);
+    inlier_comp       = 3 - outlier_comp;
+
+    % Compute separation: distance between means / pooled std
+    pooled_std = sqrt(mean(gmm.Sigma(:)));
+    if pooled_std == 0; pooled_std = 1; end
+    separation = abs(gmm.mu(1) - gmm.mu(2)) / pooled_std;
+
+    if separation >= gmm_sep
+        % Components are well-separated — flag outlier component
+        posterior  = gmm.posterior(scores(:));
+        tf_outlier = posterior(:, outlier_comp) > 0.5;
+        info.mode   = 'auto';
+        info.detail = sprintf(' — GMM separation=%.1f', separation);
+    else
+        % No clear bimodal structure — no outliers
+        tf_outlier = false(n, 1);
+        info.mode   = 'auto';
+        info.detail = sprintf(' — no bimodal separation (%.1f < %.1f)', ...
+            separation, gmm_sep);
     end
 end
 

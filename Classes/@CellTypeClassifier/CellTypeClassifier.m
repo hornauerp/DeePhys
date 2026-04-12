@@ -284,6 +284,69 @@ classdef CellTypeClassifier < handle
     % =====================================================================
     methods (Static)
 
+        function ctc = fromProcessors(proc_array, parameters)
+        % FROMPROCESSORS  Build CellTypeClassifier from RecordingProcessor array.
+        %   ctc = CellTypeClassifier.fromProcessors(procs, params)
+            arguments
+                proc_array  RecordingProcessor
+                parameters  struct = struct()
+            end
+            fs  = FeatureStore.fromProcessors(proc_array);
+            ud  = [proc_array.Units];
+            ctc = CellTypeClassifier(fs, ud, parameters);
+        end
+
+        function ctc = fromDatabase(parameters, opts)
+        % FROMDATABASE  Query RecordingDatabase and build CellTypeClassifier.
+        %   ctc = CellTypeClassifier.fromDatabase(params, Mutation="WT", DIV=[14 21])
+        %
+        %   Finds processor files at <input_path>/RecordingProcessor.mat or
+        %   <input_path>/MEArecording.mat (legacy). RecordingProcessor.load()
+        %   auto-migrates legacy format.
+            arguments
+                parameters  struct = struct()
+                opts.Mutation string = ""
+                opts.ChipID string = ""
+                opts.PlateID string = ""
+                opts.WellID string = ""
+                opts.DIV double = []
+            end
+            db = RecordingDatabase.instance();
+            query_args = {};
+            if opts.Mutation ~= ""; query_args = [query_args, {'Mutation', opts.Mutation}]; end
+            if opts.ChipID ~= "";   query_args = [query_args, {'ChipID', opts.ChipID}]; end
+            if opts.PlateID ~= "";  query_args = [query_args, {'PlateID', opts.PlateID}]; end
+            if opts.WellID ~= "";   query_args = [query_args, {'WellID', opts.WellID}]; end
+            if ~isempty(opts.DIV);  query_args = [query_args, {'DIV', opts.DIV}]; end
+            T = db.queryRecordings(query_args{:});
+            assert(~isempty(T) && height(T) > 0, ...
+                'CellTypeClassifier:noRecordings', 'No recordings match the query.');
+
+            input_paths = string(T.input_path);
+            proc_paths = strings(numel(input_paths), 1);
+            for i = 1:numel(input_paths)
+                ip = input_paths(i);
+                rp = fullfile(ip, "RecordingProcessor.mat");
+                mp = fullfile(ip, "MEArecording.mat");
+                if isfile(rp)
+                    proc_paths(i) = rp;
+                elseif isfile(mp)
+                    proc_paths(i) = mp;
+                elseif isfile(ip) && endsWith(ip, ".mat")
+                    proc_paths(i) = ip;
+                end
+            end
+            found = proc_paths ~= "";
+            assert(any(found), 'CellTypeClassifier:noFiles', ...
+                'No processor/MEArecording files found for queried recordings.');
+            if ~all(found)
+                fprintf('fromDatabase: %d/%d files found, skipping %d missing\n', ...
+                    sum(found), numel(found), sum(~found));
+            end
+            procs = RecordingProcessor.loadMany(proc_paths(found));
+            ctc = CellTypeClassifier.fromProcessors(procs, parameters);
+        end
+
         function ctc = fromLegacyGroup(rg, parameters)
         % FROMLEGACYGROUP  Migrate from an old RecordingGroup.
             arguments
@@ -402,11 +465,16 @@ classdef CellTypeClassifier < handle
             defaultParams.OutlierDetection.CounterexampleDistancePercentile = 50;   % percentile of inh self-distances used as CE distance threshold
 
             % Isolation forest parameters (used for both inh candidate and CE outlier detection).
-            %   ContaminationFraction: expected fraction of outliers in [0, 0.5).
-            %     Higher = more aggressive removal. Tune if iforest flags too many or too few.
-            %   NPCAComponents: PCA dimensionality fed into iforest. Near-zero variance
-            %     columns are removed before PCA. Capped at n-1 and actual feature count.
-            defaultParams.OutlierDetection.ContaminationFraction = 0.05;
+            %   Domain: space for iforest input. "umap" = unsupervised UMAP embedding
+            %     (captures nonlinear structure); "pca" = PCA of candidate features (legacy).
+            %   ContaminationFraction: "auto" = infer via GMM on anomaly scores (only
+            %     remove outliers when bimodal separation exists); or numeric in [0, 0.5).
+            %   AutoGMMSeparation: min distance between GMM component means (in units of
+            %     pooled std) to declare a distinct outlier population. Only used when "auto".
+            %   NPCAComponents: PCA dimensionality when Domain="pca". Capped at n-1.
+            defaultParams.OutlierDetection.Domain                = "umap";
+            defaultParams.OutlierDetection.ContaminationFraction = "auto";
+            defaultParams.OutlierDetection.AutoGMMSeparation     = 2;
             defaultParams.OutlierDetection.NPCAComponents        = 15;
 
             % ── Classification ────────────────────────────────────────────────
