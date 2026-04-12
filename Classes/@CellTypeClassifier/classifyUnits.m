@@ -1,24 +1,21 @@
 function classifyUnits(ctc)
 % CLASSIFYUNITS  Classify all units using supervised UMAP projection.
 %
-% Trains a supervised UMAP on the labelled training set, then projects all
-% remaining (test) units into the same embedding space to predict cell type.
+% Two classification methods (Classification.Method):
+%   "knn"   — distance-weighted kNN in feature space (default)
+%   "graph" — label propagation on a kNN graph built in the supervised UMAP
+%             embedding. The supervised UMAP reshapes the topology so that
+%             same-class units cluster together; a kNN graph in this space
+%             captures label-aware nonlinear neighborhoods. Training labels
+%             are clamped and iteratively propagated through edge weights.
 %
-% Feature extraction and per-group z-score are shared with generateTrainLabels
-% via the NormalizedFeatures cache (buildNormalizedFeatures). This function
-% applies the NormalizationParams stored by generateTrainLabels to all units,
-% ensuring an identical feature space across both UMAP runs:
-%   1. Per-group z-score (done in buildNormalizedFeatures, shared)
-%   2. Apply stored global z-score (mu, sigma from generateTrainLabels subset)
-%   3. Remove same NaN columns as generateTrainLabels
-%   4. Apply same max(abs) scaling
-%   5. Apply feature_selection_mask if FeatureSelection was enabled
-%   6. Apply dimension-normalised ACG/Waveform group weighting
+% Both methods run a supervised UMAP. For "knn" the embedding is visualization
+% only; for "graph" it drives classification.
 %
 % Requires ctc.TrainLabels and ctc.NormalizationParams to be set
 % (run generateTrainLabels first).
 % Sets: ctc.UnitLabels  (1 = excitatory, 2 = inhibitory, NaN = unclassified)
-%       ctc.UnitConfidence  distance-weighted kNN vote fraction in [0,1];
+%       ctc.UnitConfidence  class probability (graph) or vote fraction (kNN);
 %                           1.0 for training units
 
 arguments
@@ -32,6 +29,7 @@ assert(~isempty(ctc.NormalizationParams), ...
 
 labels = ctc.TrainLabels;
 p_umap = ctc.Parameters.UMAP;
+p_conf = ctc.Parameters.Classification;
 np     = ctc.NormalizationParams;
 
 % -- Get normalized features (shared with generateTrainLabels) ----------------
@@ -112,38 +110,141 @@ ctc.Reduction.Train  = train_reduction;
 ctc.Reduction.Test   = test_reduction;
 ctc.Reduction.Extras = extras;
 
-% -- Distance-weighted kNN classification + confidence in embedding space -----
-if p_umap.AutoConfidenceK
-    conf_k = max(5, round(sqrt(size(train_reduction, 1))));
-    fprintf('Auto ConfidenceK: %d (N_train=%d)\n', conf_k, size(train_reduction, 1));
-else
-    conf_k = p_umap.ConfidenceK;
-end
+% -- Classification -----------------------------------------------------------
+classify_method = lower(string(p_conf.Method));
 
 unique_confidence = nan(1, n_unique);
 unique_confidence(labels.sorted_train_ids) = 1.0;
 
-Y_pred          = nan(1, size(test_reduction, 1));
-test_global_idx = find(test_idx);
+if classify_method == "graph"
+    % ── Graph-based label propagation on supervised UMAP embedding ──────
+    % The supervised UMAP reshapes the topology so same-class units are
+    % closer. Build a kNN graph in this label-aware space, then propagate
+    % training labels through edge weights to classify test units.
 
-if ~isempty(test_reduction) && ~isempty(train_reduction)
-    k_actual = min(conf_k, size(X_train, 1));
-    [nn_idx, nn_dists] = knnsearch(X_train, X_test, 'K', k_actual);
+    % Reconstruct full embedding in unique-unit order
+    all_reduction = zeros(n_unique, size(train_reduction, 2));
+    all_reduction(train_idx, :) = train_reduction;
+    all_reduction(test_idx, :)  = test_reduction;
+
+    if p_umap.AutoConfidenceK
+        graph_k = max(5, round(sqrt(n_unique)));
+    else
+        graph_k = p_umap.ConfidenceK;
+    end
+    graph_k = min(graph_k, n_unique - 1);
+
+    [knn_idx, knn_dists] = knnsearch(all_reduction, all_reduction, 'K', graph_k + 1);
+    knn_idx   = knn_idx(:, 2:end);    % remove self
+    knn_dists = knn_dists(:, 2:end);
+
+    % Build sparse weighted adjacency (Gaussian kernel on distances)
+    sigma = median(knn_dists(:, end));  % bandwidth from k-th neighbor distances
+    if sigma == 0; sigma = 1; end
+    rows = repmat((1:n_unique)', 1, graph_k);
+    G = sparse(rows(:), knn_idx(:), exp(-knn_dists(:).^2 / (2 * sigma^2)), n_unique, n_unique);
+
+    % Symmetrise and row-normalise
+    G = (G + G') / 2;
+    row_sums = sum(G, 2);
+    row_sums(row_sums == 0) = 1;
+    W = G ./ row_sums;  % row-stochastic transition matrix
+
+    fprintf('Graph classification: %d nodes, k=%d, supervised UMAP %dD\n', ...
+        n_unique, graph_k, size(all_reduction, 2));
+
+    % Initialise label distributions: [P(exc), P(inh)] per unit
+    F_label = ones(n_unique, 2) * 0.5;  % uninformed prior
+    for ti = 1:numel(labels.sorted_train_ids)
+        idx = labels.sorted_train_ids(ti);
+        if labels.sorted_y_train(ti) == 1
+            F_label(idx, :) = [1, 0];
+        else
+            F_label(idx, :) = [0, 1];
+        end
+    end
+
+    % Iterative label propagation (clamp labeled nodes each iteration)
+    max_iter = p_conf.GraphMaxIter;
+    tol      = p_conf.GraphConvergenceTol;
+
+    for iter = 1:max_iter
+        F_new = W * F_label;
+
+        % Re-normalise rows to valid distributions
+        F_row_sum = sum(F_new, 2);
+        F_row_sum(F_row_sum == 0) = 1;
+        F_new = F_new ./ F_row_sum;
+
+        % Clamp training labels
+        for ti = 1:numel(labels.sorted_train_ids)
+            idx = labels.sorted_train_ids(ti);
+            if labels.sorted_y_train(ti) == 1
+                F_new(idx, :) = [1, 0];
+            else
+                F_new(idx, :) = [0, 1];
+            end
+        end
+
+        % Check convergence
+        if max(abs(F_new(:) - F_label(:))) < tol
+            fprintf('Graph label propagation converged at iteration %d\n', iter);
+            F_label = F_new;
+            break
+        end
+        F_label = F_new;
+    end
+    if iter == max_iter
+        fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
+    end
+
+    % Extract predictions and confidence for test units
+    test_global_idx = find(test_idx);
+    Y_pred = nan(1, numel(test_global_idx));
     for i = 1:numel(test_global_idx)
-        neighbor_labels = labels.sorted_y_train(nn_idx(i, :));
-        d       = nn_dists(i, :);
-        eps_d   = max(d) * 1e-6;
-        if eps_d == 0; eps_d = 1e-10; end
-        w       = 1 ./ (d + eps_d);
-        w_total = sum(w);
-        w_exc   = sum(w(neighbor_labels == 1)) / w_total;
-        w_inh   = sum(w(neighbor_labels == 2)) / w_total;
-        if w_exc >= w_inh
+        gi = test_global_idx(i);
+        p_exc = F_label(gi, 1);
+        p_inh = F_label(gi, 2);
+        if p_exc >= p_inh
             Y_pred(i) = 1;
-            unique_confidence(test_global_idx(i)) = w_exc;
+            unique_confidence(gi) = p_exc;
         else
             Y_pred(i) = 2;
-            unique_confidence(test_global_idx(i)) = w_inh;
+            unique_confidence(gi) = p_inh;
+        end
+    end
+
+else
+    % ── Feature-space kNN classification ────────────────────────────────
+    if p_umap.AutoConfidenceK
+        conf_k = max(5, round(sqrt(size(train_reduction, 1))));
+        fprintf('Auto ConfidenceK: %d (N_train=%d)\n', conf_k, size(train_reduction, 1));
+    else
+        conf_k = p_umap.ConfidenceK;
+    end
+
+    Y_pred          = nan(1, size(test_reduction, 1));
+    test_global_idx = find(test_idx);
+
+    if ~isempty(test_reduction) && ~isempty(train_reduction)
+        k_actual = min(conf_k, size(X_train, 1));
+        [nn_idx, nn_dists] = knnsearch(X_train, X_test, 'K', k_actual);
+        for i = 1:numel(test_global_idx)
+            neighbor_labels = labels.sorted_y_train(nn_idx(i, :));
+            d       = nn_dists(i, :);
+            eps_d   = max(d) * 1e-6;
+            if eps_d == 0; eps_d = 1e-10; end
+            w       = 1 ./ (d + eps_d);
+            w_total = sum(w);
+            w_exc   = sum(w(neighbor_labels == 1)) / w_total;
+            w_inh   = sum(w(neighbor_labels == 2)) / w_total;
+            if w_exc >= w_inh
+                Y_pred(i) = 1;
+                unique_confidence(test_global_idx(i)) = w_exc;
+            else
+                Y_pred(i) = 2;
+                unique_confidence(test_global_idx(i)) = w_inh;
+            end
         end
     end
 end
@@ -154,7 +255,6 @@ unique_labels(labels.sorted_train_ids) = labels.sorted_y_train;
 unique_labels(test_idx)                = Y_pred;
 
 % Optional confidence threshold
-p_conf = ctc.Parameters.Classification;
 if p_conf.UseConfidenceThreshold
     low_conf = unique_confidence < p_conf.ConfidenceThreshold & ~train_idx;
     unique_labels(low_conf) = NaN;

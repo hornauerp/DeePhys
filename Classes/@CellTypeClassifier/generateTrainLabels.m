@@ -112,7 +112,18 @@ ctc.NormalizationParams = struct( ...
     'feature_selection_mask', feature_selection_mask, ...
     'feat_names_trimmed',     feat_names_trimmed);
 
-% -- Unsupervised UMAP embedding (always computed) ----------------------------
+% -- Normalize ALL unique units (for full-dataset UMAP) -----------------------
+X_all = normalize(nf.X_pergroup, 'center', mu_global, 'scale', sigma_global);
+X_all(:, nan_cols) = [];
+X_all = X_all ./ scale;
+if any(~feature_selection_mask)
+    X_all = X_all(:, feature_selection_mask);
+end
+
+% -- Unsupervised UMAP embedding on ALL unique units --------------------------
+% Run on the full dataset so the UMAP graph covers all units (not just the
+% training subset). This enables graph-based label propagation in classifyUnits
+% and provides a global embedding for diagnostics.
 assert(~isempty(p_umap.TemplateDir), ...
     ['CellTypeClassifier:noTemplateDir  ', ...
     'Parameters.UMAP.TemplateDir must be set before calling generateTrainLabels. ' ...
@@ -120,17 +131,15 @@ assert(~isempty(p_umap.TemplateDir), ...
 assert(isfolder(p_umap.TemplateDir), ...
     'CellTypeClassifier:templateDirMissing  %s does not exist.', p_umap.TemplateDir);
 
-N_feat = size(X_feat, 1);
+N_all = size(X_all, 1);
 if p_umap.AutoNNeighbors
-    n_neighbors = max(p_umap.MinNNeighbors, round(sqrt(N_feat)));
-    fprintf('Auto NNeighbors: %d (N=%d)\n', n_neighbors, N_feat);
+    n_neighbors = max(p_umap.MinNNeighbors, round(sqrt(N_all)));
+    fprintf('Auto NNeighbors: %d (N=%d)\n', n_neighbors, N_all);
 else
     n_neighbors = p_umap.NNeighbors;
 end
 
-% No template saved — unsupervised embedding is for visualization only.
-% Outlier detection uses iforest in PCA space, not this embedding.
-[reduction, umap_model, ~, ~] = run_umap(X_feat, ...
+[reduction, umap_model, ~, ~] = run_umap(X_all, ...
     'n_components',  p_umap.NDims, ...
     'n_neighbors',   n_neighbors, ...
     'min_dist',      p_umap.MinDist, ...
@@ -139,6 +148,8 @@ end
 ctc.UMAP = umap_model;
 if isempty(ctc.Reduction); ctc.Reduction = struct(); end
 ctc.Reduction.Unsupervised = reduction;
+fprintf('Unsupervised UMAP: %d units, %d features, %d dimensions\n', ...
+    N_all, size(X_all, 2), p_umap.NDims);
 
 % -- Isolation Forest on inhibitory candidates in PCA space -------------------
 % Decouples training labels from UMAP hyperparameters (prerequisite for stable

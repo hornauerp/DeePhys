@@ -312,7 +312,7 @@ classdef CellTypeClassifier < handle
             %                  LabelField specifies the column; ResponsiveClassValue specifies which
             %                  value maps to ResponsiveClassLabel. Units with other non-empty values
             %                  become explicit counterexample ground truth. No FR tests are run.
-            defaultParams.Bootstrap.GroundTruthMethod     = "two_window";
+            defaultParams.Bootstrap.GroundTruthMethod     = "full_curve";
             % metadata: read cell type labels directly from UnitTable.
             %   LabelField: column name in FeatureStore.UnitTable (e.g. "CellType")
             %   ResponsiveClassValue: value in that column that maps to ResponsiveClassLabel
@@ -410,9 +410,12 @@ classdef CellTypeClassifier < handle
             defaultParams.OutlierDetection.NPCAComponents        = 15;
 
             % ── Classification ────────────────────────────────────────────────
-            defaultParams.Classification.UseConfidenceThreshold = false;  % mark low-confidence predictions as NaN
-            defaultParams.Classification.ConfidenceThreshold    = 0.3;    % threshold when UseConfidenceThreshold=true
-            defaultParams.Classification.UseJoinedTransform     = false;
+            defaultParams.Classification.Method                 = "graph";   % "knn" (feature-space kNN) or "graph" (UMAP graph label propagation)
+            defaultParams.Classification.GraphMaxIter            = 100;    % graph method: max label propagation iterations
+            defaultParams.Classification.GraphConvergenceTol     = 1e-4;   % graph method: convergence tolerance
+            defaultParams.Classification.UseConfidenceThreshold  = false;  % mark low-confidence predictions as NaN
+            defaultParams.Classification.ConfidenceThreshold     = 0.8;    % threshold when UseConfidenceThreshold=true
+            defaultParams.Classification.UseJoinedTransform      = false;
 
             % ── Ensemble classification ───────────────────────────────────────
             % Enabled: run the pipeline N times with different RNG seeds and take
@@ -463,7 +466,7 @@ classdef CellTypeClassifier < handle
             % are projected into the same feature space.
             defaultParams.Harmonization.WaveformTargetSamplingRate = 120000;  % Hz
             defaultParams.Harmonization.WaveformPreTrough          = 1.0;     % ms before trough
-            defaultParams.Harmonization.WaveformPostTrough         = 1.0;     % ms after trough
+            defaultParams.Harmonization.WaveformPostTrough         = 2.0;     % ms after trough
             defaultParams.Harmonization.WaveformEdgeMode           = "trim";  % "zero" | "edge" | "trim"
             defaultParams.Harmonization.ACGBinSize                 = 0.0005;  % s (0.5 ms bins)
             defaultParams.Harmonization.ACGLag                     = 0.1;     % s (+-100 ms -> 401 bins)
