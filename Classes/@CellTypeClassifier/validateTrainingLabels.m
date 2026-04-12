@@ -52,10 +52,17 @@ end
 X_raw(isnan(X_raw)) = 0;
 
 % Per-group z-score (same as generateTrainLabels / classifyUnits)
+% Map unique units to FeatureStore rows via UnitID+RecordingID (order-independent)
+ud = ctc.UnitDataArray;
+rep_ud_keys_v = string({ud(unique_to_rep).UnitID}) + "|" + string({ud(unique_to_rep).RecordingID});
+fs_keys_v     = string(ctc.FeatureStore.UnitTable.UnitID(:))' + "|" + ...
+                string(ctc.FeatureStore.UnitTable.RecordingID(:))';
+[~, unique_to_fs_v] = ismember(rep_ud_keys_v, fs_keys_v);
+
 norm_var = p_umap.NormalizationVar;
 if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
     group_col        = ctc.FeatureStore.UnitTable.(norm_var);
-    group_col_unique = group_col(unique_to_rep);
+    group_col_unique = group_col(unique_to_fs_v);
     [~, ~, iG] = unique(string(group_col_unique), 'stable');
     for g = 1:max(iG)
         mask = iG == g;
@@ -83,8 +90,12 @@ unit_rec_ids = ctc.FeatureStore.UnitTable.RecordingID;
 culture_ids  = FeatureStore.getCultureIDsForUnits( ...
     unit_rec_ids, meta, ctc.Parameters.CultureKeys);
 
-% Map training units to their cultures using representative rows
-train_culture_ids = culture_ids(unique_to_rep(train_ids));
+% Map training units to their cultures via UnitID matching (order-independent).
+% culture_ids is in FeatureStore order; unique_to_rep is in UnitDataArray order.
+unit_ids_table = string(ctc.FeatureStore.UnitTable.UnitID);
+train_ud_ids   = string({unique_ud(train_ids).UnitID});
+[~, table_loc] = ismember(train_ud_ids, unit_ids_table);
+train_culture_ids = culture_ids(table_loc);
 unique_cultures   = unique(train_culture_ids, 'stable');
 n_cultures        = numel(unique_cultures);
 
@@ -153,7 +164,6 @@ for ci = 1:n_cultures
             'min_dist',           p_umap.MinDist, ...
             'spread',             p_umap.Spread, ...
             'target_weight',      cv_target_weight, ...
-            'sgd_tasks',          20, ...
             'method',            'java', ...
             'verbose',            'none', ...
             'save_template_file', template_file};
@@ -163,7 +173,6 @@ for ci = 1:n_cultures
         test_args = { ...
             'label_column',      'end', ...
             'method',            'java', ...
-            'sgd_tasks',         20, ...
             'verbose',           'none', ...
             'cluster_detail',    'adaptive', ...
             'match_supervisors', 1, ...

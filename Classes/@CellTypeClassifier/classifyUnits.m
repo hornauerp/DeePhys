@@ -97,8 +97,12 @@ if safe_nn > 0 && ctc.Parameters.UMAP.SupervisedNNeighbors > safe_nn
     ctc.Parameters.UMAP.SupervisedNNeighbors = safe_nn;
 end
 
-% -- Supervised UMAP classification ------------------------------------------
-[Y_pred, ~, ~, test_reduction, train_reduction, extras] = supervisedUMAP(ctc, ...
+% -- Supervised UMAP: get embedding (supervisorMatchedLabels not used) --------
+% Classification is done via kNN in feature space below; UMAP embedding is
+% stored for visualization only.
+fprintf('supervisedUMAP input: X_train=%dx%d, X_test=%dx%d\n', ...
+    size(X_train,1), size(X_train,2), size(X_test,1), size(X_test,2));
+[~, ~, ~, test_reduction, train_reduction, extras] = supervisedUMAP(ctc, ...
     X_train, labels.sorted_y_train, nf.feat_names, X_test);
 
 % Restore overridden params
@@ -108,7 +112,7 @@ ctc.Reduction.Train  = train_reduction;
 ctc.Reduction.Test   = test_reduction;
 ctc.Reduction.Extras = extras;
 
-% -- Distance-weighted kNN confidence in UMAP embedding space -----------------
+% -- Distance-weighted kNN classification + confidence in embedding space -----
 if p_umap.AutoConfidenceK
     conf_k = max(5, round(sqrt(size(train_reduction, 1))));
     fprintf('Auto ConfidenceK: %d (N_train=%d)\n', conf_k, size(train_reduction, 1));
@@ -119,19 +123,28 @@ end
 unique_confidence = nan(1, n_unique);
 unique_confidence(labels.sorted_train_ids) = 1.0;
 
+Y_pred          = nan(1, size(test_reduction, 1));
 test_global_idx = find(test_idx);
+
 if ~isempty(test_reduction) && ~isempty(train_reduction)
-    k_actual = min(conf_k, size(train_reduction, 1));
-    [nn_idx, nn_dists] = knnsearch(train_reduction, test_reduction, 'K', k_actual);
+    k_actual = min(conf_k, size(X_train, 1));
+    [nn_idx, nn_dists] = knnsearch(X_train, X_test, 'K', k_actual);
     for i = 1:numel(test_global_idx)
         neighbor_labels = labels.sorted_y_train(nn_idx(i, :));
-        d      = nn_dists(i, :);
-        eps_d  = max(d) * 1e-6;
+        d       = nn_dists(i, :);
+        eps_d   = max(d) * 1e-6;
         if eps_d == 0; eps_d = 1e-10; end
-        w      = 1 ./ (d + eps_d);
+        w       = 1 ./ (d + eps_d);
         w_total = sum(w);
-        w_match = sum(w(neighbor_labels == Y_pred(i)));
-        unique_confidence(test_global_idx(i)) = w_match / w_total;
+        w_exc   = sum(w(neighbor_labels == 1)) / w_total;
+        w_inh   = sum(w(neighbor_labels == 2)) / w_total;
+        if w_exc >= w_inh
+            Y_pred(i) = 1;
+            unique_confidence(test_global_idx(i)) = w_exc;
+        else
+            Y_pred(i) = 2;
+            unique_confidence(test_global_idx(i)) = w_inh;
+        end
     end
 end
 

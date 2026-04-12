@@ -108,11 +108,13 @@ try
     train_inh_global = tl_struct.sorted_train_ids(tl_struct.sorted_y_train == 2);
     train_exc_global = tl_struct.sorted_train_ids(tl_struct.sorted_y_train == 1);
 
-    % Responsive candidates — local to subset
-    resp_full        = ctc.ResponsiveUnitIdx;
+    % Responsive candidates — local to subset (UnitID-based, order-independent)
+    unit_ids_table   = string(ctc.FeatureStore.UnitTable.UnitID);
+    resp_uids_diag   = unique(unit_ids_table(ctc.ResponsiveUnitIdx));
+    unique_ud_ids_d  = string({nf.unique_ud.UnitID});  % row vector
+    resp_unique_mask = ismember(unique_ud_ids_d, resp_uids_diag);
     subset_global    = find(nf.subset_mask);
-    rep_in_subset    = nf.unique_to_rep(nf.subset_mask);
-    resp_local       = find(resp_full(rep_in_subset));
+    resp_local       = find(resp_unique_mask(nf.subset_mask));
 
     % Rejected-by-outlier local indices (local to subset)
     outlier_rejected_local = resp_local(tl_struct.resp_outlier_mask);

@@ -41,13 +41,15 @@ title(tl, 'Classification diagnostics', 'FontWeight', 'bold');
     function test_mask = getTestMask()
         nf     = ctc.NormalizedFeatures;
         tl_s   = ctc.TrainLabels;
-        % umap_train_idx is logical over unique units
         train_unique = tl_s.umap_train_idx;   % (1 x n_unique) logical
         test_unique  = ~train_unique;          % (1 x n_unique) logical
-        % Map unique -> full array via all_to_unique
-        test_mask_unique = test_unique;        % (1 x n_unique)
-        % Broadcast to full array: test if the unique representative is a test unit
-        test_mask = test_mask_unique(nf.all_to_unique);  % (1 x N_full) logical
+        test_mask = test_unique(nf.all_to_unique);  % (1 x N_full) logical
+    end
+
+% ── Helper: test-unit mask in unique-unit space (for UMAP scatter) ────────────
+    function test_unique = getTestMaskUnique()
+        tl_s        = ctc.TrainLabels;
+        test_unique = ~tl_s.umap_train_idx;   % (1 x n_unique) logical
     end
 
 % ── Tile (1,1): Confidence distribution ──────────────────────────────────────
@@ -138,8 +140,12 @@ try
         error('Reduction.Test not available');
     end
 
-    test_mask = getTestMask();
-    conf_test = ctc.UnitConfidence(test_mask);
+    % Use unique-unit confidence (matches Reduction.Test dimensions).
+    % UnitConfidence is broadcast from unique→full; de-duplicate via unique_to_rep.
+    nf_loc       = ctc.NormalizedFeatures;
+    unique_conf  = ctc.UnitConfidence(nf_loc.unique_to_rep);   % (1 x n_unique)
+    test_unique  = getTestMaskUnique();                        % (1 x n_unique)
+    conf_test    = unique_conf(test_unique);                   % (1 x n_test_unique)
 
     scatter(red_test(:, 1), red_test(:, 2), 20, conf_test, 'filled', ...
         'MarkerFaceAlpha', 0.7);

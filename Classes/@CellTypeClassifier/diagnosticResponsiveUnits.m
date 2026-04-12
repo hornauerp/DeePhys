@@ -24,8 +24,26 @@ set(fig, 'Position', [100 100 1200 700]);
 tl = tiledlayout(2, 3, 'TileSpacing', 'compact', 'Padding', 'compact');
 title(tl, 'Responsive units diagnostics', 'FontWeight', 'bold');
 
-resp_idx = ctc.ResponsiveUnitIdx;   % logical 1xN (full array)
-strength = ctc.ResponsiveStrength;  % double 1xN
+resp_idx = ctc.ResponsiveUnitIdx;   % logical 1xN (FeatureStore order)
+strength = ctc.ResponsiveStrength;  % double 1xN (FeatureStore order)
+
+% Build a UnitDataArray-order responsive flag for indexing HarmonizedWaveforms/ACGs.
+% These are broadcast from unique units via all_to_unique (UnitDataArray order),
+% so positional indexing with FeatureStore-order resp_idx would be wrong.
+unit_ids_table = string(ctc.FeatureStore.UnitTable.UnitID);
+resp_uids_all  = unique(unit_ids_table(resp_idx));
+ud_ids_all     = string({ctc.UnitDataArray.UnitID});   % row vector
+resp_idx_ud    = ismember(ud_ids_all, resp_uids_all);  % UnitDataArray order, row vector
+
+% Ensure harmonized waveforms/ACGs are available (may not be set yet if
+% diagnosticResponsiveUnits is called before generateTrainLabels)
+if isempty(ctc.HarmonizedWaveforms)
+    try
+        ctc.buildNormalizedFeatures();
+    catch
+        % Will display error text in the affected tiles
+    end
+end
 
 % ── Tile (a): Per-culture responsive fraction ─────────────────────────────────
 nexttile(1);
@@ -113,16 +131,23 @@ try
         error('Single dose — no curve to plot');
     end
 
-    % Map responsive flag from full array to unique units via unique_to_rep
-    nf = ctc.NormalizedFeatures;
-    if ~isempty(nf)
-        rep_rows  = nf.unique_to_rep;           % (1 x n_unique) indices into full array
-        resp_u    = resp_idx(rep_rows);          % logical (1 x n_unique)
-    else
-        % Fallback: assume fr_matrix rows match full array order 1:n_unique
-        n_u    = size(fr_mat, 1);
-        resp_u = resp_idx(1:n_u);
-    end
+    % Map responsive flag to unique units by UnitID matching (order-independent).
+    % ResponsiveUnitIdx is in FeatureStore order; fr_matrix rows are indexed
+    % by unique UnitIDs from FeatureStore. Use UnitID matching to avoid any
+    % positional indexing between UnitDataArray and FeatureStore.
+    unit_ids_table = string(ctc.FeatureStore.UnitTable.UnitID);
+    resp_uids_dr   = unique(unit_ids_table(resp_idx));
+    resp_u         = ismember(detail.unit_ids, resp_uids_dr)';  % ensure row vector
+
+    % Normalize each unit's curve to its baseline (FR at the lowest dose).
+    % Units with zero or NaN baseline are excluded from normalized plots.
+    fr_baseline     = fr_mat(:, 1);
+    valid_baseline  = fr_baseline > 0 & isfinite(fr_baseline);
+    fr_norm         = nan(size(fr_mat));
+    fr_norm(valid_baseline, :) = fr_mat(valid_baseline, :) ./ fr_baseline(valid_baseline);
+
+    resp_u_norm = resp_u & valid_baseline(:)';
+    nr_u_norm   = ~resp_u & valid_baseline(:)';
 
     % Determine x-axis scale
     pos_doses  = dose_vals(dose_vals > 0);
@@ -133,21 +158,24 @@ try
 
     hold on;
     % Non-responsive units — thin grey
-    nr_rows = find(~resp_u);
+    nr_rows = find(nr_u_norm);
     for u = nr_rows
-        y = fr_mat(u, :);
-        plot(x_vals, y, '-', 'Color', [C_NONRESP, 0.2], 'LineWidth', 0.5);
+        y = fr_norm(u, :);
+        plot(x_vals, y, '-', 'Color', [C_NONRESP, 0.15], 'LineWidth', 0.5);
     end
     % Responsive units — red with alpha
-    r_rows = find(resp_u);
+    r_rows = find(resp_u_norm);
     for u = r_rows
-        y = fr_mat(u, :);
+        y = fr_norm(u, :);
         plot(x_vals, y, '-', 'Color', [C_RESP, 0.5], 'LineWidth', 0.8);
     end
-    % Mean line for responsive units
+    % Mean ± SEM for responsive units
     if ~isempty(r_rows)
-        mean_resp = nanmean(fr_mat(r_rows, :), 1);
+        mean_resp = nanmean(fr_norm(r_rows, :), 1);
+        sem_resp  = nanstd(fr_norm(r_rows, :), 0, 1) / sqrt(numel(r_rows));
+        shadedErrorBar_local(x_vals, mean_resp, sem_resp, [0.5 0 0], 0.25);
         plot(x_vals, mean_resp, '-', 'Color', [0.5 0 0], 'LineWidth', 2.5);
+        yline(1, '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1);
     end
     hold off;
 
@@ -155,8 +183,9 @@ try
         set(gca, 'XScale', 'log');
     end
     xlabel(sprintf('Dose (%s)', ctc.Parameters.UMAP.GroupingVar));
-    ylabel('Firing rate (Hz)');
-    title('Dose-response curves');
+    ylabel('Fold change from baseline');
+    title(sprintf('Dose-response curves (normalised, n=%d/%d responsive)', ...
+        numel(r_rows), sum(resp_u_norm)));
     box off;
 catch ME
     cla; axis off;
@@ -183,8 +212,8 @@ try
     n_samp = size(wf, 1);
     t_ms   = (0:(n_samp-1)) / sr * 1000;
 
-    wf_resp    = wf(:, resp_idx);
-    wf_nonresp = wf(:, ~resp_idx);
+    wf_resp    = wf(:, resp_idx_ud);
+    wf_nonresp = wf(:, ~resp_idx_ud);
 
     hold on;
     if ~isempty(wf_nonresp)
@@ -227,8 +256,8 @@ try
     n_bins     = size(acg, 1);
     lag_ms     = ((0:(n_bins-1)) - floor(n_bins/2)) * acg_bin_ms;
 
-    acg_resp    = acg(:, resp_idx);
-    acg_nonresp = acg(:, ~resp_idx);
+    acg_resp    = acg(:, resp_idx_ud);
+    acg_nonresp = acg(:, ~resp_idx_ud);
 
     hold on;
     if ~isempty(acg_nonresp)
@@ -261,8 +290,10 @@ end
 % ── Tile (f): Summary text ────────────────────────────────────────────────────
 nexttile(6);
 try
-    n_total    = numel(resp_idx);
-    n_resp     = sum(resp_idx);
+    % Show unique unit counts (not inflated by multi-recording propagation)
+    unit_ids_all = ctc.FeatureStore.UnitTable.UnitID;
+    n_total    = numel(unique(unit_ids_all));
+    n_resp     = numel(unique(unit_ids_all(resp_idx)));
     n_nonresp  = n_total - n_resp;
     pct_resp   = 100 * n_resp / max(n_total, 1);
     method     = ctc.Parameters.Bootstrap.GroundTruthMethod;

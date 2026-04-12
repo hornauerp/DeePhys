@@ -55,11 +55,23 @@ ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRat
 % -- Fill NaN before per-group z-score (missing features treated as mean) -----
 X_raw(isnan(X_raw)) = 0;
 
+% -- Map unique units to FeatureStore rows (order-independent) ----------------
+% unique_to_rep contains UnitDataArray indices, but FeatureStore columns
+% (NormalizationVar, culture mask) are in FeatureStore order. Build a mapping
+% from each unique unit to its FeatureStore row via UnitID+RecordingID matching.
+ud = ctc.UnitDataArray;
+rep_ud_ids  = string({ud(unique_to_rep).UnitID});
+rep_rec_ids = string({ud(unique_to_rep).RecordingID});
+rep_keys    = rep_ud_ids + "|" + rep_rec_ids;
+fs_keys     = string(ctc.FeatureStore.UnitTable.UnitID(:))' + "|" + ...
+              string(ctc.FeatureStore.UnitTable.RecordingID(:))';
+[~, unique_to_fs] = ismember(rep_keys, fs_keys);  % (1 x n_unique) row vector
+
 % -- Per-group z-score on all unique units ------------------------------------
 norm_var = p_umap.NormalizationVar;
 if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
     group_col        = ctc.FeatureStore.UnitTable.(norm_var);
-    group_col_unique = group_col(unique_to_rep);
+    group_col_unique = group_col(unique_to_fs);
     [~, ~, iG]       = unique(string(group_col_unique), 'stable');
     for g = 1:max(iG)
         mask = (iG == g);
@@ -74,7 +86,7 @@ end
 if ~isempty(p_umap.TrainingCultureIdx)
     subset_mask_full = CellTypeClassifier.buildCultureSubsetMask( ...
         ctc.FeatureStore, p_umap.TrainingCultureIdx, ctc.Parameters.CultureKeys);
-    subset_mask = subset_mask_full(unique_to_rep);
+    subset_mask = subset_mask_full(unique_to_fs);
 else
     subset_mask = true(1, n_unique);
 end
@@ -86,6 +98,7 @@ nf.feat_names    = feat_names;
 nf.unique_ud     = unique_ud;
 nf.all_to_unique = all_to_unique;
 nf.unique_to_rep = unique_to_rep;
+nf.unique_to_fs  = unique_to_fs;   % (1 x n_unique) FeatureStore row index for each unique unit
 nf.subset_mask   = subset_mask;
 nf.n_unique      = n_unique;
 nf.n_units_full  = n_units_full;

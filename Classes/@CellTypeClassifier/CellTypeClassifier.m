@@ -27,6 +27,7 @@ classdef CellTypeClassifier < handle
     properties
         FeatureStore            FeatureStore    % Features + metadata for all units
         UnitDataArray           UnitData        % (1 x N) raw unit data (spike times etc.)
+        OriginalUnitDataArray   UnitData        % Pre-segment-filter UnitData (all recordings, for FullACG recomputation)
         Parameters              struct          % Merged from returnDefaultParams + user overrides
         ResponsiveUnitIdx       logical         % (1 x N) units with a significant firing rate response
         ResponsiveUnitDirection string          % (1 x N) "none" | "increase" | "decrease" per unit
@@ -161,16 +162,23 @@ classdef CellTypeClassifier < handle
         end
 
         function acg = resolveACG(ctc, unit_data, ph)
-        % RESOLVEACG  Return ACG matrix, preferring Parent_ACG* from FeatureStore.
+        % RESOLVEACG  Return ACG matrix, preferring full-recording ACG columns from FeatureStore.
+        %
+        % Accepts either "FullACG*" (legacy MEArecording.mat convention) or
+        % "Parent_ACG*" column names — whichever is present in the UnitTable.
             if ph.ACGSource == "FullACG" && ~isempty(ctc.FeatureStore)
                 ut       = ctc.FeatureStore.UnitTable;
                 all_cols = string(ut.Properties.VariableNames);
-                parent_acg_cols = all_cols(startsWith(all_cols, "Parent_ACG"));
+                % Accept both legacy "FullACG*" and newer "Parent_ACG*" naming
+                parent_acg_cols = all_cols(startsWith(all_cols, "Parent_ACG") | ...
+                                           startsWith(all_cols, "FullACG"));
                 if ~isempty(parent_acg_cols)
-                    % Map unit_data order to FeatureStore row order by UnitID
-                    ud_ids    = string({unit_data.UnitID})';
-                    fs_ids    = ut.UnitID;
-                    [~, loc]  = ismember(ud_ids, fs_ids);
+                    % Map unit_data order to FeatureStore row order by (UnitID, RecordingID)
+                    % compound key. UnitID alone is ambiguous in dose-response data where
+                    % the same unit appears in multiple recordings.
+                    ud_keys   = string({unit_data.UnitID})' + "|" + string({unit_data.RecordingID})';
+                    fs_keys   = string(ut.UnitID) + "|" + string(ut.RecordingID);
+                    [~, loc]  = ismember(ud_keys, fs_keys);
                     valid     = loc > 0;
                     n_bins    = numel(parent_acg_cols);
                     acg       = zeros(n_bins, numel(unit_data));
@@ -179,10 +187,94 @@ classdef CellTypeClassifier < handle
                     end
                     return
                 end
-                fprintf('CellTypeClassifier: Parent_ACG not in FeatureStore — using segment ACG.\n');
+                % FeatureStore has no FullACG columns — try reading FullACG
+                % directly from the UnitData structs (legacy MEArecording path).
+                has_fullacg = ~isempty(unit_data) && ...
+                    ((isstruct(unit_data) && isfield(unit_data, 'FullACG')) || ...
+                     (isobject(unit_data) && isprop(unit_data(1), 'FullACG'))) && ...
+                    ~isempty(unit_data(1).FullACG);
+                if has_fullacg
+                    % Check whether stored FullACG parameters match requested Harmonization.
+                    % Compare bin size and lag explicitly (not just bin count).
+                    stored_bs  = unit_data(1).FullACGBinSize;
+                    stored_lag = unit_data(1).FullACGLag;
+                    params_known = ~isempty(stored_bs) && ~isempty(stored_lag);
+                    if params_known
+                        params_match = abs(stored_bs - ph.ACGBinSize) < 1e-9 ...
+                                    && abs(stored_lag - ph.ACGLag) < 1e-9;
+                    else
+                        % Parameters not stored — fall back to bin count check
+                        n_bins_target = round(2 * ph.ACGLag / ph.ACGBinSize) + 1;
+                        params_match  = numel(unit_data(1).FullACG) == n_bins_target;
+                    end
+
+                    if params_match
+                        n_bins = round(2 * ph.ACGLag / ph.ACGBinSize) + 1;
+                        acg = zeros(n_bins, numel(unit_data));
+                        n_recomputed = 0;
+                        for u = 1:numel(unit_data)
+                            fa = unit_data(u).FullACG;
+                            if ~isempty(fa) && numel(fa) == n_bins
+                                acg(:, u) = fa(:);
+                            else
+                                % Stored FullACG has wrong size — recompute from parent or segment
+                                if ~isempty(ctc.OriginalUnitDataArray) && numel(ctc.OriginalUnitDataArray) > numel(unit_data)
+                                    uid = string(unit_data(u).UnitID);
+                                    seg_idx = find(string({ctc.OriginalUnitDataArray.UnitID}) == uid);
+                                    combined = [];
+                                    offset = 0;
+                                    gap = 2 * ph.ACGLag;
+                                    for si = 1:numel(seg_idx)
+                                        st = ctc.OriginalUnitDataArray(seg_idx(si)).SpikeTimes(:);
+                                        if ~isempty(st)
+                                            combined = [combined; st + offset]; %#ok<AGROW>
+                                        end
+                                        offset = offset + ctc.OriginalUnitDataArray(seg_idx(si)).RecordingDuration + gap;
+                                    end
+                                    acg(:, u) = CellTypeClassifier.computeACG(combined, ph.ACGBinSize, ph.ACGLag);
+                                else
+                                    acg(:, u) = CellTypeClassifier.computeACG( ...
+                                        unit_data(u).SpikeTimes, ph.ACGBinSize, ph.ACGLag);
+                                end
+                                n_recomputed = n_recomputed + 1;
+                            end
+                        end
+                        if n_recomputed > 0
+                            fprintf('CellTypeClassifier: FullACG from UnitData (%d bins), %d/%d recomputed (size mismatch).\n', ...
+                                n_bins, n_recomputed, numel(unit_data));
+                        else
+                            fprintf('CellTypeClassifier: FullACG from UnitData (%d bins, BinSize=%.4f, Lag=%.4f).\n', ...
+                                n_bins, ph.ACGBinSize, ph.ACGLag);
+                        end
+                        return
+                    else
+                        if params_known
+                            fprintf(['CellTypeClassifier: FullACG params (BinSize=%.4f, Lag=%.4f) ' ...
+                                'differ from Harmonization (BinSize=%.4f, Lag=%.4f) — recomputing.\n'], ...
+                                stored_bs, stored_lag, ph.ACGBinSize, ph.ACGLag);
+                        else
+                            fprintf(['CellTypeClassifier: FullACG bin count (%d) does not match ' ...
+                                'Harmonization (%d) and no stored params — recomputing.\n'], ...
+                                numel(unit_data(1).FullACG), round(2*ph.ACGLag/ph.ACGBinSize)+1);
+                        end
+                    end
+                else
+                    fprintf('CellTypeClassifier: No FullACG in FeatureStore or UnitData — using segment ACG.\n');
+                end
             end
-            % Fall back to segment-level computation from SpikeTimes
-            [~, acg, ~] = ctc.extractFromUnitData(unit_data);
+            % Prefer parent (combined-segment) spike trains when available.
+            % OriginalUnitDataArray holds all recording segments before
+            % discardSegmentUnits filtered to baseline only. Concatenating
+            % spike trains across segments approximates the full parent
+            % recording, producing a higher-quality ACG than any single segment.
+            if ~isempty(ctc.OriginalUnitDataArray) && numel(ctc.OriginalUnitDataArray) > numel(unit_data)
+                acg = ctc.computeParentACGs(unit_data, ph);
+                fprintf('CellTypeClassifier: ACG computed from parent spike trains (%d units, BinSize=%.4f, Lag=%.4f).\n', ...
+                    numel(unit_data), ph.ACGBinSize, ph.ACGLag);
+            else
+                % Fall back to segment-level computation from SpikeTimes
+                [~, acg, ~] = ctc.extractFromUnitData(unit_data);
+            end
         end
 
     end
@@ -241,7 +333,11 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.BinSize               = 20;           % two_window only (seconds)
             defaultParams.Bootstrap.NIter                 = 1000;         % two_window only
             defaultParams.Bootstrap.Alpha                 = 1e-10;        % two_window only
-            defaultParams.Bootstrap.FullCurveAlpha        = 0.05;         % full_curve: per-unit Spearman p-value threshold
+            defaultParams.Bootstrap.FullCurveAlpha        = 0.05;         % full_curve: per-unit Spearman p-value threshold (legacy, unused by staged pipeline)
+            defaultParams.Bootstrap.MonotonicityThreshold = 0.75;        % full_curve stage 1: min |Spearman rho|
+            defaultParams.Bootstrap.MinFoldChange         = 1.5;         % full_curve stage 2: min fold change (baseline to max dose)
+            defaultParams.Bootstrap.ConfirmationAlpha     = 1e-3;        % full_curve stage 3: bootstrap p-value threshold
+            defaultParams.Bootstrap.ConfirmationNIter     = 1000;        % full_curve stage 3: bootstrap iterations
             defaultParams.Bootstrap.Direction             = "increase";   % "increase" | "decrease" | "both"
             defaultParams.Bootstrap.MinResponsiveStrength = 0;  % 0 = no filtering
 
@@ -302,23 +398,16 @@ classdef CellTypeClassifier < handle
             defaultParams.TrainLabels.ResponsiveClassLabel = 2;  % 2=responsive->inhibitory, 1=responsive->excitatory
 
             % ── Outlier detection ─────────────────────────────────────────────
-            defaultParams.OutlierDetection.OutlierAlpha            = 0.01;   % chi-squared / posterior threshold
-            defaultParams.OutlierDetection.MaxResponsiveComponents = 3;      % max GMM components for multimodal populations
-            defaultParams.OutlierDetection.CounterexampleRatio     = 1;  % 1:1 balanced default; use actual ratio for metadata
+            defaultParams.OutlierDetection.CounterexampleRatio                = 1;    % 1:1 balanced default; use actual ratio for metadata
+            defaultParams.OutlierDetection.CounterexampleDistancePercentile = 50;   % percentile of inh self-distances used as CE distance threshold
 
-            % DipTestAlpha: significance level for Hartigan dip test for multimodality.
-            %   Conceptually distinct from OutlierAlpha — tests whether responsive units
-            %   form a unimodal or multimodal distribution in detection space.
-            defaultParams.OutlierDetection.DipTestAlpha            = 0.05;
-
-            % Domain: space in which outlier detection is performed.
-            %   "pca"  — top NPCAComponents of the candidate feature matrix (default).
-            %            Decouples training labels from UMAP hyperparameters; PCA is
-            %            deterministic and scales well to high-dimensional features.
-            %   "umap" — 2D/nD unsupervised UMAP embedding (legacy behavior).
-            %            More sensitive to UMAP parameter choices.
-            defaultParams.OutlierDetection.Domain          = "pca";
-            defaultParams.OutlierDetection.NPCAComponents  = 15;
+            % Isolation forest parameters (used for both inh candidate and CE outlier detection).
+            %   ContaminationFraction: expected fraction of outliers in [0, 0.5).
+            %     Higher = more aggressive removal. Tune if iforest flags too many or too few.
+            %   NPCAComponents: PCA dimensionality fed into iforest. Near-zero variance
+            %     columns are removed before PCA. Capped at n-1 and actual feature count.
+            defaultParams.OutlierDetection.ContaminationFraction = 0.05;
+            defaultParams.OutlierDetection.NPCAComponents        = 15;
 
             % ── Classification ────────────────────────────────────────────────
             defaultParams.Classification.UseConfidenceThreshold = false;  % mark low-confidence predictions as NaN
@@ -345,8 +434,8 @@ classdef CellTypeClassifier < handle
             defaultParams.BayesianOptimization.MinDistRange              = [0.01, 1.0];
             defaultParams.BayesianOptimization.SpreadRange               = [0.5, 5.0];
             defaultParams.BayesianOptimization.SupervisedNDimsRange      = [2, 10];
-            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 50];
-            defaultParams.BayesianOptimization.TargetWeightRange         = [0.05, 0.5];
+            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 30];
+            defaultParams.BayesianOptimization.TargetWeightRange         = [0.05, 0.4];
             defaultParams.BayesianOptimization.ACGWeightRange            = [0.5, 3.0];
             defaultParams.BayesianOptimization.WaveformWeightRange       = [0.5, 3.0];
             defaultParams.BayesianOptimization.ObjectiveMetric           = "weighted_silhouette";  % "weighted_silhouette" | "trustworthiness" | "silhouette" | "combined"
@@ -489,6 +578,42 @@ classdef CellTypeClassifier < handle
             for u = 1:N
                 acg(:, u) = CellTypeClassifier.computeACG( ...
                     unit_data(u).SpikeTimes, ph.ACGBinSize, ph.ACGLag);
+            end
+        end
+
+        function acg = computeParentACGs(ctc, unit_data, ph)
+        % COMPUTEPARENTACGS  ACGs from concatenated spike trains across all recording segments.
+        %
+        % When OriginalUnitDataArray holds multiple recordings per unit (dose-response),
+        % concatenates spike trains from all segments of each unit (with inter-segment
+        % gaps to prevent cross-segment ISIs from contaminating the ACG).
+            orig_ud         = ctc.OriginalUnitDataArray;
+            all_uid_strings = string({orig_ud.UnitID});
+            n_units = numel(unit_data);
+            n_bins  = round(ph.ACGLag / ph.ACGBinSize) * 2 + 1;
+            acg     = zeros(n_bins, n_units);
+            gap     = 2 * ph.ACGLag;   % prevents cross-segment ISIs within ACG window
+
+            for u = 1:n_units
+                uid         = string(unit_data(u).UnitID);
+                segment_idx = find(all_uid_strings == uid);
+
+                if numel(segment_idx) <= 1
+                    acg(:, u) = CellTypeClassifier.computeACG( ...
+                        unit_data(u).SpikeTimes, ph.ACGBinSize, ph.ACGLag);
+                else
+                    combined_spikes = [];
+                    offset = 0;
+                    for si = 1:numel(segment_idx)
+                        st = orig_ud(segment_idx(si)).SpikeTimes(:);
+                        if ~isempty(st)
+                            combined_spikes = [combined_spikes; st + offset]; %#ok<AGROW>
+                        end
+                        offset = offset + orig_ud(segment_idx(si)).RecordingDuration + gap;
+                    end
+                    acg(:, u) = CellTypeClassifier.computeACG( ...
+                        combined_spikes, ph.ACGBinSize, ph.ACGLag);
+                end
             end
         end
 

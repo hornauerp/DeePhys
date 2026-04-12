@@ -23,6 +23,9 @@ classdef UnitData
         RecordingDuration   double  % Copied from parent recording (seconds)
         KSLabel             string  % Kilosort label ("good" / "mua"), "" if not available
         BombcellType        double  % BC classification: 0=noise, 1=good, 2=MUA, NaN=not run
+        FullACG             double  % Full-recording ACG from parent (copied during fromLegacyUnit)
+        FullACGBinSize      double  % Bin size (s) of the stored FullACG
+        FullACGLag          double  % One-sided lag (s) of the stored FullACG (duration = 2*lag)
     end
 
     methods
@@ -93,6 +96,24 @@ classdef UnitData
                 ud.BombcellType = unit_obj.BombcellType;
             else
                 ud.BombcellType = NaN;
+            end
+
+            % Copy FullACG and its parameters from parent recording
+            try
+                fa = unit_obj.FullACG;
+                if ~isempty(fa)
+                    ud.FullACG = fa(:);
+                    % Extract CCG parameters from MEArecording.Connectivity.FullCCG.args
+                    rec = unit_obj.MEArecording;
+                    if ~isempty(rec) && isfield(rec.Connectivity, 'FullCCG') ...
+                            && isfield(rec.Connectivity.FullCCG, 'args')
+                        args = rec.Connectivity.FullCCG.args;
+                        ud.FullACGBinSize = args.binsize;
+                        ud.FullACGLag     = args.duration / 2;  % duration = 2 * lag
+                    end
+                end
+            catch
+                % MEArecording back-reference may be broken after load
             end
         end
 

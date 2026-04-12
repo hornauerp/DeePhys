@@ -270,7 +270,7 @@ classdef UMAP < handle
         nn_descent_max_neighbors=45 % invoke if n_neighbors<-30 
         nn_descent_transform_queue_size=1.35;
         nn_descent_tasks=0;
-        sgd_tasks=0;
+        sgd_tasks=1;
     end
     methods
         function U = UMAP(varargin)
@@ -1144,6 +1144,6 @@ function p=parseArguments(varargin)
     addParameter(p,'sparse_data',false);
     addParameter(p,'small_data',true);
     addParameter(p,'nn_descent_tasks', 0, @(x)isnumeric(x) && x>0 && x<=80);
-    addParameter(p,'sgd_tasks', 0, @(x)isnumeric(x) && x>0 && x<=80);
+    addParameter(p,'sgd_tasks', 1, @(x)isnumeric(x) && x>0 && x<=80);
 end
        

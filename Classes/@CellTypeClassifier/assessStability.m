@@ -59,7 +59,8 @@ for r = 1:N
     temp_params.RNGSeed = seeds(r);
 
     temp_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, temp_params);
-    temp_ctc.ResponsiveUnitIdx = ctc.ResponsiveUnitIdx;
+    temp_ctc.ResponsiveUnitIdx      = ctc.ResponsiveUnitIdx;
+    temp_ctc.OriginalUnitDataArray  = ctc.OriginalUnitDataArray;
 
     try
         temp_ctc.generateTrainLabels();

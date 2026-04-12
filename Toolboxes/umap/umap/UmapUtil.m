@@ -589,7 +589,7 @@ classdef UmapUtil < handle
             addParameter(p,'plot_title',[], @(x)ischar(x) || iscell(x));
             addParameter(p,'ask_to_save_template', false, @islogical);
             addParameter(p,'randomize', true, @islogical);
-            addParameter(p,'sgd_tasks', 0, @(x)isnumeric(x) && x>0 && x<=80);
+            addParameter(p,'sgd_tasks', 1, @(x)isnumeric(x) && x>0 && x<=80);
             addParameter(p,'template_file',[], @(x) ischar(x) || isa(x, 'UMAP'));
             addParameter(p,'n_neighbors', 15, @(x) isnumeric(x) && x>2 && x<200);
             addParameter(p,'min_dist', .3, @(x) isnumeric(x) && x>0 && x <=10);

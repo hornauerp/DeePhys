@@ -79,6 +79,7 @@ ref_ctc.ResponsiveUnitIdx       = ctc.ResponsiveUnitIdx;
 ref_ctc.ResponsiveUnitDirection = ctc.ResponsiveUnitDirection;
 ref_ctc.ResponsiveStrength      = ctc.ResponsiveStrength;
 ref_ctc.CounterexampleUnitIdx   = ctc.CounterexampleUnitIdx;
+ref_ctc.OriginalUnitDataArray   = ctc.OriginalUnitDataArray;
 ref_ctc.generateTrainLabels();
 
 fixed_labels = ref_ctc.TrainLabels;
@@ -121,126 +122,145 @@ if ismember(p_bo.ObjectiveMetric, ["trustworthiness", "combined"])
     end
 end
 
+% -- Precompute train/test split + kNN settings (avoids per-eval overhead) ----
+X_train_base = X_base(train_mask, :);
+X_test_base  = X_base(~train_mask, :);
+y_train      = fixed_labels.sorted_y_train;
+conf_k       = ctc.Parameters.UMAP.ConfidenceK;
+if ctc.Parameters.UMAP.AutoConfidenceK
+    conf_k = max(5, round(sqrt(sum(train_mask))));
+end
+tdir = tempdir;   % ephemeral templates — faster than user TemplateDir
+rng_seed = ctc.Parameters.RNGSeed;
+
 if opts.Verbose
     fprintf('Precomputed: %d unique units (%d train), %d features\n', ...
         n_unique, sum(train_mask), size(X_base, 2));
 end
 
-% -- Objective function -------------------------------------------------------
+% -- Objective function (inlined UMAP + kNN; no CellTypeClassifier per eval) --
 function loss = objective(x)
     % Apply per-evaluation feature group weighting
-    X_eval = X_base;
+    X_tr = X_train_base;
+    X_te = X_test_base;
     if n_acg > 0
-        X_eval(:, is_acg) = X_eval(:, is_acg) * sqrt(x.ACGWeight / n_acg);
+        X_tr(:, is_acg) = X_tr(:, is_acg) * sqrt(x.ACGWeight / n_acg);
+        X_te(:, is_acg) = X_te(:, is_acg) * sqrt(x.ACGWeight / n_acg);
     end
     if n_wf > 0
-        X_eval(:, is_wf) = X_eval(:, is_wf) * sqrt(x.WaveformWeight / n_wf);
+        X_tr(:, is_wf) = X_tr(:, is_wf) * sqrt(x.WaveformWeight / n_wf);
+        X_te(:, is_wf) = X_te(:, is_wf) * sqrt(x.WaveformWeight / n_wf);
     end
 
-    % Apply minority ceiling to candidate SupervisedNNeighbors
     sup_nn = min(x.SupervisedNNeighbors, minority_ceiling);
 
-    temp_params = ctc.Parameters;
-    temp_params.UMAP.MinDist              = x.MinDist;
-    temp_params.UMAP.Spread               = x.Spread;
-    temp_params.UMAP.SupervisedNDims      = x.SupervisedNDims;
-    temp_params.UMAP.SupervisedNNeighbors = sup_nn;
-    temp_params.UMAP.TargetWeight         = x.TargetWeight;
-    temp_params.UMAP.ACGWeight            = x.ACGWeight;
-    temp_params.UMAP.WaveformWeight       = x.WaveformWeight;
-    temp_params.Diagnostics.Enable        = false;  % suppress diagnostics inside BayOpt
-
-    temp_ctc = CellTypeClassifier(ctc.FeatureStore, ctc.UnitDataArray, temp_params);
-    temp_ctc.TrainLabels         = fixed_labels;
-    temp_ctc.NormalizationParams = fixed_np;
-    temp_ctc.NormalizedFeatures  = fixed_nf;
-    temp_ctc.Reduction           = struct();
-
-    % Override the normalized feature cache so classifyUnits uses our pre-weighted X
-    % We do this by injecting a modified NormalizedFeatures where X_pergroup = X_eval
-    % and blanking the normalization params so classifyUnits applies identity transform
-    nf_override            = fixed_nf;
-    nf_override.X_pergroup = X_eval;
-    temp_ctc.NormalizedFeatures = nf_override;
-
-    % Override NormalizationParams to identity (weighting already applied above)
-    np_identity                         = fixed_np;
-    np_identity.mu_global               = zeros(1, size(X_eval, 2));
-    np_identity.sigma_global            = ones(1, size(X_eval, 2));
-    np_identity.nan_cols                = false(1, size(X_eval, 2));
-    np_identity.scale                   = ones(1, size(X_eval, 2));
-    np_identity.feature_selection_mask  = true(1, size(X_eval, 2));
-    % feat_names_trimmed preserved so weighting block in classifyUnits is a no-op
-    % (ACGWeight=1/n_acg * sqrt(n_acg) = 1 at the already-scaled level)
-    temp_ctc.NormalizationParams = np_identity;
+    % -- Run supervised UMAP directly (training + test projection) --------
+    rng(rng_seed, 'twister');
+    uid           = char(java.util.UUID.randomUUID);
+    template_file = fullfile(tdir, ['ctc_bo_template_', uid, '.mat']);
+    clean_up      = onCleanup(@() deleteFile(template_file));
 
     try
-        temp_ctc.classifyUnits();
+        [train_red, ~, ~, ~] = run_umap([X_tr, y_train'], ...
+            'label_column',       'end', ...
+            'n_components',       x.SupervisedNDims, ...
+            'n_neighbors',        sup_nn, ...
+            'min_dist',           x.MinDist, ...
+            'spread',             x.Spread, ...
+            'target_weight',      x.TargetWeight, ...
+            ...
+            'method',             'java', ...
+            'verbose',            'none', ...
+            'save_template_file', template_file);
 
-        all_reduction = [temp_ctc.Reduction.Train; temp_ctc.Reduction.Test];
-        unique_labels = temp_ctc.UnitLabels(fixed_nf.unique_to_rep);
-        train_labels_vec = unique_labels(train_mask)';
-        test_labels_vec  = unique_labels(~train_mask)';
-        all_labels       = [train_labels_vec; test_labels_vec];
-        valid            = ~isnan(all_labels);
-
-        if sum(valid) < 10 || numel(unique(all_labels(valid))) < 2
-            loss = 1;
-            return
-        end
-
-        switch p_bo.ObjectiveMetric
-            case "weighted_silhouette"
-                % Evaluate on test embedding only
-                valid_test = ~isnan(test_labels_vec);
-                if sum(valid_test) < 10 || numel(unique(test_labels_vec(valid_test))) < 2
-                    loss = 1; return
-                end
-                test_red = temp_ctc.Reduction.Test;
-                sil_vals = silhouette(test_red(valid_test, :), test_labels_vec(valid_test));
-                inh_mask_t = test_labels_vec(valid_test) == 2;
-                exc_mask_t = test_labels_vec(valid_test) == 1;
-                inh_sil = 0;
-                exc_sil = 0;
-                if any(inh_mask_t); inh_sil = mean(sil_vals(inh_mask_t)); end
-                if any(exc_mask_t); exc_sil = mean(sil_vals(exc_mask_t)); end
-                loss = -(0.7 * inh_sil + 0.3 * exc_sil);
-
-            case "trustworthiness"
-                T    = computeTrustworthinessPrecomputed(nn_high_precomputed, all_reduction, k_trust);
-                loss = 1 - T;
-
-            case "silhouette"
-                sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
-                loss     = -mean(sil_vals);
-
-            case "combined"
-                T        = computeTrustworthinessPrecomputed(nn_high_precomputed, all_reduction, k_trust);
-                sil_vals = silhouette(all_reduction(valid, :), all_labels(valid));
-                loss     = (1 - T) + (-mean(sil_vals));
-
-            otherwise
-                error('CellTypeClassifier:unknownMetric', ...
-                    'Unknown ObjectiveMetric: "%s". Valid: weighted_silhouette, trustworthiness, silhouette, combined.', ...
-                    p_bo.ObjectiveMetric);
-        end
-
-        % Optional interneuron fraction penalty
-        inh_frac = sum(all_labels(valid) == 2) / sum(valid);
-        if p_bo.UseInterneuronPenalty
-            loss = loss + p_bo.InterneuronWeight * (inh_frac - p_bo.InterneuronTarget)^2;
-        end
-
-        if opts.Verbose
-            fprintf(['  MinDist=%.3g Spread=%.3g NDims=%d NNeigh=%d(->%d) ' ...
-                'TW=%.3f ACG=%.2f WF=%.2f -> loss=%.3f inh=%.1f%%\n'], ...
-                x.MinDist, x.Spread, x.SupervisedNDims, x.SupervisedNNeighbors, sup_nn, ...
-                x.TargetWeight, x.ACGWeight, x.WaveformWeight, loss, 100*inh_frac);
-        end
+        [test_red, ~, ~, ~] = run_umap(X_te, ...
+            'method',            'java', ...
+            'verbose',           'none', ...
+            'match_supervisors', 1, ...
+            'template_file',     template_file);
     catch ME
         warning('CellTypeClassifier:optimizeHyperparameters', ...
-            'Evaluation failed: %s', ME.message);
+            'UMAP failed: %s', ME.message);
         loss = 1;
+        return
+    end
+
+    % -- kNN classification in feature space (not embedding) -------------
+    % test_labels are stable across BayOpt evals; only the embedding-based
+    % loss metric (silhouette/trustworthiness on test_red) varies.
+    k_actual = min(conf_k, size(X_tr, 1));
+    [nn_idx, nn_dists] = knnsearch(X_tr, X_te, 'K', k_actual);
+    n_test      = size(test_red, 1);
+    test_labels = nan(n_test, 1);
+    for i = 1:n_test
+        nb    = y_train(nn_idx(i, :));
+        d     = nn_dists(i, :);
+        eps_d = max(d) * 1e-6;
+        if eps_d == 0; eps_d = 1e-10; end
+        w = 1 ./ (d + eps_d);
+        if sum(w(nb == 1)) >= sum(w(nb == 2))
+            test_labels(i) = 1;
+        else
+            test_labels(i) = 2;
+        end
+    end
+
+    all_labels = [y_train(:); test_labels];
+    valid      = ~isnan(all_labels);
+
+    if sum(valid) < 10 || numel(unique(all_labels(valid))) < 2
+        loss = 1;
+        return
+    end
+
+    % -- Objective metric -------------------------------------------------
+    switch p_bo.ObjectiveMetric
+        case "weighted_silhouette"
+            valid_test = ~isnan(test_labels);
+            if sum(valid_test) < 10 || numel(unique(test_labels(valid_test))) < 2
+                loss = 1; return
+            end
+            sil_vals   = silhouette(test_red(valid_test, :), test_labels(valid_test));
+            inh_mask_t = test_labels(valid_test) == 2;
+            exc_mask_t = test_labels(valid_test) == 1;
+            inh_sil = 0; exc_sil = 0;
+            if any(inh_mask_t); inh_sil = mean(sil_vals(inh_mask_t)); end
+            if any(exc_mask_t); exc_sil = mean(sil_vals(exc_mask_t)); end
+            loss = -(0.7 * inh_sil + 0.3 * exc_sil);
+
+        case "trustworthiness"
+            all_red = [train_red; test_red];
+            T    = computeTrustworthinessPrecomputed(nn_high_precomputed, all_red, k_trust);
+            loss = 1 - T;
+
+        case "silhouette"
+            all_red  = [train_red; test_red];
+            sil_vals = silhouette(all_red(valid, :), all_labels(valid));
+            loss     = -mean(sil_vals);
+
+        case "combined"
+            all_red  = [train_red; test_red];
+            T        = computeTrustworthinessPrecomputed(nn_high_precomputed, all_red, k_trust);
+            sil_vals = silhouette(all_red(valid, :), all_labels(valid));
+            loss     = (1 - T) + (-mean(sil_vals));
+
+        otherwise
+            error('CellTypeClassifier:unknownMetric', ...
+                'Unknown ObjectiveMetric: "%s". Valid: weighted_silhouette, trustworthiness, silhouette, combined.', ...
+                p_bo.ObjectiveMetric);
+    end
+
+    % Optional interneuron fraction penalty
+    inh_frac = sum(all_labels(valid) == 2) / sum(valid);
+    if p_bo.UseInterneuronPenalty
+        loss = loss + p_bo.InterneuronWeight * (inh_frac - p_bo.InterneuronTarget)^2;
+    end
+
+    if opts.Verbose
+        fprintf(['  MinDist=%.3g Spread=%.3g NDims=%d NNeigh=%d(->%d) ' ...
+            'TW=%.3f ACG=%.2f WF=%.2f -> loss=%.3f inh=%.1f%%\n'], ...
+            x.MinDist, x.Spread, x.SupervisedNDims, x.SupervisedNNeighbors, sup_nn, ...
+            x.TargetWeight, x.ACGWeight, x.WaveformWeight, loss, 100*inh_frac);
     end
 end
 
@@ -322,4 +342,9 @@ function T = computeTrustworthinessPrecomputed(nn_high, X_low, k)
         return
     end
     T = max(0, min(1, 1 - (2 / denom) * penalty));
+end
+
+% -- Helper: safe file deletion -----------------------------------------------
+function deleteFile(f)
+if isfile(f); delete(f); end
 end

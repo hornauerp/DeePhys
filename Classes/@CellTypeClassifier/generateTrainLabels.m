@@ -54,7 +54,14 @@ all_to_unique = nf.all_to_unique;
 unique_to_rep = nf.unique_to_rep;
 subset_mask   = nf.subset_mask;
 
-resp_unique = ctc.ResponsiveUnitIdx(unique_to_rep);
+% Map responsive flag to unique units by UnitID matching (order-independent).
+% ResponsiveUnitIdx is in FeatureStore order; unique_to_rep is in UnitDataArray
+% order. These arrays may not be aligned, so positional indexing would return
+% wrong units. UnitID matching is immune to order differences.
+unit_ids_table = string(ctc.FeatureStore.UnitTable.UnitID);
+resp_uids      = unique(unit_ids_table(ctc.ResponsiveUnitIdx));
+unique_ud_ids  = string({nf.unique_ud.UnitID});   % row vector
+resp_unique    = ismember(unique_ud_ids, resp_uids);  % row vector (1 x n_unique)
 
 % -- Global z-score on training subset ----------------------------------------
 X_subset = nf.X_pergroup(subset_mask, :);
@@ -121,54 +128,61 @@ else
     n_neighbors = p_umap.NNeighbors;
 end
 
-template_file = fullfile(p_umap.TemplateDir, 'ctc_umap_template.mat');
+% No template saved — unsupervised embedding is for visualization only.
+% Outlier detection uses iforest in PCA space, not this embedding.
 [reduction, umap_model, ~, ~] = run_umap(X_feat, ...
     'n_components',  p_umap.NDims, ...
     'n_neighbors',   n_neighbors, ...
     'min_dist',      p_umap.MinDist, ...
     'spread',        p_umap.Spread, ...
-    'sgd_tasks',     20, ...
-    'method', 'Java', 'verbose', 'none', ...
-    'save_template_file', template_file);
+    'method', 'Java', 'verbose', 'none');
 ctc.UMAP = umap_model;
 if isempty(ctc.Reduction); ctc.Reduction = struct(); end
 ctc.Reduction.Unsupervised = reduction;
 
-% -- Determine outlier detection inputs ---------------------------------------
+% -- Isolation Forest on inhibitory candidates in PCA space -------------------
+% Decouples training labels from UMAP hyperparameters (prerequisite for stable
+% Bayesian optimization). Near-zero variance columns removed before PCA.
 subset_responsive = resp_unique(subset_mask);
 responsive_local  = find(subset_responsive);
-use_pca = string(p_outlr.Domain) == "pca";
 
-if use_pca
-    % PCA on candidate feature matrix; near-zero variance columns removed first
-    candidate_features = X_feat(responsive_local, :);
-    col_var = var(candidate_features, 0, 1);
-    candidate_features_pca = candidate_features(:, col_var > 1e-10);
-    n_pca = min([p_outlr.NPCAComponents, size(candidate_features_pca, 1) - 1, size(candidate_features_pca, 2)]);
-    if n_pca >= 1
-        [~, inh_detection_data] = pca(candidate_features_pca, 'NumComponents', n_pca, 'Algorithm', 'eig');
-    else
-        inh_detection_data = candidate_features_pca;
-    end
-else
-    inh_detection_data = reduction(subset_responsive, :);
+if isempty(responsive_local)
+    n_resp_total = sum(ctc.ResponsiveUnitIdx);
+    error('CellTypeClassifier:noResponsiveUnits', ...
+        ['No responsive units found in the training culture subset.\n' ...
+         '  Total responsive units across all cultures: %d\n' ...
+         '  Training subset size: %d unique units\n' ...
+         'Possible causes:\n' ...
+         '  1. Parameters.UMAP.TrainingCultureIdx excludes cultures with responsive units.\n' ...
+         '  2. Parameters.UMAP.GroupingValues does not match the baseline dose in the data.\n' ...
+         '  3. identifyResponsiveUnits() was not run, or produced 0 responsive units.\n' ...
+         'Diagnostic: check sum(ctc.ResponsiveUnitIdx) and ctc.Parameters.UMAP.TrainingCultureIdx.'], ...
+        n_resp_total, sum(subset_mask));
 end
 
-% -- Outlier detection on responsive candidates -------------------------------
-tf_resp_outlier = detectOutliers(inh_detection_data, p_outlr);
+candidate_features     = X_feat(responsive_local, :);
+col_var                = var(candidate_features, 0, 1);
+candidate_features_pca = candidate_features(:, col_var > 1e-10);
+n_pca = min([p_outlr.NPCAComponents, size(candidate_features_pca, 1) - 1, size(candidate_features_pca, 2)]);
+if n_pca >= 1
+    [~, inh_pca_scores] = pca(candidate_features_pca, 'NumComponents', n_pca, 'Algorithm', 'eig');
+else
+    inh_pca_scores = candidate_features_pca;
+end
+
+[~, tf_resp_outlier] = iforest(inh_pca_scores, ...
+    'ContaminationFraction', p_outlr.ContaminationFraction);
 
 n_rejected = sum(tf_resp_outlier);
 n_total    = numel(tf_resp_outlier);
-if n_rejected > 0
-    fprintf('Responsive outlier detection (%s space): %d/%d flagged (%.0f%%)\n', ...
-        p_outlr.Domain, n_rejected, n_total, n_rejected / n_total * 100);
-end
+fprintf('Isolation forest (inh, PCA space): %d/%d flagged (%.0f%%)\n', ...
+    n_rejected, n_total, n_rejected / n_total * 100);
 
 clean_resp_local = responsive_local(~tf_resp_outlier(:)');
 
 if isempty(clean_resp_local)
     warning('CellTypeClassifier:generateTrainLabels', ...
-        'All responsive candidates flagged as outliers — using all candidates.');
+        'Isolation forest flagged all responsive candidates — using all candidates (reduce ContaminationFraction).');
     clean_resp_local = responsive_local;
     tf_resp_outlier  = false(size(tf_resp_outlier));
 end
@@ -192,8 +206,11 @@ clean_resp_local = clean_resp_local(geom_consistent);
 
 if isempty(clean_resp_local)
     warning('CellTypeClassifier:generateTrainLabels', ...
-        'All responsive candidates removed by geometric filter — skipping filter.');
-    clean_resp_local = responsive_local(~tf_resp_outlier(:)');
+        ['All responsive candidates removed by geometric filter — skipping filter.\n' ...
+         'This often means the responsive units are geometrically closer to the\n' ...
+         'excitatory population centroid, suggesting label direction may be inverted.\n' ...
+         'Check Parameters.TrainLabels.ResponsiveClassLabel and Parameters.Bootstrap.Direction.']);
+    clean_resp_local = responsive_local;   % ultimate fallback: use all responsive units
     resp_geom_mask   = false(1, numel(clean_resp_local));
     inh_centroid     = mean(X_feat(clean_resp_local, :), 1);
 end
@@ -209,30 +226,27 @@ ce_outlier_mask_diag  = logical([]);
 
 if has_explicit_ce
     % Metadata method: explicit ground-truth counterexamples.
-    ce_unique    = ctc.CounterexampleUnitIdx(unique_to_rep);
+    % UnitID-based matching (order-independent, like resp_unique above)
+    ce_uid_table = unique(unit_ids_table(ctc.CounterexampleUnitIdx));
+    ce_unique    = ismember(unique_ud_ids, ce_uid_table);
     ce_subset    = ce_unique(subset_mask);
     ce_local_all = find(ce_subset);
 
-    % Outlier detection on counterexample class.
-    if use_pca
-        ce_feat = X_feat(ce_local_all, :);
-        col_var_ce = var(ce_feat, 0, 1);
-        ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
-        n_pca_ce = min([p_outlr.NPCAComponents, size(ce_feat_pca, 1) - 1, size(ce_feat_pca, 2)]);
-        if n_pca_ce >= 1
-            [~, ce_detection_data] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
-        else
-            ce_detection_data = ce_feat_pca;
-        end
+    % Isolation forest on counterexample class (PCA space).
+    ce_feat     = X_feat(ce_local_all, :);
+    col_var_ce  = var(ce_feat, 0, 1);
+    ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
+    n_pca_ce    = min([p_outlr.NPCAComponents, size(ce_feat_pca,1)-1, size(ce_feat_pca,2)]);
+    if n_pca_ce >= 1
+        [~, ce_pca_scores] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
     else
-        ce_detection_data = reduction(ce_subset, :);
+        ce_pca_scores = ce_feat_pca;
     end
-
-    tf_ce_outlier = detectOutliers(ce_detection_data, p_outlr);
+    [~, tf_ce_outlier] = iforest(ce_pca_scores, 'ContaminationFraction', p_outlr.ContaminationFraction);
     n_ce_rejected = sum(tf_ce_outlier);
     if n_ce_rejected > 0
-        fprintf('Counterexample outlier detection (%s space): %d/%d flagged (%.0f%%)\n', ...
-            p_outlr.Domain, n_ce_rejected, numel(tf_ce_outlier), n_ce_rejected / numel(tf_ce_outlier) * 100);
+        fprintf('Isolation forest (CE, PCA space): %d/%d flagged (%.0f%%)\n', ...
+            n_ce_rejected, numel(tf_ce_outlier), n_ce_rejected / numel(tf_ce_outlier) * 100);
     end
     counterexample_idx_local = ce_local_all(~tf_ce_outlier(:)');
     ce_outlier_mask_diag = tf_ce_outlier(:)';
@@ -257,81 +271,63 @@ else
     n_pick               = min(n_target, n_pool);
 
     if n_pick > 0
-        % Select farthest from inhibitory centroid (most unambiguously excitatory)
+        % Distance-percentile counterexample selection.
+        % Select only non-responsive units farther from the inhibitory centroid
+        % than the CounterexampleDistancePercentile of inhibitory units' own
+        % self-distances. This guarantees the excitatory pool is clearly separated
+        % from the inhibitory cluster without using extreme outliers.
+        inh_self_dists = pdist2(inh_centroid, X_feat(clean_resp_local, :), 'correlation');
+        dist_threshold = prctile(inh_self_dists, p_outlr.CounterexampleDistancePercentile);
+
         pool_dists = pdist2(inh_centroid, X_feat(non_responsive_local, :), 'correlation');
-        [~, dist_order] = sort(pool_dists, 'descend');
-        sampled_pos = dist_order(1:n_pick);
-        reserve_pos = dist_order(n_pick+1:end);
+        ce_distances_from_inh = pool_dists;   % keep for diagnostics
+        far_mask  = pool_dists(:) >= dist_threshold;
+        far_pool  = non_responsive_local(far_mask);
 
-        % Store all distances for diagnostic
-        ce_distances_from_inh = pool_dists;
+        fprintf('Distance-percentile pool: %d/%d units beyond %.0fth pctile (thresh=%.4f)\n', ...
+            numel(far_pool), n_pool, p_outlr.CounterexampleDistancePercentile, dist_threshold);
 
-        sampled_local = non_responsive_local(sampled_pos);
-
-        % Outlier detection on initial sample
-        if use_pca
-            ce_feat = X_feat(sampled_local, :);
-            col_var_ce = var(ce_feat, 0, 1);
-            ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
-            n_pca_ce = min([p_outlr.NPCAComponents, size(ce_feat_pca, 1) - 1, size(ce_feat_pca, 2)]);
-            if n_pca_ce >= 1
-                [~, ce_detection_data] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
-            else
-                ce_detection_data = ce_feat_pca;
-            end
-        else
-            ce_detection_data = reduction(sampled_local, :);
+        if numel(far_pool) < n_pick
+            fprintf('Pool smaller than n_pick (%d < %d) — falling back to full non-responsive pool\n', ...
+                numel(far_pool), n_pick);
+            far_pool = non_responsive_local;
         end
 
-        tf_ce_outlier = detectOutliers(ce_detection_data, p_outlr);
-        n_ce_rejected = sum(tf_ce_outlier);
+        perm_order    = randperm(numel(far_pool));
+        n_pick_actual = min(n_pick, numel(far_pool));
+        sampled_local = far_pool(perm_order(1:n_pick_actual));
+
+        % Isolation forest on selected counterexamples (PCA space).
+        ce_feat     = X_feat(sampled_local, :);
+        col_var_ce  = var(ce_feat, 0, 1);
+        ce_feat_pca = ce_feat(:, col_var_ce > 1e-10);
+        n_pca_ce    = min([p_outlr.NPCAComponents, size(ce_feat_pca,1)-1, size(ce_feat_pca,2)]);
+        if n_pca_ce >= 1
+            [~, ce_pca_scores] = pca(ce_feat_pca, 'NumComponents', n_pca_ce, 'Algorithm', 'eig');
+        else
+            ce_pca_scores = ce_feat_pca;
+        end
+        [~, tf_ce_outlier]   = iforest(ce_pca_scores, 'ContaminationFraction', p_outlr.ContaminationFraction);
+        n_ce_rejected        = sum(tf_ce_outlier);
         ce_outlier_mask_diag = tf_ce_outlier(:)';
 
         if n_ce_rejected > 0
-            fprintf('Counterexample outlier detection (%s space): %d/%d flagged (%.0f%%)\n', ...
-                p_outlr.Domain, n_ce_rejected, n_pick, n_ce_rejected / n_pick * 100);
-
-            clean_local = sampled_local(~tf_ce_outlier(:)');
-            n_needed    = n_pick - numel(clean_local);
-
-            if n_needed > 0 && ~isempty(reserve_pos)
-                n_topup     = min(n_needed, numel(reserve_pos));
-                topup_local = non_responsive_local(reserve_pos(1:n_topup));
-
-                if use_pca
-                    tu_feat = X_feat(topup_local, :);
-                    col_var_tu = var(tu_feat, 0, 1);
-                    tu_feat_pca = tu_feat(:, col_var_tu > 1e-10);
-                    n_pca_tu = min([p_outlr.NPCAComponents, size(tu_feat_pca, 1) - 1, size(tu_feat_pca, 2)]);
-                    if n_pca_tu >= 1
-                        [~, topup_detection_data] = pca(tu_feat_pca, 'NumComponents', n_pca_tu, 'Algorithm', 'eig');
-                    else
-                        topup_detection_data = tu_feat_pca;
-                    end
-                else
-                    topup_detection_data = reduction(topup_local, :);
-                end
-
-                tf_topup_outlier = detectOutliers(topup_detection_data, p_outlr);
-                topup_clean      = topup_local(~tf_topup_outlier(:)');
-
-                clean_local = [clean_local, topup_clean];
-                fprintf('Top-up: added %d/%d reserve candidates (%d clean)\n', ...
-                    n_topup, numel(reserve_pos), numel(topup_clean));
-            end
-
-            counterexample_idx_local = clean_local;
+            fprintf('Isolation forest (CE, PCA space): %d/%d flagged\n', ...
+                n_ce_rejected, n_pick_actual);
+            counterexample_idx_local = sampled_local(~tf_ce_outlier(:)');
         else
             counterexample_idx_local = sampled_local;
         end
 
         if isempty(counterexample_idx_local)
             warning('CellTypeClassifier:generateTrainLabels', ...
-                'All counterexample candidates flagged as outliers — using original sample.');
+                'All CE candidates flagged as outliers — using original sample.');
             counterexample_idx_local = sampled_local;
         end
     else
         counterexample_idx_local = zeros(1, 0);
+        ce_outlier_mask_diag     = logical([]);
+        ce_distances_from_inh    = [];
     end
 end
 
@@ -389,9 +385,11 @@ labels.filter_counts = struct( ...
     'n_ce_in',            n_responsive, ...
     'n_ce_after_outlier', numel(counterexample_idx_local));
 
-% Responsive strength for training inhibitory candidates
+% Responsive strength for training inhibitory candidates (UnitID-based lookup)
 if ~isempty(ctc.ResponsiveStrength)
-    labels.inhibitory_strength = ctc.ResponsiveStrength(unique_to_rep(in_train_id));
+    in_train_ud_ids = string({nf.unique_ud(in_train_id).UnitID});
+    [~, fs_locs]    = ismember(in_train_ud_ids, unit_ids_table);
+    labels.inhibitory_strength = ctc.ResponsiveStrength(fs_locs);
 else
     labels.inhibitory_strength = ones(1, numel(in_train_id));
 end
@@ -416,164 +414,3 @@ function name = labelName(label)
     end
 end
 
-function tf_outlier = detectOutliers(data, p)
-% DETECTOUTLIERS  Adaptive outlier detection for a candidate population.
-%
-% Two-stage approach:
-%   1. Dip test on the first PC of data to test for multimodality
-%   2a. Unimodal:   robust Mahalanobis distance + chi-squared threshold
-%   2b. Multimodal: GMM with BIC-selected k + low-posterior outlier detection
-
-    n = size(data, 1);
-    d = size(data, 2);
-
-    if n < 4
-        tf_outlier = false(n, 1);
-        return
-    end
-
-    n_pcs = min(d, n - 1);
-    if n_pcs >= 1
-        [~, scores] = pca(data, 'NumComponents', min(n_pcs, 10));
-        pc1 = scores(:, 1);
-    else
-        pc1 = data(:, 1);
-    end
-    [~, p_dip] = diptest(pc1);
-
-    is_multimodal = p_dip < p.DipTestAlpha;
-    outlier_alpha = p.OutlierAlpha;
-
-    if is_multimodal
-        tf_outlier = gmmOutliers(data, p, outlier_alpha);
-    else
-        tf_outlier = mahalOutliers(data, d, outlier_alpha);
-    end
-end
-
-function tf_outlier = mahalOutliers(data, d, outlier_alpha)
-    n = size(data, 1);
-    try
-        [~, ~, mahal_d] = robustcov(data);
-        thresh     = chi2inv(1 - outlier_alpha, d);
-        tf_outlier = mahal_d > thresh;
-    catch
-        warning('CellTypeClassifier:robustcovFailed', ...
-            'Robust covariance estimation failed — no outliers removed.');
-        tf_outlier = false(n, 1);
-    end
-end
-
-function tf_outlier = gmmOutliers(data, p, outlier_alpha)
-    n        = size(data, 1);
-    max_k    = min(p.MaxResponsiveComponents, floor(n / 3));
-    bic_vals = inf(1, max_k);
-    gmm_fits = cell(1, max_k);
-
-    for k = 1:max_k
-        try
-            gmm_fits{k} = fitgmdist(data, k, ...
-                'RegularizationValue', 1e-5, ...
-                'Options', statset('MaxIter', 500), ...
-                'Replicates', 3);
-            bic_vals(k) = gmm_fits{k}.BIC;
-        catch
-        end
-    end
-
-    [~, best_k] = min(bic_vals);
-
-    if isinf(bic_vals(best_k))
-        warning('CellTypeClassifier:gmmFailed', ...
-            'All GMM fits failed — no outliers removed.');
-        tf_outlier = false(n, 1);
-        return
-    end
-
-    gmm       = gmm_fits{best_k};
-    posterior  = gmm.posterior(data);
-    max_post   = max(posterior, [], 2);
-    tf_outlier = max_post < outlier_alpha;
-
-    fprintf('GMM selected k=%d components (BIC=%.1f); %d/%d outliers detected.\n', ...
-        best_k, bic_vals(best_k), sum(tf_outlier), n);
-end
-
-function [dip, p_value] = diptest(x)
-% DIPTEST  Hartigan's dip test for unimodality.
-    x = sort(x(:));
-    n = numel(x);
-
-    if n < 4
-        dip     = 0;
-        p_value = 1;
-        return
-    end
-
-    ecdf_y = (1:n)' / n;
-    gcm    = ecdfGCM(ecdf_y);
-    lcm    = ecdfLCM(ecdf_y);
-
-    dip        = max(lcm - gcm) / 2;
-    dip_scaled = sqrt(n) * dip;
-
-    alpha_table = [0.01, 0.02, 0.05, 0.10, 0.20, 0.50, 1.00];
-    crit_table  = [1.20, 1.06, 0.89, 0.78, 0.66, 0.50, 0.35];
-
-    if dip_scaled >= crit_table(1)
-        p_value = alpha_table(1) / 2;
-    elseif dip_scaled <= crit_table(end)
-        p_value = 1.0;
-    else
-        p_value = interp1(crit_table, alpha_table, dip_scaled, 'linear', 'extrap');
-        p_value = max(0, min(1, p_value));
-    end
-end
-
-function gcm = ecdfGCM(y)
-    n   = numel(y);
-    gcm = y;
-    i   = 1;
-    while i < n
-        j = i + 1;
-        while j <= n
-            slope_ij = (y(j) - gcm(i)) / (j - i);
-            if j < n
-                slope_next = (y(j+1) - gcm(i)) / (j + 1 - i);
-                if slope_next < slope_ij
-                    j = j + 1;
-                    continue
-                end
-            end
-            break
-        end
-        for k = i+1:j
-            gcm(k) = gcm(i) + (y(j) - gcm(i)) * (k - i) / (j - i);
-        end
-        i = j;
-    end
-end
-
-function lcm = ecdfLCM(y)
-    n   = numel(y);
-    lcm = y;
-    i   = 1;
-    while i < n
-        j = i + 1;
-        while j <= n
-            slope_ij = (y(j) - lcm(i)) / (j - i);
-            if j < n
-                slope_next = (y(j+1) - lcm(i)) / (j + 1 - i);
-                if slope_next > slope_ij
-                    j = j + 1;
-                    continue
-                end
-            end
-            break
-        end
-        for k = i+1:j
-            lcm(k) = lcm(i) + (y(j) - lcm(i)) * (k - i) / (j - i);
-        end
-        i = j;
-    end
-end
