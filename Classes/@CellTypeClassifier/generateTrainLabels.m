@@ -45,6 +45,12 @@ p_train = ctc.Parameters.TrainLabels;
 
 rng(ctc.Parameters.RNGSeed, 'twister');
 
+% -- Clear cached state so parameters are always honoured ---------------------
+% buildNormalizedFeatures is idempotent within a single pipeline run
+% (classifyUnits reuses the same cache). Clearing here ensures that calling
+% generateTrainLabels again — e.g. after changing Parameters — starts fresh.
+ctc.clearCache();
+
 % -- Build normalized feature cache (shared with classifyUnits) ---------------
 ctc.buildNormalizedFeatures();
 nf = ctc.NormalizedFeatures;
@@ -87,13 +93,21 @@ if p_umap.FeatureSelection && size(X_all, 2) > 1
     var_thresh = prctile(feat_var, p_umap.MinVariancePercentile);
     low_var    = feat_var <= var_thresh;
 
+    % Graph-based correlation removal: iteratively remove the feature with the
+    % most high-correlation neighbors. This is order-independent and avoids
+    % the systematic bias of sequential scanning (which always kept early ACG
+    % bins at the expense of late ACG / waveform features).
     R = abs(corrcoef(X_all));
     R(logical(eye(size(R)))) = 0;
     high_corr = false(1, size(X_all, 2));
-    for j = 2:size(R, 2)
-        if any(R(1:j-1, j) > p_umap.MaxCorrelation & ~high_corr(1:j-1)')
-            high_corr(j) = true;
-        end
+    adj = R > p_umap.MaxCorrelation;
+    while any(adj(:))
+        n_edges = sum(adj & ~high_corr' & ~high_corr, 2);
+        n_edges(high_corr) = 0;
+        [~, worst] = max(n_edges);
+        high_corr(worst) = true;
+        adj(worst, :) = false;
+        adj(:, worst) = false;
     end
 
     remove_feat = low_var | high_corr;
@@ -400,7 +414,7 @@ else
                 rng(ctc.Parameters.RNGSeed, 'twister');
                 [~, med_coords] = kmedoids(umap_c, k_c, 'Distance', 'sqeuclidean', 'Replicates', 3);
                 med_idx = knnsearch(umap_c, med_coords);
-                counterexample_global = [counterexample_global, c_global(med_idx(:))']; %#ok<AGROW>
+                counterexample_global = [counterexample_global, c_global(med_idx(:))]; %#ok<AGROW>
             end
 
             [~, ce_loc] = ismember(counterexample_global, subset_global_idx);

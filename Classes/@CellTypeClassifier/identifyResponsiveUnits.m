@@ -285,7 +285,9 @@ for c = 1:numel(unique_cultures)
 
         pre_mat  = CellTypeClassifier.binnedSpikeMatrix(ud(tw_pre_idx),  pre_win,  p.BinSize);
         post_mat = CellTypeClassifier.binnedSpikeMatrix(ud(tw_post_idx), post_win, p.BinSize);
-        response = bootstrapFiringRateResponse(pre_mat, post_mat, p.NIter, p.Alpha);
+        response = bootstrapFiringRateResponse(pre_mat, post_mat, p.NIter, p.Alpha, ...
+            'UnitWisePermutation', p.UnitWisePermutation, ...
+            'NetworkCorrection',   p.NetworkCorrection);
 
         % Broadcast results to ALL rows of each tested unit (consistent
         % with full_curve, which flags every row of a responsive unit).
@@ -643,7 +645,9 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
             post_mat = CellTypeClassifier.binnedSpikeMatrix(ud(post_ud_idx), post_win, p.BinSize);
 
             response = bootstrapFiringRateResponse(pre_mat, post_mat, ...
-                p.ConfirmationNIter, p.ConfirmationAlpha);
+                p.ConfirmationNIter, p.ConfirmationAlpha, ...
+                'UnitWisePermutation', p.UnitWisePermutation, ...
+                'NetworkCorrection',   p.NetworkCorrection);
 
             % Convert index vectors to logical masks
             n_tested = numel(s3_kept);

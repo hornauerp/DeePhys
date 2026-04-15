@@ -66,10 +66,11 @@ p_comm = ctc.Parameters.Community;
 ctc.buildNormalizedFeatures();
 nf = ctc.NormalizedFeatures;
 
-% Global z-score on training subset + NaN removal + scaling
-X_subset = nf.X_pergroup(nf.subset_mask, :);
-[~, mu_global, sigma_global] = normalize(X_subset);
-X_all = normalize(nf.X_pergroup, 'center', mu_global, 'scale', sigma_global);
+% Global z-score on ALL unique units — matches generateTrainLabels convention.
+% In the transductive setting, subset-fit statistics would bias the embedding
+% toward training cultures alone. BayOpt and generateTrainLabels must use the
+% same normalization so that optimized hyperparameters transfer to the main pipeline.
+[X_all, ~, ~] = normalize(nf.X_pergroup);
 nan_cols = any(isnan(X_all), 1);
 X_all(:, nan_cols) = [];
 scale_vec = max(abs(X_all), [], 1);
@@ -82,13 +83,18 @@ if p_umap.FeatureSelection && size(X_all, 2) > 1
     feat_var   = var(X_all, 0, 1);
     var_thresh = prctile(feat_var, p_umap.MinVariancePercentile);
     low_var    = feat_var <= var_thresh;
+    % Graph-based correlation removal (order-independent; same logic as generateTrainLabels).
     R = abs(corrcoef(X_all));
     R(logical(eye(size(R)))) = 0;
     high_corr = false(1, size(X_all, 2));
-    for j = 2:size(R, 2)
-        if any(R(1:j-1, j) > p_umap.MaxCorrelation & ~high_corr(1:j-1)')
-            high_corr(j) = true;
-        end
+    adj = R > p_umap.MaxCorrelation;
+    while any(adj(:))
+        n_edges = sum(adj & ~high_corr' & ~high_corr, 2);
+        n_edges(high_corr) = 0;
+        [~, worst] = max(n_edges);
+        high_corr(worst) = true;
+        adj(worst, :) = false;
+        adj(:, worst) = false;
     end
     sel_mask   = ~(low_var | high_corr);
     X_all      = X_all(:, sel_mask);

@@ -23,6 +23,13 @@ arguments
     ctc CellTypeClassifier
 end
 
+% Deep-copy FeatureStore to avoid mutating a shared handle.
+% FeatureStore is a handle class; in-place mutation would be visible to any
+% other CellTypeClassifier instance (or caller) holding the same reference.
+% FeatureStore.subset() creates a new instance and copies MetadataFields properly.
+all_rec_ids = string(ctc.FeatureStore.MetadataTable.RecordingID);
+ctc.FeatureStore = ctc.FeatureStore.subset(all_rec_ids);
+
 % Store original for FullACG recomputation via computeParentACGs
 ctc.OriginalUnitDataArray = ctc.UnitDataArray;
 

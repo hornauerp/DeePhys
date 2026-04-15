@@ -43,6 +43,7 @@ classdef CellTypeClassifier < handle
                                                %   .inh_centroid, .filter_counts
         UnitLabels              double          % (1 x N): 1=excitatory, 2=inhibitory, NaN=unclassified
         UnitConfidence          double          % (1 x N): kNN confidence in [0,1]; 1.0 for training units
+        UnitGraphConnectivity   double          % (1 x N): number of direct training-unit neighbors in UMAP graph
         UMAP                                   % Trained UMAP model from run_umap
         Reduction               struct          % Struct with Unsupervised/Train/Test/External embeddings
         HarmonizedWaveforms     double          % (N_samples x N_units) processed waveforms
@@ -95,6 +96,83 @@ classdef CellTypeClassifier < handle
             ctc.FeatureStore  = feature_store;
             ctc.UnitDataArray = unit_data;
             ctc.Parameters    = parseStructParameters(ctc.returnDefaultParams(), parameters);
+            ctc.validateParameters();
+        end
+
+        function clearCache(ctc)
+        % CLEARCACHE  Invalidate all cached preprocessing and classification state.
+        %
+        % Call after changing Parameters, ResponsiveUnitIdx, or UnitDataArray
+        % post-construction to ensure subsequent pipeline calls recompute from scratch.
+        % generateTrainLabels() calls this automatically at its start.
+            ctc.NormalizedFeatures  = [];
+            ctc.CachedExtraction    = [];
+            ctc.HarmonizedWaveforms = [];
+            ctc.HarmonizedACGs      = [];
+            ctc.TrainLabels         = [];
+            ctc.NormalizationParams = [];
+            ctc.UnitLabels          = [];
+            ctc.UnitConfidence      = [];
+            ctc.UnitGraphConnectivity = [];
+        end
+
+        function validateParameters(ctc)
+        % VALIDATEPARAMETERS  Check for common parameter misconfiguration and warn.
+        %
+        % Called automatically at the end of the constructor. Can also be called
+        % manually after updating ctc.Parameters.
+            p      = ctc.Parameters;
+            fs     = ctc.FeatureStore;
+            n_warn = 0;
+
+            % ── ACG source ───────────────────────────────────────────────────
+            if ~isempty(fs) && ~isempty(fs.UnitTable) && ...
+                    string(p.Harmonization.ACGSource) == "FullACG"
+                all_cols = string(fs.UnitTable.Properties.VariableNames);
+                has_acg  = any(startsWith(all_cols, "Parent_ACG") | ...
+                               startsWith(all_cols, "FullACG"));
+                if ~has_acg
+                    warning('CellTypeClassifier:noFullACGColumns', ...
+                        ['Harmonization.ACGSource="FullACG" but no Parent_ACG* or ' ...
+                         'FullACG* columns found in FeatureStore.UnitTable. ' ...
+                         'Will fall back to segment-level ACG computation.']);
+                    n_warn = n_warn + 1;
+                end
+            end
+
+            % ── Recordings per culture for full_curve ────────────────────────
+            if string(p.Bootstrap.GroundTruthMethod) == "full_curve" && ...
+                    ~isempty(fs) && ~isempty(fs.MetadataTable)
+                meta     = fs.MetadataTable;
+                cult_ids = FeatureStore.getCultureIDsForUnits( ...
+                    fs.UnitTable.RecordingID, meta, p.CultureKeys);
+                unique_c = unique(cult_ids, 'stable');
+                n_recs_per_cult = arrayfun(@(c) ...
+                    numel(unique(fs.UnitTable.RecordingID(cult_ids == c))), unique_c);
+                n_few = sum(n_recs_per_cult < p.Bootstrap.MinRecordings);
+                if n_few > 0
+                    warning('CellTypeClassifier:fewRecordingsForFullCurve', ...
+                        ['%d/%d cultures have fewer than MinRecordings=%d recordings. ' ...
+                         'They will fall back to the two_window method.'], ...
+                        n_few, numel(unique_c), p.Bootstrap.MinRecordings);
+                    n_warn = n_warn + 1;
+                end
+            end
+
+            % ── NNeighbors vs dataset size ───────────────────────────────────
+            if ~isempty(fs) && ~isempty(fs.UnitTable)
+                n_unique = numel(unique(string(fs.UnitTable.UnitID)));
+                if p.UMAP.NNeighbors >= n_unique
+                    warning('CellTypeClassifier:nNeighborsTooLarge', ...
+                        'UMAP.NNeighbors (%d) >= number of unique units (%d). Will be clamped.', ...
+                        p.UMAP.NNeighbors, n_unique);
+                    n_warn = n_warn + 1;
+                end
+            end
+
+            if n_warn == 0
+                % No issues found — silent by design.
+            end
         end
 
         function [wf, acg, sr] = getOrExtract(ctc, unit_data)
@@ -423,6 +501,15 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.UseFDR               = false;
             defaultParams.Bootstrap.FDRLevel             = 0.05;
 
+            % UnitWisePermutation: use independent randperm per unit (slower but correct
+            %   for correlated spike trains; avoids inflated FPR from shared null).
+            defaultParams.Bootstrap.UnitWisePermutation  = true;
+
+            % NetworkCorrection: subtract population-mean FR change before per-unit testing.
+            %   Removes the network-wide disinhibition confound (e.g. GABAergic blockade
+            %   drives all units to fire more; only units firing above-average are flagged).
+            defaultParams.Bootstrap.NetworkCorrection     = true;
+
             % ── UMAP parameters ───────────────────────────────────────────────
             defaultParams.UMAP.NDims                = 5;
             defaultParams.UMAP.NNeighbors           = 50;
@@ -452,7 +539,6 @@ classdef CellTypeClassifier < handle
             % AutoNNeighbors: UMAP n_neighbors set to max(MinNNeighbors, sqrt(N)).
             %   Structural scaling: prevents n_neighbors from exceeding dataset size
             %   (small datasets) or being too local (large datasets). Standard heuristic.
-            %   Also applies to SupervisedNNeighbors in classifyUnits.
             defaultParams.UMAP.AutoNNeighbors       = false;
             defaultParams.UMAP.MinNNeighbors        = 15;
 
@@ -525,7 +611,10 @@ classdef CellTypeClassifier < handle
             %   Directly addresses non-reproducibility from single-seed sensitivity.
             %   MinAgreement: minimum vote fraction for label assignment.
             %   Units below this threshold become NaN (unclassified).
-            defaultParams.Ensemble.Enabled      = false;
+            % Ensemble is on by default: majority vote across 5 seeds is the
+            % recommended path. Set Enabled=false for fast iteration during
+            % development (single-seed, ~5x faster but less reproducible).
+            defaultParams.Ensemble.Enabled      = true;
             defaultParams.Ensemble.Seeds        = [42, 1042, 2042, 3042, 4042];
             defaultParams.Ensemble.MinAgreement = 0.6;
 

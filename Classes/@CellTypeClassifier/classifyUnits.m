@@ -91,6 +91,20 @@ if classify_method == "graph"
     row_sums(row_sums == 0) = 1;
     W = G ./ row_sums;  % row-stochastic transition matrix
 
+    % Per-unit count of direct training-unit neighbors in the UMAP graph.
+    % Stored in UnitGraphConnectivity so callers can distinguish "robustly
+    % classified" units from ones whose label comes from 1-2 training neighbors.
+    graph_train_neighbors = full(sum(G(:, train_idx) > 0, 2))';  % (1 x n_unique)
+
+    low_conn = sum(graph_train_neighbors(test_idx) < 3);
+    if low_conn > 0.1 * sum(test_idx)
+        warning('CellTypeClassifier:sparseGraphNeighborhood', ...
+            ['%d/%d test units have fewer than 3 training neighbors in the ' ...
+             'UMAP graph. Their confidence scores may reflect sparse ' ...
+             'connectivity rather than robust classification.'], ...
+            low_conn, sum(test_idx));
+    end
+
     fprintf('Graph classification: %d nodes, propagating on UMAP NxN graph\n', n_unique);
 
     % Initialise label distributions: [P(exc), P(inh)] per unit
@@ -156,6 +170,8 @@ if classify_method == "graph"
 
 else
     % ── Feature-space kNN classification ────────────────────────────────
+    % Connectivity: for kNN path, count training neighbors within ConfidenceK.
+    graph_train_neighbors = zeros(1, n_unique);
     if p_umap.AutoConfidenceK
         conf_k = max(5, round(sqrt(size(X_train, 1))));
         fprintf('Auto ConfidenceK: %d (N_train=%d)\n', conf_k, size(X_train, 1));
@@ -185,7 +201,11 @@ else
                 Y_pred(i) = 2;
                 unique_confidence(test_global_idx(i)) = w_inh;
             end
+            % kNN connectivity: k_actual training neighbors by definition
+            graph_train_neighbors(test_global_idx(i)) = k_actual;
         end
+        % Training units themselves have full k_actual neighbors
+        graph_train_neighbors(train_idx) = k_actual;
     end
 end
 
@@ -203,11 +223,13 @@ if p_conf.UseConfidenceThreshold
 end
 
 % -- Broadcast unique-unit results back to all (unit x recording) rows --------
-full_labels     = unique_labels(all_to_unique);
-full_confidence = unique_confidence(all_to_unique);
+full_labels       = unique_labels(all_to_unique);
+full_confidence   = unique_confidence(all_to_unique);
+full_connectivity = graph_train_neighbors(all_to_unique);
 
-ctc.UnitLabels     = full_labels;
-ctc.UnitConfidence = full_confidence;
+ctc.UnitLabels            = full_labels;
+ctc.UnitConfidence        = full_confidence;
+ctc.UnitGraphConnectivity = full_connectivity;
 
 n_exc       = sum(unique_labels == 1, 'omitnan');
 n_inh_final = sum(unique_labels == 2, 'omitnan');
