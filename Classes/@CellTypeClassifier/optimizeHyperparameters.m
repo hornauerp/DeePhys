@@ -4,7 +4,12 @@ function results = optimizeHyperparameters(ctc, opts)
 % Optimizes 6 UMAP parameters to produce well-structured supervised embeddings.
 %
 % OBJECTIVE METRIC (set via Parameters.BayesianOptimization.ObjectiveMetric):
-%   "weighted_silhouette" (default) — evaluates cluster separation on the TEST
+%   "edge_homophily" (default) — fraction of k-NN in the supervised embedding
+%       that share the same predicted label. Directly aligns Phase 2 BayOpt with
+%       the graph classifier: a higher-homophily embedding makes graph label
+%       propagation more reliable. Evaluated on test units only (pseudo-labelled
+%       by kNN in feature space) to avoid trivial train-node anchoring.
+%   "weighted_silhouette" — evaluates cluster separation on the TEST
 %       embedding only. Asymmetric weighting: -(0.7*inh_sil + 0.3*exc_sil).
 %       Tested on test units to avoid conflating parameter quality with the
 %       strength of the supervised signal in the train embedding.
@@ -53,22 +58,62 @@ arguments
     opts.Verbose (1,1) logical = true
 end
 
+warning('CellTypeClassifier:deprecated', ...
+    ['optimizeHyperparameters (Phase 2) is deprecated. ' ...
+     'Supervised UMAP parameters are no longer used in classification — ' ...
+     'classifyUnits() propagates labels on the unsupervised ctc.UMAP.graph. ' ...
+     'Use optimizeUnsupervisedUMAP() for Phase 1 hyperparameter optimization.']);
+
 assert(~isempty(ctc.ResponsiveUnitIdx), ...
     'Run identifyResponsiveUnits() before optimizeHyperparameters()');
 
 p_bo = ctc.Parameters.BayesianOptimization;
 
-% -- Define 6 optimizable variables ------------------------------------------
-vars = [ ...
-    optimizableVariable('MinDist',              p_bo.MinDistRange,              'Transform', 'log'), ...
-    optimizableVariable('Spread',               p_bo.SpreadRange), ...
-    optimizableVariable('SupervisedNDims',      p_bo.SupervisedNDimsRange,      'Type', 'integer'), ...
-    optimizableVariable('SupervisedNNeighbors', p_bo.SupervisedNNeighborsRange, 'Type', 'integer'), ...
-    optimizableVariable('TargetWeight',         p_bo.TargetWeightRange), ...
-    optimizableVariable('ACGWeight',            p_bo.ACGWeightRange), ...
-    optimizableVariable('WaveformWeight',       p_bo.WaveformWeightRange)];
-n_vars    = 7;
-max_evals = 60;
+% -- Fixed defaults: values used for variables not being optimized ------------
+% Sourced from current ctc.Parameters so the user can pre-set them before calling.
+fixed_defaults = struct( ...
+    'MinDist',              ctc.Parameters.UMAP.MinDist, ...
+    'Spread',               ctc.Parameters.UMAP.Spread, ...
+    'SupervisedNDims',      ctc.Parameters.UMAP.SupervisedNDims, ...
+    'SupervisedNNeighbors', ctc.Parameters.UMAP.SupervisedNNeighbors, ...
+    'TargetWeight',         ctc.Parameters.UMAP.TargetWeight, ...
+    'ACGWeight',            ctc.Parameters.UMAP.ACGWeight, ...
+    'WaveformWeight',       ctc.Parameters.UMAP.WaveformWeight);
+
+% -- Build optimizable variable array from OptimizeVars -----------------------
+all_valid = ["MinDist", "Spread", "SupervisedNDims", "SupervisedNNeighbors", ...
+             "TargetWeight", "ACGWeight", "WaveformWeight"];
+opt_vars  = string(p_bo.OptimizeVars);
+bad_vars  = opt_vars(~ismember(opt_vars, all_valid));
+assert(isempty(bad_vars), ...
+    'CellTypeClassifier:unknownOptVar  Unknown OptimizeVars: %s\nValid: %s', ...
+    strjoin(bad_vars, ', '), strjoin(all_valid, ', '));
+
+vars = optimizableVariable.empty;
+if ismember("MinDist",              opt_vars)
+    vars(end+1) = optimizableVariable('MinDist',              p_bo.MinDistRange,              'Transform', 'log');
+end
+if ismember("Spread",               opt_vars)
+    vars(end+1) = optimizableVariable('Spread',               p_bo.SpreadRange);
+end
+if ismember("SupervisedNDims",      opt_vars)
+    vars(end+1) = optimizableVariable('SupervisedNDims',      p_bo.SupervisedNDimsRange,      'Type', 'integer');
+end
+if ismember("SupervisedNNeighbors", opt_vars)
+    vars(end+1) = optimizableVariable('SupervisedNNeighbors', p_bo.SupervisedNNeighborsRange, 'Type', 'integer');
+end
+if ismember("TargetWeight",         opt_vars)
+    vars(end+1) = optimizableVariable('TargetWeight',         p_bo.TargetWeightRange);
+end
+if ismember("ACGWeight",            opt_vars)
+    vars(end+1) = optimizableVariable('ACGWeight',            p_bo.ACGWeightRange);
+end
+if ismember("WaveformWeight",       opt_vars)
+    vars(end+1) = optimizableVariable('WaveformWeight',       p_bo.WaveformWeightRange);
+end
+
+n_vars    = numel(vars);
+max_evals = max(20, 10 * n_vars);
 
 % -- Generate training labels once (fixed across all iterations) --------------
 if opts.Verbose
@@ -140,19 +185,28 @@ end
 
 % -- Objective function (inlined UMAP + kNN; no CellTypeClassifier per eval) --
 function loss = objective(x)
+    % Resolve each parameter: from BayOpt table if being optimised, else fixed default
+    v_min_dist  = getpval(x, 'MinDist',              fixed_defaults, opt_vars);
+    v_spread    = getpval(x, 'Spread',               fixed_defaults, opt_vars);
+    v_ndims     = getpval(x, 'SupervisedNDims',      fixed_defaults, opt_vars);
+    v_nneigh    = getpval(x, 'SupervisedNNeighbors', fixed_defaults, opt_vars);
+    v_tw        = getpval(x, 'TargetWeight',         fixed_defaults, opt_vars);
+    v_acg       = getpval(x, 'ACGWeight',            fixed_defaults, opt_vars);
+    v_wf        = getpval(x, 'WaveformWeight',       fixed_defaults, opt_vars);
+
     % Apply per-evaluation feature group weighting
     X_tr = X_train_base;
     X_te = X_test_base;
     if n_acg > 0
-        X_tr(:, is_acg) = X_tr(:, is_acg) * sqrt(x.ACGWeight / n_acg);
-        X_te(:, is_acg) = X_te(:, is_acg) * sqrt(x.ACGWeight / n_acg);
+        X_tr(:, is_acg) = X_tr(:, is_acg) * sqrt(v_acg / n_acg);
+        X_te(:, is_acg) = X_te(:, is_acg) * sqrt(v_acg / n_acg);
     end
     if n_wf > 0
-        X_tr(:, is_wf) = X_tr(:, is_wf) * sqrt(x.WaveformWeight / n_wf);
-        X_te(:, is_wf) = X_te(:, is_wf) * sqrt(x.WaveformWeight / n_wf);
+        X_tr(:, is_wf) = X_tr(:, is_wf) * sqrt(v_wf / n_wf);
+        X_te(:, is_wf) = X_te(:, is_wf) * sqrt(v_wf / n_wf);
     end
 
-    sup_nn = min(x.SupervisedNNeighbors, minority_ceiling);
+    sup_nn = min(v_nneigh, minority_ceiling);
 
     % -- Run supervised UMAP directly (training + test projection) --------
     rng(rng_seed, 'twister');
@@ -163,11 +217,11 @@ function loss = objective(x)
     try
         [train_red, ~, ~, ~] = run_umap([X_tr, y_train'], ...
             'label_column',       'end', ...
-            'n_components',       x.SupervisedNDims, ...
+            'n_components',       v_ndims, ...
             'n_neighbors',        sup_nn, ...
-            'min_dist',           x.MinDist, ...
-            'spread',             x.Spread, ...
-            'target_weight',      x.TargetWeight, ...
+            'min_dist',           v_min_dist, ...
+            'spread',             v_spread, ...
+            'target_weight',      v_tw, ...
             ...
             'method',             'java', ...
             'verbose',            'none', ...
@@ -215,6 +269,26 @@ function loss = objective(x)
 
     % -- Objective metric -------------------------------------------------
     switch p_bo.ObjectiveMetric
+        case "edge_homophily"
+            % Fraction of k-NN in supervised embedding sharing the same
+            % predicted label. Evaluated on test nodes only (train labels
+            % are fixed anchors and would trivially inflate homophily).
+            all_red     = [train_red; test_red];
+            N_all_h     = size(all_red, 1);
+            N_tr_h      = numel(y_train);
+            k_hom       = min(conf_k, N_all_h - 1);
+            [nn_emb, ~] = knnsearch(all_red, all_red, 'K', k_hom + 1);
+            nn_emb      = nn_emb(:, 2:end);   % (N_all_h x k_hom)
+            all_lbl     = [y_train(:); test_labels(:)];
+            nn_lbl      = reshape(all_lbl(nn_emb(:)), N_all_h, k_hom);
+            hom_all     = mean(nn_lbl == all_lbl, 2);   % (N_all_h x 1)
+            test_hom    = hom_all(N_tr_h + 1:end);
+            valid_th    = ~isnan(test_labels);
+            if sum(valid_th) < 5
+                loss = 1; return
+            end
+            loss = -mean(test_hom(valid_th));
+
         case "weighted_silhouette"
             valid_test = ~isnan(test_labels);
             if sum(valid_test) < 10 || numel(unique(test_labels(valid_test))) < 2
@@ -246,7 +320,7 @@ function loss = objective(x)
 
         otherwise
             error('CellTypeClassifier:unknownMetric', ...
-                'Unknown ObjectiveMetric: "%s". Valid: weighted_silhouette, trustworthiness, silhouette, combined.', ...
+                'Unknown ObjectiveMetric: "%s". Valid: edge_homophily, weighted_silhouette, trustworthiness, silhouette, combined.', ...
                 p_bo.ObjectiveMetric);
     end
 
@@ -259,8 +333,8 @@ function loss = objective(x)
     if opts.Verbose
         fprintf(['  MinDist=%.3g Spread=%.3g NDims=%d NNeigh=%d(->%d) ' ...
             'TW=%.3f ACG=%.2f WF=%.2f -> loss=%.3f inh=%.1f%%\n'], ...
-            x.MinDist, x.Spread, x.SupervisedNDims, x.SupervisedNNeighbors, sup_nn, ...
-            x.TargetWeight, x.ACGWeight, x.WaveformWeight, loss, 100*inh_frac);
+            v_min_dist, v_spread, v_ndims, v_nneigh, sup_nn, ...
+            v_tw, v_acg, v_wf, loss, 100*inh_frac);
     end
 end
 
@@ -279,30 +353,37 @@ bo_result = bayesopt(@objective, vars, ...
     'PlotFcn', {});
 
 % -- Extract best parameters -------------------------------------------------
+% Merge optimised values with fixed defaults so bestParams is always complete.
 best = bo_result.XAtMinObjective;
+best_full = fixed_defaults;
+for vn = opt_vars
+    best_full.(vn) = best.(vn);
+end
 
 results.bestParams    = struct('UMAP', struct( ...
-    'MinDist',              best.MinDist, ...
-    'Spread',               best.Spread, ...
-    'SupervisedNDims',      best.SupervisedNDims, ...
-    'SupervisedNNeighbors', best.SupervisedNNeighbors, ...
-    'TargetWeight',         best.TargetWeight, ...
-    'ACGWeight',            best.ACGWeight, ...
-    'WaveformWeight',       best.WaveformWeight));
+    'MinDist',              best_full.MinDist, ...
+    'Spread',               best_full.Spread, ...
+    'SupervisedNDims',      best_full.SupervisedNDims, ...
+    'SupervisedNNeighbors', best_full.SupervisedNNeighbors, ...
+    'TargetWeight',         best_full.TargetWeight, ...
+    'ACGWeight',            best_full.ACGWeight, ...
+    'WaveformWeight',       best_full.WaveformWeight));
 results.bestObjective  = bo_result.MinObjective;
 results.bayesoptResult = bo_result;
 results.allObjectives  = bo_result.XTrace;
 results.nVars          = n_vars;
+results.optimizedVars  = opt_vars;
+results.fixedVars      = all_valid(~ismember(all_valid, opt_vars));
 
 if opts.Verbose
     fprintf('\nBest parameters (metric=%s, %d evaluations):\n', p_bo.ObjectiveMetric, max_evals);
-    fprintf('  %-25s %g\n',  'MinDist',              best.MinDist);
-    fprintf('  %-25s %g\n',  'Spread',               best.Spread);
-    fprintf('  %-25s %d\n',  'SupervisedNDims',      best.SupervisedNDims);
-    fprintf('  %-25s %d\n',  'SupervisedNNeighbors', best.SupervisedNNeighbors);
-    fprintf('  %-25s %.3f\n','TargetWeight',          best.TargetWeight);
-    fprintf('  %-25s %.3f\n','ACGWeight',             best.ACGWeight);
-    fprintf('  %-25s %.3f\n','WaveformWeight',        best.WaveformWeight);
+    all_var_names = ["MinDist","Spread","SupervisedNDims","SupervisedNNeighbors", ...
+                     "TargetWeight","ACGWeight","WaveformWeight"];
+    for vn = all_var_names
+        tag = '';
+        if ~ismember(vn, opt_vars); tag = ' (fixed)'; end
+        fprintf('  %-25s %g%s\n', vn, best_full.(vn), tag);
+    end
     fprintf('  Best objective:         %.4f\n', results.bestObjective);
 end
 
@@ -342,6 +423,16 @@ function T = computeTrustworthinessPrecomputed(nn_high, X_low, k)
         return
     end
     T = max(0, min(1, 1 - (2 / denom) * penalty));
+end
+
+% -- Helper: resolve parameter value (optimised table or fixed default) -------
+function val = getpval(x, name, fixed_defaults, opt_vars)
+% Returns x.(name) if 'name' is in opt_vars, otherwise fixed_defaults.(name).
+    if ismember(name, opt_vars)
+        val = x.(name);
+    else
+        val = fixed_defaults.(name);
+    end
 end
 
 % -- Helper: safe file deletion -----------------------------------------------

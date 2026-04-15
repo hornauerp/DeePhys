@@ -136,12 +136,25 @@ classdef CellTypeClassifier < handle
                 sr  = s.sr;
             else
                 % -- Level 3: compute ---------------------------------------------
-                % Waveform: always from UnitData
-                wf = double([unit_data.ReferenceWaveform]);
-                if isempty(wf)
+                % Waveform: always from UnitData.
+                % Units from different recordings may have different waveform lengths
+                % (different sampling rates or pre/post trough cutouts). Collect
+                % individually and pad shorter waveforms with NaN so buildFeatureMatrix
+                % can resample everything to the common target grid.
+                wf_list   = {unit_data.ReferenceWaveform};
+                wf_lens   = cellfun(@numel, wf_list);
+                max_len   = max(wf_lens);
+                if max_len == 0
                     wf = zeros(0, N);
                     sr = ph.WaveformTargetSamplingRate;
                 else
+                    wf = nan(max_len, N);
+                    for i_wf = 1:N
+                        L = wf_lens(i_wf);
+                        if L > 0
+                            wf(1:L, i_wf) = double(wf_list{i_wf}(:));
+                        end
+                    end
                     sr = unit_data(1).SamplingRate;
                 end
 
@@ -461,21 +474,42 @@ classdef CellTypeClassifier < handle
             defaultParams.TrainLabels.ResponsiveClassLabel = 2;  % 2=responsive->inhibitory, 1=responsive->excitatory
 
             % ── Outlier detection ─────────────────────────────────────────────
-            defaultParams.OutlierDetection.CounterexampleRatio                = 1;    % 1:1 balanced default; use actual ratio for metadata
-            defaultParams.OutlierDetection.CounterexampleDistancePercentile = 50;   % percentile of inh self-distances used as CE distance threshold
-
-            % Isolation forest parameters (used for both inh candidate and CE outlier detection).
-            %   Domain: space for iforest input. "umap" = unsupervised UMAP embedding
-            %     (captures nonlinear structure); "pca" = PCA of candidate features (legacy).
-            %   ContaminationFraction: "auto" = infer via GMM on anomaly scores (only
-            %     remove outliers when bimodal separation exists); or numeric in [0, 0.5).
-            %   AutoGMMSeparation: min distance between GMM component means (in units of
-            %     pooled std) to declare a distinct outlier population. Only used when "auto".
-            %   NPCAComponents: PCA dimensionality when Domain="pca". Capped at n-1.
+            % Method: controls how responsive-unit outliers are detected and how
+            %   counterexamples are selected when no explicit CE labels are provided.
+            %   "community" — Louvain community filter + graph purity check + k-medoids CE.
+            %                  Falls back to "iforest" if communities are not well-separated.
+            %   "iforest"   — Isolation forest on feature-space (PCA or UMAP domain) +
+            %                  geometric consistency filter + distance-based CE selection.
+            %   "none"      — No outlier detection; all responsive units used as training
+            %                  labels; distance-based CE selection without iforest filtering.
+            defaultParams.OutlierDetection.Method                            = "community";
+            defaultParams.OutlierDetection.CounterexampleRatio               = 1;    % 1:1 balanced default; use actual ratio for metadata
+            defaultParams.OutlierDetection.CounterexampleDistancePercentile  = 50;   % percentile of inh self-distances used as CE distance threshold
             defaultParams.OutlierDetection.Domain                = "umap";
             defaultParams.OutlierDetection.ContaminationFraction = "auto";
             defaultParams.OutlierDetection.AutoGMMSeparation     = 2;
             defaultParams.OutlierDetection.NPCAComponents        = 15;
+
+            % ── Community detection ───────────────────────────────────────────
+            % Used in generateTrainLabels for community-based CE selection.
+            %   LouvainResolution: Louvain gamma parameter (1 = standard modularity;
+            %     higher = finer communities). Set by optimizeUnsupervisedUMAP or manually.
+            %   InhibitoryCommunityRelThresh: community is considered inhibitory if its
+            %     responsive fraction >= this × max responsive fraction across communities.
+            %   CommunityFallbackThreshold: if fewer than this fraction of responsive units
+            %     land in inhibitory communities, fall back to distance-based CE selection.
+            %   MinCEPerCommunity: minimum k-medoids selected from each CE community.
+            %   PuritySigmaThreshold: robust z-score cutoff for graph purity outlier removal.
+            %   LouvainRestarts: number of Louvain restarts; best-Q run is used.
+            %   EnrichmentFactor: community must have >= EnrichmentFactor × p_resp responsive
+            %     fraction to qualify as inhibitory (chance-anchored absolute floor).
+            defaultParams.Community.LouvainResolution             = 1.0;
+            defaultParams.Community.InhibitoryCommunityRelThresh  = 0.3;
+            defaultParams.Community.CommunityFallbackThreshold    = 0.5;
+            defaultParams.Community.MinCEPerCommunity             = 3;
+            defaultParams.Community.PuritySigmaThreshold          = 2.5;
+            defaultParams.Community.LouvainRestarts               = 5;
+            defaultParams.Community.EnrichmentFactor              = 1.5;
 
             % ── Classification ────────────────────────────────────────────────
             defaultParams.Classification.Method                 = "graph";   % "knn" (feature-space kNN) or "graph" (UMAP graph label propagation)
@@ -496,23 +530,25 @@ classdef CellTypeClassifier < handle
             defaultParams.Ensemble.MinAgreement = 0.6;
 
             % ── Bayesian optimization ────────────────────────────────────────
-            % Optimizes 6 parameters to produce well-structured supervised embeddings.
-            % Objective: "weighted_silhouette" (default) — evaluates cluster separation
-            % on the TEST embedding only (not train, which is directly shaped by the
-            % supervised signal). Asymmetric weighting 0.7*inh + 0.3*exc because the
-            % minority inhibitory class is the harder classification target.
-            % 60 evaluations (10 per variable).
+            % Single-phase optimization (Phase 1):
+            %   optimizeUnsupervisedUMAP: optimises unsupervised UMAP + Louvain parameters
+            %     for community_coherence — fraction of responsive units in inhibitory
+            %     Louvain communities. Variables: UnsupOptimizeVars.
+            %   AutoLouvainRange: when true, the LouvainResolution search range is
+            %     adapted based on N_all/n_responsive to target communities of
+            %     appropriate granularity. User range (LouvainResolutionRange) sets
+            %     the hard bounds; AutoLouvainRange adjusts the upper bound.
+
             defaultParams.BayesianOptimization.MinDistRange              = [0.01, 1.0];
             defaultParams.BayesianOptimization.SpreadRange               = [0.5, 5.0];
-            defaultParams.BayesianOptimization.SupervisedNDimsRange      = [2, 10];
-            defaultParams.BayesianOptimization.SupervisedNNeighborsRange = [5, 30];
-            defaultParams.BayesianOptimization.TargetWeightRange         = [0.05, 0.4];
             defaultParams.BayesianOptimization.ACGWeightRange            = [0.5, 3.0];
             defaultParams.BayesianOptimization.WaveformWeightRange       = [0.5, 3.0];
-            defaultParams.BayesianOptimization.ObjectiveMetric           = "weighted_silhouette";  % "weighted_silhouette" | "trustworthiness" | "silhouette" | "combined"
-            defaultParams.BayesianOptimization.UseInterneuronPenalty     = false;
-            defaultParams.BayesianOptimization.InterneuronTarget         = 0.19;
-            defaultParams.BayesianOptimization.InterneuronWeight         = 5.0;
+            defaultParams.BayesianOptimization.UnsupOptimizeVars      = [ ...
+                "NNeighbors", "MinDist", "Spread", "ACGWeight", "WaveformWeight", "LouvainResolution"];
+            defaultParams.BayesianOptimization.NNeighborsRange        = [10, 100];
+            defaultParams.BayesianOptimization.LouvainResolutionRange = [0.5, 3.0];
+            defaultParams.BayesianOptimization.AutoLouvainRange       = true;
+            defaultParams.BayesianOptimization.UnsupObjectiveMetric   = "community_coherence";
 
             % ── Diagnostics ───────────────────────────────────────────────────
             % Enable: when true, each pipeline method generates a diagnostic figure

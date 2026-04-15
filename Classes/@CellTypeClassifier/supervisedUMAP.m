@@ -28,6 +28,11 @@ arguments
     X_test  (:,:) double
 end
 
+warning('CellTypeClassifier:deprecated', ...
+    ['supervisedUMAP is deprecated. ' ...
+     'classifyUnits() now uses label propagation on ctc.UMAP.graph (unsupervised) ' ...
+     'and no longer calls supervisedUMAP. This function is retained for backward compatibility only.']);
+
 p = ctc.Parameters.UMAP;
 rng(ctc.Parameters.RNGSeed, 'twister');
 tdir = p.TemplateDir;

@@ -210,7 +210,12 @@ try
     end
 
     n_samp = size(wf, 1);
-    t_ms   = (0:(n_samp-1)) / sr * 1000;
+    ph_h   = ctc.Parameters.Harmonization;
+    if isfield(ph_h, 'WaveformPreTrough') && isfield(ph_h, 'WaveformPostTrough')
+        t_ms = linspace(-ph_h.WaveformPreTrough, ph_h.WaveformPostTrough, n_samp);
+    else
+        t_ms = (0:(n_samp-1)) / sr * 1000;
+    end
 
     wf_resp    = wf(:, resp_idx_ud);
     wf_nonresp = wf(:, ~resp_idx_ud);

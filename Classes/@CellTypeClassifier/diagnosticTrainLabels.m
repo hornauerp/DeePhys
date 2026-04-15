@@ -3,10 +3,10 @@ function diagnosticTrainLabels(ctc)
 %
 % Tiles:
 %   (1,1) Filter funnel  — horizontal bar chart showing label-pipeline attrition
-%   (1,2) PCA scatter    — training subset colored by pipeline stage
+%   (1,2) UMAP scatter   — community structure (background) + responsive/train overlays
 %   (1,3) Silhouette     — per-unit silhouette values for training set
 %   (2,1) Cohen's d      — top 6 discriminative features
-%   (2,2) CE distances   — counterexample distance distribution from inh centroid
+%   (2,2) Community fractions — responsive fraction per Louvain community (or CE distances)
 %   (2,3) UMAP scatter   — unsupervised embedding colored by training assignment
 %
 % Each tile is guarded by try/catch.
@@ -19,7 +19,7 @@ end
 C_INH   = [0.8 0.1 0.1];   % inhibitory: red
 C_EXC   = [0.1 0.3 0.8];   % excitatory: blue
 C_GREY  = [0.6 0.6 0.6];   % unlabeled:  grey
-C_ORNG  = [0.9 0.5 0.0];   % geom-rejected: orange
+C_ORNG  = [0.9 0.5 0.0];   % rejected: orange
 
 fig = figure('Visible', 'on');
 set(fig, 'Position', [100 100 1400 800]);
@@ -30,6 +30,8 @@ title(tl, 'Training labels diagnostics', 'FontWeight', 'bold');
 tl_struct = ctc.TrainLabels;
 np        = ctc.NormalizationParams;
 nf        = ctc.NormalizedFeatures;
+
+use_community = isfield(tl_struct, 'use_community_path') && tl_struct.use_community_path;
 
 % ── Helper: reconstruct normalized feature matrix for all unique units ────────
 %   Mirrors the pipeline in classifyUnits exactly.
@@ -46,28 +48,32 @@ nf        = ctc.NormalizedFeatures;
 % ── Tile (1,1): Filter funnel ─────────────────────────────────────────────────
 nexttile(1);
 try
+    assert(isfield(tl_struct, 'filter_counts'), ...
+        'filter_counts not found — re-run generateTrainLabels()');
     fc = tl_struct.filter_counts;
-    inh_vals   = [fc.n_responsive_in, fc.n_after_outlier, fc.n_after_geometric];
-    inh_labels = {'Candidates in', 'After outlier detection', 'After geom. filter'};
-    exc_vals   = [fc.n_ce_in, fc.n_ce_after_outlier];
-    exc_labels = {'CE candidates', 'After outlier detection'};
+    inh_vals = [fc.n_responsive_in, fc.n_after_outlier, fc.n_after_geometric];
+    exc_vals = [fc.n_ce_in, fc.n_ce_after_outlier];
+
+    if use_community
+        inh_labels = {'Responsive candidates', 'After community filter', 'After purity filter'};
+        exc_labels = {'CE community pool', 'CE training set'};
+    else
+        inh_labels = {'Responsive candidates', 'After outlier detection', 'After geom. filter'};
+        exc_labels = {'CE candidates', 'CE training set'};
+    end
 
     n_inh = numel(inh_vals);
     n_exc = numel(exc_vals);
-
-    % y positions: inh group at rows 1..n_inh, exc group offset by n_inh+1
-    gap    = 1.5;
-    y_inh  = (n_inh:-1:1)';
-    y_exc  = (n_exc:-1:1)' + n_inh + gap;
+    gap   = 1.5;
+    y_inh = (n_inh:-1:1)';
+    y_exc = (n_exc:-1:1)' + n_inh + gap;
 
     hold on;
-    % Inhibitory bars
     for bi = 1:n_inh
         barh(y_inh(bi), inh_vals(bi), 'FaceColor', C_INH, 'EdgeColor', 'none');
         text(inh_vals(bi) + max(inh_vals)*0.01, y_inh(bi), ...
             num2str(inh_vals(bi)), 'VerticalAlignment', 'middle', 'FontSize', 8);
     end
-    % Excitatory bars
     for bi = 1:n_exc
         barh(y_exc(bi), exc_vals(bi), 'FaceColor', C_EXC, 'EdgeColor', 'none');
         text(exc_vals(bi) + max([inh_vals, exc_vals])*0.01, y_exc(bi), ...
@@ -89,81 +95,124 @@ catch ME
         'FontSize', 8, 'Color', [0.6 0 0]);
 end
 
-% ── Tile (1,2): PCA scatter colored by pipeline stage ─────────────────────────
+% ── Tile (1,2): UMAP with community structure overlay ────────────────────────
 nexttile(2);
 try
-    X_feat = buildXFeat();
-
-    % Subset rows
-    X_sub  = X_feat(nf.subset_mask, :);
-    n_comp = min(2, size(X_sub, 1) - 1);
-    if n_comp < 2
-        error('Too few training-subset units for PCA');
+    unsup = ctc.Reduction.Unsupervised;
+    if isempty(unsup)
+        error('Unsupervised UMAP not available');
     end
-    [~, scores] = pca(X_sub, 'NumComponents', 2);
-    pc1 = scores(:, 1);
-    pc2 = scores(:, 2);
+    u1 = unsup(:, 1);
+    u2 = unsup(:, 2);
+    N_unsup = size(unsup, 1);
 
-    % Global unique indices for training units
     train_inh_global = tl_struct.sorted_train_ids(tl_struct.sorted_y_train == 2);
     train_exc_global = tl_struct.sorted_train_ids(tl_struct.sorted_y_train == 1);
 
-    % Responsive candidates — local to subset (UnitID-based, order-independent)
-    unit_ids_table   = string(ctc.FeatureStore.UnitTable.UnitID);
-    resp_uids_diag   = unique(unit_ids_table(ctc.ResponsiveUnitIdx));
-    unique_ud_ids_d  = string({nf.unique_ud.UnitID});  % row vector
-    resp_unique_mask = ismember(unique_ud_ids_d, resp_uids_diag);
-    subset_global    = find(nf.subset_mask);
-    resp_local       = find(resp_unique_mask(nf.subset_mask));
-
-    % Rejected-by-outlier local indices (local to subset)
-    outlier_rejected_local = resp_local(tl_struct.resp_outlier_mask);
-
-    % Rejected-by-geom local indices (local to subset, relative to after-outlier set)
-    after_outlier_local = resp_local(~tl_struct.resp_outlier_mask);
-    if ~isempty(tl_struct.resp_geom_mask) && ~isempty(after_outlier_local)
-        geom_rejected_local = after_outlier_local(tl_struct.resp_geom_mask);
-    else
-        geom_rejected_local = zeros(1, 0);
-    end
-
-    % Map global unique indices to local-subset indices
-    % subset_global(local) = global_unique_idx
-    [~, inh_local] = ismember(train_inh_global, subset_global);
-    [~, exc_local] = ismember(train_exc_global, subset_global);
-    inh_local = inh_local(inh_local > 0);
-    exc_local = exc_local(exc_local > 0);
-
     hold on;
-    % All subset units: grey background
-    scatter(pc1, pc2, 15, C_GREY, 'filled', 'MarkerFaceAlpha', 0.3, ...
-        'DisplayName', 'Subset (unlabeled)');
-    % Outlier-rejected inhibitory: black x
-    if ~isempty(outlier_rejected_local)
-        scatter(pc1(outlier_rejected_local), pc2(outlier_rejected_local), 30, ...
-            'kx', 'LineWidth', 1.2, 'DisplayName', 'Inh: outlier rejected');
-    end
-    % Geom-rejected inhibitory: orange x
-    if ~isempty(geom_rejected_local)
-        scatter(pc1(geom_rejected_local), pc2(geom_rejected_local), 30, ...
-            'x', 'MarkerEdgeColor', C_ORNG, 'LineWidth', 1.2, ...
-            'DisplayName', 'Inh: geom rejected');
-    end
-    % Final inhibitory training units: red filled
-    if ~isempty(inh_local)
-        scatter(pc1(inh_local), pc2(inh_local), 40, C_INH, 'filled', ...
-            'DisplayName', 'Inhibitory (train)');
-    end
-    % Final excitatory counterexamples: blue filled
-    if ~isempty(exc_local)
-        scatter(pc1(exc_local), pc2(exc_local), 40, C_EXC, 'filled', ...
-            'DisplayName', 'Excitatory (train)');
+    if use_community && isfield(tl_struct, 'community_ids') && ~isempty(tl_struct.community_ids)
+        % Background: one color per Louvain community (pastel palette)
+        comm_ids    = tl_struct.community_ids;
+        inh_comm_ids = tl_struct.inh_comm_ids;
+        n_comm      = max(comm_ids);
+        cmap_pastel = lines(max(n_comm, 1));
+        % Lighten colours for background
+        cmap_bg     = 0.5 * cmap_pastel + 0.5;
+        for c = 1:n_comm
+            c_mask = comm_ids == c;
+            is_inh_comm = ismember(c, inh_comm_ids);
+            if is_inh_comm
+                col = cmap_pastel(c, :);   % saturated for inhibitory communities
+                msz = 12;
+            else
+                col = cmap_bg(c, :);
+                msz = 8;
+            end
+            scatter(u1(c_mask), u2(c_mask), msz, col, 'filled', ...
+                'MarkerFaceAlpha', 0.5);
+        end
+
+        % Overlay responsive candidates
+        unit_ids_table  = string(ctc.FeatureStore.UnitTable.UnitID);
+        resp_uids_diag  = unique(unit_ids_table(ctc.ResponsiveUnitIdx));
+        unique_ud_ids_d = string({nf.unique_ud.UnitID});
+        resp_unique_mask = ismember(unique_ud_ids_d, resp_uids_diag);
+        resp_global     = find(resp_unique_mask);
+        if ~isempty(resp_global)
+            scatter(u1(resp_global), u2(resp_global), 20, 'k', 'x', ...
+                'LineWidth', 0.8, 'DisplayName', 'Responsive');
+        end
+
+        % Training units on top
+        if ~isempty(train_inh_global)
+            scatter(u1(train_inh_global), u2(train_inh_global), 45, C_INH, 'filled', ...
+                'MarkerEdgeColor', 'k', 'LineWidth', 0.5, 'DisplayName', 'Inh train');
+        end
+        if ~isempty(train_exc_global)
+            scatter(u1(train_exc_global), u2(train_exc_global), 45, C_EXC, 'filled', ...
+                'MarkerEdgeColor', 'k', 'LineWidth', 0.5, 'DisplayName', 'CE train');
+        end
+
+        % Annotate inhibitory community centroids
+        for c = inh_comm_ids(:)'
+            c_mask = comm_ids == c;
+            if any(c_mask)
+                cx = mean(u1(c_mask));
+                cy = mean(u2(c_mask));
+                text(cx, cy, sprintf('C%d*', c), 'FontSize', 7, 'FontWeight', 'bold', ...
+                    'HorizontalAlignment', 'center', 'Color', C_INH);
+            end
+        end
+
+        title(sprintf('Louvain communities (%d comm, Q=%.2f)', ...
+            n_comm, tl_struct.Q_modularity));
+    else
+        % Fallback: pipeline-stage coloring (original behaviour)
+        unit_ids_table   = string(ctc.FeatureStore.UnitTable.UnitID);
+        resp_uids_diag   = unique(unit_ids_table(ctc.ResponsiveUnitIdx));
+        unique_ud_ids_d  = string({nf.unique_ud.UnitID});
+        resp_unique_mask = ismember(unique_ud_ids_d, resp_uids_diag);
+        resp_global      = find(resp_unique_mask);
+        outlier_rejected_global = resp_global(tl_struct.resp_outlier_mask);
+        after_outlier_global    = resp_global(~tl_struct.resp_outlier_mask);
+        if isfield(tl_struct, 'resp_geom_mask') && ~isempty(tl_struct.resp_geom_mask) ...
+                && ~isempty(after_outlier_global)
+            geom_rejected_global = after_outlier_global(tl_struct.resp_geom_mask);
+        else
+            geom_rejected_global = zeros(1, 0);
+        end
+
+        unlabeled_mask = true(N_unsup, 1);
+        unlabeled_mask(train_inh_global) = false;
+        unlabeled_mask(train_exc_global) = false;
+        unlabeled_mask(outlier_rejected_global) = false;
+        unlabeled_mask(geom_rejected_global)    = false;
+
+        scatter(u1(unlabeled_mask), u2(unlabeled_mask), 10, C_GREY, 'filled', ...
+            'MarkerFaceAlpha', 0.3, 'DisplayName', 'Unlabeled');
+        if ~isempty(outlier_rejected_global)
+            scatter(u1(outlier_rejected_global), u2(outlier_rejected_global), 30, ...
+                'kx', 'LineWidth', 1.2, 'DisplayName', 'Inh: outlier rejected');
+        end
+        if ~isempty(geom_rejected_global)
+            scatter(u1(geom_rejected_global), u2(geom_rejected_global), 30, ...
+                'x', 'MarkerEdgeColor', C_ORNG, 'LineWidth', 1.2, ...
+                'DisplayName', 'Inh: geom rejected');
+        end
+        if ~isempty(train_inh_global)
+            scatter(u1(train_inh_global), u2(train_inh_global), 40, C_INH, 'filled', ...
+                'DisplayName', 'Inhibitory (train)');
+        end
+        if ~isempty(train_exc_global)
+            scatter(u1(train_exc_global), u2(train_exc_global), 40, C_EXC, 'filled', ...
+                'DisplayName', 'Excitatory (train)');
+        end
+        title('Label pipeline (unsupervised UMAP)');
+        legend('Location', 'best', 'Box', 'off', 'FontSize', 7);
     end
     hold off;
-    xlabel('PC1');
-    ylabel('PC2');
-    title('Label pipeline (PC1 vs PC2)');
-    legend('Location', 'best', 'Box', 'off', 'FontSize', 7);
+    xlabel('UMAP 1');
+    ylabel('UMAP 2');
     box off;
 catch ME
     cla; axis off;
@@ -196,7 +245,6 @@ try
 
     sil = silhouette(X_for_sil, y_train');
 
-    % Sort within each class and plot horizontal bars
     hold on;
     class_vals = unique(y_train);
     y_pos      = 0;
@@ -230,7 +278,7 @@ end
 % ── Tile (2,1): Top discriminative features (Cohen's d) ───────────────────────
 nexttile(4);
 try
-    X_feat  = buildXFeat();
+    X_feat    = buildXFeat();
     train_idx = tl_struct.sorted_train_ids;
     y_train   = tl_struct.sorted_y_train;
     X_train   = X_feat(train_idx, :);
@@ -254,7 +302,6 @@ try
 
     feat_names = np.feat_names_trimmed;
     fn_top     = feat_names(top6);
-    % Shorten names to last 20 chars
     for fi = 1:numel(fn_top)
         s = char(fn_top(fi));
         if numel(s) > 20
@@ -265,9 +312,7 @@ try
     hold on;
     for fi = 1:numel(d_top)
         col = C_INH;
-        if d_top(fi) < 0
-            col = C_EXC;
-        end
+        if d_top(fi) < 0; col = C_EXC; end
         barh(fi, d_top(fi), 'FaceColor', col, 'EdgeColor', 'none');
     end
     hold off;
@@ -284,53 +329,96 @@ catch ME
         'FontSize', 8, 'Color', [0.6 0 0]);
 end
 
-% ── Tile (2,2): Counterexample distance distribution ─────────────────────────
+% ── Tile (2,2): Community responsive fractions (or CE distances fallback) ─────
 nexttile(5);
 try
-    dists = tl_struct.ce_distances_from_inh_centroid;
-    if isempty(dists)
-        error('No distance data available');
-    end
+    if use_community && isfield(tl_struct, 'community_ids') && ~isempty(tl_struct.community_ids)
+        % ── Community path: bar chart of responsive fraction per community ──────
+        comm_ids     = tl_struct.community_ids;
+        inh_comm_ids = tl_struct.inh_comm_ids;
+        n_comm       = max(comm_ids);
 
-    dists = dists(:);
+        unit_ids_table   = string(ctc.FeatureStore.UnitTable.UnitID);
+        resp_uids_diag   = unique(unit_ids_table(ctc.ResponsiveUnitIdx));
+        unique_ud_ids_d  = string({nf.unique_ud.UnitID});
+        resp_unique_mask = ismember(unique_ud_ids_d, resp_uids_diag);
 
-    % Inhibitory training unit distances from inh centroid
-    X_feat       = buildXFeat();
-    train_idx    = tl_struct.sorted_train_ids;
-    y_train      = tl_struct.sorted_y_train;
-    inh_centroid = tl_struct.inh_centroid;
-    X_inh_train  = X_feat(train_idx(y_train == 2), :);
+        comm_resp_frac = zeros(1, n_comm);
+        for c = 1:n_comm
+            c_mask = comm_ids == c;
+            if any(c_mask)
+                comm_resp_frac(c) = sum(resp_unique_mask(c_mask)) / sum(c_mask);
+            end
+        end
 
-    if ~isempty(X_inh_train) && ~isempty(inh_centroid)
-        inh_dists = pdist2(inh_centroid, X_inh_train, 'correlation');
-        inh_dists = inh_dists(:);
+        % Sort descending by responsive fraction
+        [sorted_frac, sort_ord] = sort(comm_resp_frac, 'descend');
+        is_inh_sorted = ismember(sort_ord, inh_comm_ids);
+
+        hold on;
+        for ci = 1:n_comm
+            col = C_GREY;
+            if is_inh_sorted(ci); col = C_INH; end
+            barh(ci, sorted_frac(ci), 'FaceColor', col, 'EdgeColor', 'none', ...
+                'FaceAlpha', 0.8);
+            text(sorted_frac(ci) + 0.005, ci, ...
+                sprintf('C%d', sort_ord(ci)), ...
+                'VerticalAlignment', 'middle', 'FontSize', 7);
+        end
+        hold off;
+
+        % Threshold line at max_frac × RelThresh
+        max_frac  = max(comm_resp_frac);
+        thresh_frac = max_frac * ctc.Parameters.Community.InhibitoryCommunityRelThresh;
+        xline(thresh_frac, '--r', 'LineWidth', 1.5);
+
+        yticks([]);
+        xlabel('Responsive fraction');
+        title(sprintf('Community resp. fractions (Q=%.2f, %d inh)', ...
+            tl_struct.Q_modularity, numel(inh_comm_ids)));
+        box off;
     else
-        inh_dists = [];
-    end
+        % ── Fallback: CE distance distribution ───────────────────────────────
+        dists = tl_struct.ce_distances_from_inh_centroid;
+        if isempty(dists)
+            error('No distance data available');
+        end
+        dists = dists(:);
 
-    hold on;
-    histogram(dists, 20, 'FaceColor', [0.4 0.7 1.0], 'FaceAlpha', 0.6, ...
-        'EdgeColor', 'none', 'DisplayName', 'CE pool');
+        X_feat       = buildXFeat();
+        train_idx    = tl_struct.sorted_train_ids;
+        y_train      = tl_struct.sorted_y_train;
+        inh_centroid = tl_struct.inh_centroid;
+        X_inh_train  = X_feat(train_idx(y_train == 2), :);
 
-    if ~isempty(inh_dists)
-        histogram(inh_dists, 20, 'FaceColor', C_INH, 'FaceAlpha', 0.5, ...
-            'EdgeColor', 'none', 'DisplayName', 'Inh training');
-    end
+        if ~isempty(X_inh_train) && ~isempty(inh_centroid)
+            inh_dists = pdist2(inh_centroid, X_inh_train, 'correlation');
+            inh_dists = inh_dists(:);
+        else
+            inh_dists = [];
+        end
 
-    % Vertical line at selection threshold (n_pick-th value)
-    fc     = tl_struct.filter_counts;
-    n_pick = fc.n_ce_in;   % number of CE candidates initially selected
-    if n_pick > 0 && n_pick <= numel(dists)
-        sorted_d  = sort(dists, 'descend');
-        thresh_d  = sorted_d(n_pick);
-        xline(thresh_d, '--r', 'LineWidth', 1.5, 'DisplayName', 'Selection threshold');
+        hold on;
+        histogram(dists, 20, 'FaceColor', [0.4 0.7 1.0], 'FaceAlpha', 0.6, ...
+            'EdgeColor', 'none', 'DisplayName', 'CE pool');
+        if ~isempty(inh_dists)
+            histogram(inh_dists, 20, 'FaceColor', C_INH, 'FaceAlpha', 0.5, ...
+                'EdgeColor', 'none', 'DisplayName', 'Inh training');
+        end
+        fc = tl_struct.filter_counts;
+        n_pick = fc.n_ce_in;
+        if n_pick > 0 && n_pick <= numel(dists)
+            sorted_d  = sort(dists, 'descend');
+            thresh_d  = sorted_d(n_pick);
+            xline(thresh_d, '--r', 'LineWidth', 1.5, 'DisplayName', 'Selection threshold');
+        end
+        hold off;
+        xlabel('Correlation distance from inh centroid');
+        ylabel('Count');
+        title('CE distance distribution');
+        legend('Location', 'best', 'Box', 'off', 'FontSize', 8);
+        box off;
     end
-    hold off;
-    xlabel('Correlation distance from inh centroid');
-    ylabel('Count');
-    title('CE distance distribution');
-    legend('Location', 'best', 'Box', 'off', 'FontSize', 8);
-    box off;
 catch ME
     cla; axis off;
     if contains(ME.message, 'No distance')
@@ -351,20 +439,13 @@ try
         error('UMAP not available');
     end
 
-    % unsup rows correspond to training-subset unique units (subset_mask == true)
-    n_sub = size(unsup, 1);
-    subset_global = find(nf.subset_mask);
-
-    % Determine per-subset-row assignment
+    n_unsup = size(unsup, 1);
     train_inh_global = tl_struct.sorted_train_ids(tl_struct.sorted_y_train == 2);
     train_exc_global = tl_struct.sorted_train_ids(tl_struct.sorted_y_train == 1);
 
-    [~, inh_local] = ismember(train_inh_global, subset_global);
-    [~, exc_local] = ismember(train_exc_global, subset_global);
-    inh_local = inh_local(inh_local > 0);
-    exc_local = exc_local(exc_local > 0);
-
-    unlabeled_mask = true(n_sub, 1);
+    unlabeled_mask = true(n_unsup, 1);
+    inh_local = train_inh_global(train_inh_global <= n_unsup);
+    exc_local = train_exc_global(train_exc_global <= n_unsup);
     unlabeled_mask(inh_local) = false;
     unlabeled_mask(exc_local) = false;
 

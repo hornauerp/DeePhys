@@ -1,4 +1,4 @@
-function [X, feature_names, aligned_wf, norm_acgs] = buildFeatureMatrix(ctc, waveforms, acgs, sr_wf, acg_bin_size, acg_lag)
+function [X, feature_names, aligned_wf, norm_acgs, wf_window] = buildFeatureMatrix(ctc, waveforms, acgs, sr_wf, acg_bin_size, acg_lag)
 % BUILDFEATUREMATRIX  Build a classifier-compatible feature matrix from raw waveforms and ACGs.
 %
 % Converts raw waveforms and ACGs (from DeePhys units or any external source)
@@ -225,4 +225,10 @@ X = [norm_acgs', aligned_wf'];
 
 fprintf('Feature matrix: %i units × %i features (%i ACG + %i waveform)\n', ...
     N_units, size(X, 2), size(norm_acgs, 1), size(aligned_wf, 1));
+
+% ── Return actual waveform window (for cross-dataset harmonization) ─────────
+wf_window.pre_trough_ms  = n_out_pre  * dt_out;
+wf_window.post_trough_ms = n_out_post * dt_out;
+wf_window.n_samples      = n_out;
+wf_window.target_sr      = target_sr;
 end
