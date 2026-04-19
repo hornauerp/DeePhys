@@ -25,6 +25,8 @@ arguments
 end
 
 assert(~isempty(eia.BurstCutouts), 'Run extractBurstCutouts() before plotting');
+assert(culture_idx >= 1 && culture_idx <= numel(eia.BurstCutouts), ...
+    'culture_idx %d out of range [1, %d]', culture_idx, numel(eia.BurstCutouts));
 
 bc = eia.BurstCutouts(culture_idx);
 if isempty(bc.accepted.total)

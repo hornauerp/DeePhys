@@ -1,14 +1,23 @@
 function computeActivity(eia)
-% COMPUTEACTIVITY  Build E, I, and total firing rate traces for each culture.
+% COMPUTEACTIVITY  Build E, I, and total spike-count traces for each culture.
 %
 % Groups units by culture (via FeatureStore.MetadataTable), bins spike trains
 % from UnitData.SpikeTimes, separates by cell type label, and computes mean
-% firing rates for each population.
+% (or sum, per RateType) spike counts per bin for each population.
 %
-% Classified units only (label 1 or 2) contribute to total_fr, so that
-% total_fr = mean(E_units + I_units) and the I/E ratio is internally consistent.
+% IMPORTANT — units:
+%   Activity.E, .I, .total are stored in SPIKES PER BIN (not Hz).
+%   To convert to Hz, divide by Parameters.Activity.BinSize.
+%   PlotEITraces performs this conversion at plot time when labelling axes.
+%
+% Classified units only (label 1 or 2) contribute to total, so that
+% total = mean(E_units + I_units) and the I/E ratio is internally consistent.
 % The raw per-unit binned matrix is stored in Activity.binned_mat for reuse by
 % computeCorrelations (avoids redundant spike binning).
+%
+% Note on ratio smoothing: the stored ratio is movmean(I_raw ./ E_raw), not
+% movmean(I_raw) ./ movmean(E_raw). Per-bin ratio computation followed by
+% smoothing can produce larger transients near bins where E ≈ 0.
 %
 % Clears BurstState, BurstCutouts, NormalizedCutouts, and Correlations to
 % prevent stale downstream results after re-running with new parameters.
@@ -40,6 +49,7 @@ activity = repmat(struct( ...
 
 for c = 1:n_cultures
     cid        = map.unique_cultures(c);
+    fprintf('  computeActivity: culture %d/%d (%s)\n', c, n_cultures, cid);
     unit_mask  = map.culture_ids == cid;
     unit_rows  = find(unit_mask);
     ud_indices = map.ud_order(unit_rows);

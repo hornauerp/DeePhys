@@ -26,7 +26,7 @@ eia = EIAnalyzer(ctc);
 % With custom parameters:
 %   params.Activity.BinSize          = 0.01;   % 10 ms bins
 %   params.Activity.SecCutout        = [0, 600]; % first 600 s
-%   params.BurstDetection.Threshold  = 2;       % I/E ratio to enter burst state
+%   params.BurstDetection.MaxIERatio = 2;       % I/E ratio to enter burst state
 %   params.BurstDetection.SmoothWindow = 9;     % median filter width (bins)
 %   eia = EIAnalyzer(ctc, params);
 
@@ -36,9 +36,9 @@ disp(eia.Parameters.BurstDetection);
 %% 3  Compute per-culture activity traces
 %
 % For each culture, computes:
-%   .E     — excitatory firing rate trace (Hz)
-%   .I     — inhibitory firing rate trace (Hz)
-%   .total — total population firing rate (Hz)
+%   .E     — excitatory mean spike count per bin (spikes/bin; divide by BinSize for Hz)
+%   .I     — inhibitory mean spike count per bin
+%   .total — total classified-unit mean spike count per bin
 %   .ratio — smoothed I/E ratio trace
 %   .x     — time axis (s)
 
@@ -46,19 +46,20 @@ eia.computeActivity();
 
 % Inspect the first culture
 act1 = eia.Activity(1);
-fprintf('Culture 1: %d time bins, E max %.2f Hz, I max %.2f Hz\n', ...
+fprintf('Culture 1: %d time bins, E max %.4f spikes/bin, I max %.4f spikes/bin\n', ...
     numel(act1.x), max(act1.E), max(act1.I));
 
 %% 4  Detect bursts
 %
-% Labels each time bin as burst (2) or non-burst (1) based on the I/E ratio
-% exceeding BurstDetection.Threshold.
+% Labels each time bin as burst (true) or non-burst (false). A bin is a burst
+% when the I/E ratio is below MaxIERatio AND the excitatory rate exceeds the
+% percentile-based noise floor.
 
 eia.detectBursts();
 
 % Inspect burst state for first culture
 bs1 = eia.BurstState{1};
-burst_frac = mean(bs1 == 2);
+burst_frac = mean(bs1);  % BurstState is logical: true = burst
 fprintf('Culture 1 burst fraction: %.1f%%\n', 100 * burst_frac);
 
 %% 5  Extract aligned burst cutouts
@@ -69,7 +70,7 @@ fprintf('Culture 1 burst fraction: %.1f%%\n', 100 * burst_frac);
 eia.extractBurstCutouts();
 
 bc1 = eia.BurstCutouts(1);
-fprintf('Culture 1 bursts detected: %d\n', size(bc1.total, 1));
+fprintf('Culture 1 bursts detected: %d\n', size(bc1.all.total, 1));
 
 %% 6  Compute unit-population correlations
 %
@@ -93,19 +94,33 @@ eia.PlotNetworkActivity(1);
 %% 9  Plotting — E/I traces
 
 % Plot stacked E and I firing rate traces for culture 1 (full recording)
-eia.PlotEITraces(1, [0, 600]);
+eia.PlotEITraces(1);
+
+% To zoom into a specific window, pass bin indices via StackCutout:
+%   eia.PlotEITraces(1, 'StackCutout', 1:round(600/eia.Parameters.Activity.BinSize));
 
 %% 10  Plotting — burst cutouts
 
 eia.PlotBurstCutouts(1);
 
+%% 10b  Plotting — burst-aligned raster
+%
+% Shows individual unit spike times aligned to burst peaks, sorted by cell type
+% (excitatory first, then inhibitory) and coloured accordingly.
+
+eia.PlotBurstRaster(1);
+
+% To show only a specific burst or cluster:
+%   eia.PlotBurstRaster(1, 'BurstIndex', 3);
+%   eia.PlotBurstRaster(1, 'ClusterIndex', 1);
+
 %% 11  Parameter tuning — burst detection
 %
-% Lower threshold = more bins flagged as bursts.
+% Lower MaxIERatio = more bins flagged as bursts (excitatory-dominant threshold).
 % Higher SmoothWindow = smoother ratio trace, less sensitive to short transients.
 
 eia2 = EIAnalyzer(ctc);
-eia2.Parameters.BurstDetection.Threshold   = 1.5;
+eia2.Parameters.BurstDetection.MaxIERatio   = 1.5;
 eia2.Parameters.BurstDetection.SmoothWindow = 15;
 eia2.computeActivity();
 eia2.detectBursts();
@@ -128,7 +143,7 @@ n_cultures = numel(eia.Activity);
 burst_fracs = zeros(1, n_cultures);
 for c = 1:n_cultures
     if ~isempty(eia.BurstState{c})
-        burst_fracs(c) = mean(eia.BurstState{c} == 2);
+        burst_fracs(c) = mean(eia.BurstState{c});  % logical: true = burst
     end
 end
 figure;

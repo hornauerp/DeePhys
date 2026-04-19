@@ -23,6 +23,7 @@ all_labels = eia.Classifier.UnitLabels;
 corrs      = repmat(struct('pop_corr', [], 'cell_id', []), 1, numel(eia.Activity));
 
 for c = 1:numel(eia.Activity)
+    fprintf('  computeCorrelations: culture %d/%d\n', c, numel(eia.Activity));
     act = eia.Activity(c);
 
     if isempty(act.binned_mat)

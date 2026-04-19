@@ -16,24 +16,28 @@ classdef EIAnalyzer < handle
 % Plotting:
 %   eia.PlotNetworkActivity(c)    % firing rate coloured by burst state
 %   eia.PlotBurstCutouts(c)       % mean E/I burst shapes and gradients
-%   eia.PlotEITraces(c, range)    % stacked E/I + total firing rate
+%   eia.PlotEITraces(c)           % stacked E/I + total firing rate
+%   eia.PlotBurstRaster(c)        % unit raster aligned to burst peaks (E=blue, I=red)
 %
 % BurstCutouts structure (per culture c):
-%   .all        — all bursts after initial xcorr alignment
-%   .accepted   — bursts surviving outlier rejection
-%   .rejected   — discarded outlier bursts
-%   .clusters   — (1 x K) struct array; each cluster xcorr-aligned to its own mean
-%   .cluster_idx — assignment of each accepted burst to a cluster (1 x N_accepted)
-%   .silhouette — mean silhouette score for the chosen k (quality metric)
+%   .all           — all bursts after initial xcorr alignment
+%   .accepted      — bursts surviving outlier rejection
+%   .rejected      — discarded outlier bursts
+%   .clusters      — (1 x K) struct array; each cluster xcorr-aligned to its own mean
+%   .cluster_idx   — assignment of each accepted burst to a cluster (1 x N_accepted)
+%   .silhouette    — mean silhouette score for the chosen k (quality metric)
+%   .accepted_locs — (1 x N_accepted) burst peak bin indices into Activity.total
+%                    (used for spike-time alignment in PlotBurstRaster)
 
     properties
         Classifier      % CellTypeClassifier — provides UnitLabels, FeatureStore, UnitDataArray
         Parameters      % struct — merged from returnDefaultParams + user overrides
         Activity        % (1 x N_cultures) struct array: .I .E .total .ratio .x .I_raw .E_raw .binned_mat
-        BurstState      % (1 x N_cultures) cell: binary burst-state vector per culture
-        BurstCutouts    % (1 x N_cultures) struct: .all .accepted .rejected .clusters .cluster_idx .silhouette
+                        %   NOTE: .I/.E/.total are in spikes/bin (NOT Hz); divide by BinSize to convert
+        BurstState      % (1 x N_cultures) cell: logical burst-state vector (true = burst bin)
+        BurstCutouts    % (1 x N_cultures) struct: .all .accepted .rejected .clusters .cluster_idx .silhouette .accepted_locs
         Correlations    % (1 x N_cultures) struct: .pop_corr .cell_id
-        NormalizedCutouts  % struct: .bursts (N_cultures x N_bins), .ie (N_cultures x N_bins)
+        NormalizedCutouts  % struct: .bursts (N_cultures x N_bins), .inh_frac (N_cultures x N_bins), .burst_counts
     end
 
     methods
@@ -106,7 +110,7 @@ classdef EIAnalyzer < handle
             defaultParams.BurstDetection.ClusterDistance    = "correlation";  % pdist metric for clustering
 
             % Normalisation
-            defaultParams.BurstDetection.NormalizationWindow = "peak_to_end";  % "peak_to_end" | "full"
+            defaultParams.BurstDetection.NormalizationWindow = "full";  % "full" | "peak_to_end" (post-peak only)
             defaultParams.BurstDetection.TemporalFeatures    = false;  % append temporal context to burst clustering
 
             % Plotting

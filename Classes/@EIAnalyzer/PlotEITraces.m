@@ -23,6 +23,8 @@ arguments
 end
 
 assert(~isempty(eia.Activity), 'Run computeActivity() before plotting');
+assert(culture_idx >= 1 && culture_idx <= numel(eia.Activity), ...
+    'culture_idx %d out of range [1, %d]', culture_idx, numel(eia.Activity));
 
 act = eia.Activity(culture_idx);
 p   = eia.Parameters.Activity;

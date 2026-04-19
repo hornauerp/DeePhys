@@ -22,6 +22,8 @@ end
 
 assert(~isempty(eia.BurstState), ...
     'Run computeActivity() and detectBursts() before plotting');
+assert(culture_idx >= 1 && culture_idx <= numel(eia.Activity), ...
+    'culture_idx %d out of range [1, %d]', culture_idx, numel(eia.Activity));
 
 act = eia.Activity(culture_idx);
 z   = eia.BurstState{culture_idx};
@@ -34,7 +36,7 @@ else
 end
 
 colors = [0.12, 0.47, 0.71; 0.84, 0.19, 0.15];  % blue (non-burst) / red (burst)
-vertex_colors = colors(z, :);
+vertex_colors = colors(double(z) + 1, :);  % z is logical: false→1 (blue), true→2 (red)
 
 patch(ax, ...
     'XData',           [act.x, NaN], ...

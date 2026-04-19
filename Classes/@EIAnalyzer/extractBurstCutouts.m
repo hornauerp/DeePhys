@@ -45,12 +45,13 @@ eia.NormalizedCutouts = [];
 p = eia.Parameters.BurstDetection;
 
 empty_cutout = struct( ...
-    'all',       struct('total',[],'i_mat',[],'e_mat',[]), ...
-    'accepted',  struct('total',[],'i_mat',[],'e_mat',[]), ...
-    'rejected',  struct('total',[],'i_mat',[],'e_mat',[]), ...
-    'clusters',  struct('total',[],'i_mat',[],'e_mat',[]), ...
-    'cluster_idx', [], ...
-    'silhouette',  NaN);
+    'all',           struct('total',[],'i_mat',[],'e_mat',[]), ...
+    'accepted',      struct('total',[],'i_mat',[],'e_mat',[]), ...
+    'rejected',      struct('total',[],'i_mat',[],'e_mat',[]), ...
+    'clusters',      struct('total',[],'i_mat',[],'e_mat',[]), ...
+    'cluster_idx',   [], ...
+    'silhouette',    NaN, ...
+    'accepted_locs', []);  % burst peak bin indices for accepted bursts
 
 cutouts = repmat(empty_cutout, 1, numel(eia.Activity));
 
@@ -60,7 +61,7 @@ for c = 1:numel(eia.Activity)
 
     % ── Stage 0: Peak detection ───────────────────────────────────────────
     if p.MaskPeaks
-        peak_trace = act.total .* (z == 2);
+        peak_trace = act.total .* double(z);  % z is logical: true = burst bin
     else
         peak_trace = act.total;
     end
@@ -95,10 +96,11 @@ for c = 1:numel(eia.Activity)
     end
 
     % Drop bursts with NaN bins
-    valid     = ~any(isnan(burst_mat), 2);
-    burst_mat = burst_mat(valid,:);
-    i_mat     = i_mat(valid,:);
-    e_mat     = e_mat(valid,:);
+    valid      = ~any(isnan(burst_mat), 2);
+    valid_locs = locs(valid);  % peak bin indices surviving NaN filter
+    burst_mat  = burst_mat(valid,:);
+    i_mat      = i_mat(valid,:);
+    e_mat      = e_mat(valid,:);
 
     if size(burst_mat, 1) < p.MinBursts
         warning('EIAnalyzer:tooFewBursts', ...
@@ -135,11 +137,13 @@ for c = 1:numel(eia.Activity)
         keep(rank(1:min(p.MinBursts, end))) = true;
     end
 
-    reject = ~keep;
-    cutouts(c).accepted = struct( ...
+    reject   = ~keep;
+    acc_locs = valid_locs(keep);  % peak bin indices for accepted bursts
+    cutouts(c).accepted      = struct( ...
         'total', burst_mat(keep,:), 'i_mat', i_mat(keep,:), 'e_mat', e_mat(keep,:));
-    cutouts(c).rejected = struct( ...
+    cutouts(c).rejected      = struct( ...
         'total', burst_mat(reject,:), 'i_mat', i_mat(reject,:), 'e_mat', e_mat(reject,:));
+    cutouts(c).accepted_locs = acc_locs;
 
     % ── Stage 2: Hierarchical clustering ─────────────────────────────────
     acc_mat = burst_mat(keep,:);
@@ -149,9 +153,7 @@ for c = 1:numel(eia.Activity)
     % Compute temporal features for clustering (optional, off by default)
     temporal_feats = [];
     if p.TemporalFeatures
-        kept_locs = locs(valid);  % locs after NaN removal
-        kept_locs = kept_locs(keep);  % locs after outlier rejection
-        temporal_feats = buildTemporalFeatures(kept_locs, acc_mat, eia.Parameters.Activity.BinSize);
+        temporal_feats = buildTemporalFeatures(acc_locs, acc_mat, eia.Parameters.Activity.BinSize);
     end
 
     [clusters, cluster_idx, sil] = clusterBursts(acc_mat, acc_i, acc_e, p, temporal_feats);
@@ -159,6 +161,9 @@ for c = 1:numel(eia.Activity)
     cutouts(c).clusters    = clusters;
     cutouts(c).cluster_idx = cluster_idx;
     cutouts(c).silhouette  = sil;
+
+    fprintf('  extractBurstCutouts: culture %d/%d — %d peaks, %d accepted, k=%d (sil=%.2f)\n', ...
+        c, numel(eia.Activity), n_bursts, sum(keep), numel(clusters), sil);
 end
 
 eia.BurstCutouts = cutouts;
@@ -168,12 +173,15 @@ end
 
 function [burst_mat, i_mat, e_mat] = xcorrAlign(burst_mat, i_mat, e_mat, peak_cutout, max_shift)
 % Align bursts to population mean via cross-correlation with clamped shift.
-    norm_burst = burst_mat ./ max(burst_mat, [], 2);
+% Uses max_shift as the xcorr maxlag (not peak_cutout) so only lags within the
+% allowed shift range are computed, avoiding wasted computation.
+    row_max    = max(burst_mat, [], 2);
+    norm_burst = burst_mat ./ max(row_max, eps);  % guard against all-zero rows
     mean_burst = mean(norm_burst, 1, 'omitnan');
     for b = 1:size(burst_mat, 1)
-        xc           = xcorr(norm_burst(b,:), mean_burst, peak_cutout);
+        xc           = xcorr(norm_burst(b,:), mean_burst, max_shift);
         [~, max_lag] = max(xc);
-        raw_shift    = (peak_cutout + 1) - max_lag;
+        raw_shift    = (max_shift + 1) - max_lag;
         shift        = max(-max_shift, min(max_shift, raw_shift));
         burst_mat(b,:) = nanShift(burst_mat(b,:), shift);
         i_mat(b,:)     = nanShift(i_mat(b,:),     shift);
@@ -184,6 +192,12 @@ end
 function keep = rejectOutliers(burst_mat, p)
 % Iterative correlation-based outlier rejection.
 % Returns logical keep vector (same size as burst_mat rows).
+%
+% Note: correlations are evaluated for ALL rows each iteration, not just the
+% currently-kept ones. This means a burst rejected in iteration i can re-enter
+% in iteration i+1 if the template shifts after its removal. This is intentional:
+% the full reconsideration ensures convergence to a globally consistent template
+% rather than locking in early rejections made against a biased initial mean.
     keep = true(size(burst_mat, 1), 1);
 
     for iter = 1:p.MaxFilterIter
@@ -328,10 +342,11 @@ end
 
 function [burst_mat, i_mat, e_mat] = xcorrAlignToMean(burst_mat, i_mat, e_mat, max_shift)
 % xcorr-align rows to the current mean (used for per-cluster realignment).
-    mean_burst = mean(burst_mat ./ max(burst_mat, [], 2), 1, 'omitnan');
+    row_max    = max(burst_mat, [], 2);
+    mean_burst = mean(burst_mat ./ max(row_max, eps), 1, 'omitnan');  % guard zero rows
     n          = size(burst_mat, 1);
     for b = 1:n
-        norm_row     = burst_mat(b,:) ./ max(burst_mat(b,:));
+        norm_row     = burst_mat(b,:) ./ max(max(burst_mat(b,:)), eps);
         xc           = xcorr(norm_row, mean_burst, max_shift);
         [~, max_lag] = max(xc);
         shift        = (max_shift + 1) - max_lag;
