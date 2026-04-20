@@ -113,6 +113,11 @@ classdef Experiment < handle
             opts.NormalizationGroups = norm_groups;
 
             result = Classifier.classify(X, Y, opts);
+            if isfield(exp.Results.Classification, classification_var) && ...
+                    ~isempty(exp.Results.Classification.(classification_var))
+                warning('Experiment:overwrite', ...
+                    'Overwriting existing Classification result for "%s".', classification_var);
+            end
             exp.Results.Classification.(classification_var) = result;
         end
 
@@ -151,15 +156,15 @@ classdef Experiment < handle
 
             switch level
                 case "Unit"
-                    [X, ~] = exp.FeatureStore.unitMatrix(fg, pf);
+                    [X, ~] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet);
                     norm_groups = exp.metadataColumn(exp.FeatureStore.UnitTable, opts.NormalizationVar);
                 case "Recording"
-                    [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf);
+                    [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf, FeatureSet=opts.FeatureSet);
                     norm_groups = exp.metadataColumn(exp.FeatureStore.RecordingTable, opts.NormalizationVar);
                 case "Culture"
                     [X, ~] = exp.FeatureStore.cultureMatrix( ...
                         opts.IdentityKeys, opts.GroupingVar, opts.GroupingValues, ...
-                        opts.Normalization, fg);
+                        opts.Normalization, fg, FeatureSet=opts.FeatureSet);
                     norm_groups = [];
                 otherwise
                     error('Experiment:reduce', 'Unknown level "%s".', level);
@@ -199,7 +204,7 @@ classdef Experiment < handle
             pf = opts.ParentFeatures;
             switch level
                 case "Unit"
-                    [X, ~] = exp.FeatureStore.unitMatrix(fg, pf);
+                    [X, ~] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet);
                     tbl    = exp.FeatureStore.UnitTable;
                     if opts.CVLevel == "culture"
                         cv_groups = FeatureStore.getCultureIDsForUnits( ...
@@ -211,7 +216,7 @@ classdef Experiment < handle
                     norm_groups = exp.metadataColumn(tbl, opts.NormalizationVar);
                     Y = exp.extractLabel(tbl, label_var);
                 case "Recording"
-                    [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf);
+                    [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf, FeatureSet=opts.FeatureSet);
                     tbl    = exp.FeatureStore.RecordingTable;
                     cv_groups   = [];
                     norm_groups = exp.metadataColumn(tbl, opts.NormalizationVar);
@@ -219,7 +224,7 @@ classdef Experiment < handle
                 case "Culture"
                     [X, culture_ids] = exp.FeatureStore.cultureMatrix( ...
                         opts.IdentityKeys, opts.GroupingVar, opts.GroupingValues, ...
-                        opts.Normalization, fg);
+                        opts.Normalization, fg, FeatureSet=opts.FeatureSet);
                     cv_groups   = [];
                     norm_groups = [];
                     % Y must be provided explicitly (culture-level labels cannot be
@@ -306,6 +311,7 @@ classdef Experiment < handle
 
         function opts = fillOpts(opts)
             if ~isfield(opts, 'FeatureGroups'),   opts.FeatureGroups = "all";          end
+            if ~isfield(opts, 'FeatureSet'),      opts.FeatureSet = "full";            end
             if ~isfield(opts, 'NormalizationVar'), opts.NormalizationVar = "";          end
             if ~isfield(opts, 'CVLevel'),          opts.CVLevel = "recording";         end
             if ~isfield(opts, 'Method'),           opts.Method = "UMAP";               end
@@ -313,7 +319,7 @@ classdef Experiment < handle
             if ~isfield(opts, 'GroupingVar'),      opts.GroupingVar = "DIV";           end
             if ~isfield(opts, 'GroupingValues'),   opts.GroupingValues = [7,14,21,28]; end
             if ~isfield(opts, 'Normalization'),    opts.Normalization = "";             end
-            if ~isfield(opts, 'ParentFeatures'),   opts.ParentFeatures = ["ACG"];       end
+            if ~isfield(opts, 'ParentFeatures'),   opts.ParentFeatures = string.empty;  end
         end
 
     end

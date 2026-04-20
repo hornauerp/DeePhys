@@ -42,7 +42,7 @@ classdef MLPipeline < handle
         %   Replaces hardcoded values scattered across RecordingGroup methods.
             params.RF.NumCycles = 500;
             params.RF.MinLeafSize = 5;  % ≥5 prevents leaf-level memorisation on typical neuro datasets
-            params.RF.NumVariablesToSample = 'all';
+            params.RF.NumVariablesToSample = 'auto';  % auto = sqrt(F) for classif, F/3 for regress (Breiman, 2001)
             params.RF.Surrogate = 'on';
             params.RF.Reproducible = true;
             params.RF.Prior = 'empirical';  % 'uniform' gives equal weight to each class regardless of frequency

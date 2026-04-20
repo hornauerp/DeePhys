@@ -7,6 +7,7 @@ classdef Regressor
 %   opts.KFold             = 5;
 %   opts.NHyper            = 0;
 %   opts.NormalizationGroups = fs.RecordingTable.PlatingDate;
+%   opts.CVGroups            = fs.UnitTable.RecordingID;  % hierarchy-aware CV
 %
 %   result = Regressor.regress(X, Y, opts);
 
@@ -22,7 +23,9 @@ classdef Regressor
         %     .KFold             - number of folds (default 5)
         %     .NHyper            - hyperparam evaluations (default 0)
         %     .NormalizationGroups - (N x 1) string/numeric for per-group z-score
-        %     .StratificationVar - (N x 1) for stratified CV splitting
+        %     .CVGroups          - (N x 1) string/numeric for hierarchy-aware CV
+        %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
+        %     .StratificationVar - (N x 1) for stratified CV splitting (ignored when CVGroups set)
         %
         % OUTPUTS:
         %   result - (1 x K) RegressionResult array
@@ -34,14 +37,20 @@ classdef Regressor
 
             opts = Regressor.defaultOpts(opts);
             norm_groups = Regressor.resolveGroups(opts.NormalizationGroups, height(X));
+            cv_groups   = Regressor.resolveGroups(opts.CVGroups, height(X));
 
-            % CV partition
+            % CV partition — prefer hierarchy-aware GroupedCV when CVGroups provided
             K = opts.KFold;
-            if ~isempty(opts.StratificationVar)
-                strat = opts.StratificationVar;
-                cv = cvpartition(strat, 'KFold', K);
+            if ~isempty(cv_groups)
+                gcv     = GroupedCV.byGroups(cv_groups, K);
+                K       = gcv.NumFolds;
+                use_gcv = true;
+            elseif ~isempty(opts.StratificationVar)
+                cv      = cvpartition(opts.StratificationVar, 'KFold', K);
+                use_gcv = false;
             else
-                cv = cvpartition(height(X), 'KFold', K);
+                cv      = cvpartition(height(X), 'KFold', K);
+                use_gcv = false;
             end
 
             t_start = tic;
@@ -49,18 +58,24 @@ classdef Regressor
             result(K) = RegressionResult();
 
             for k = 1:K
-                train_idx = cv.training(k);
-                test_idx  = cv.test(k);
+                if use_gcv
+                    [train_idx, test_idx] = gcv.fold(k);
+                else
+                    train_idx = cv.training(k);
+                    test_idx  = cv.test(k);
+                end
 
                 Y_train = Y(train_idx);
                 Y_test  = Y(test_idx);
 
-                [X_train, X_test] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups);
+                [X_train, X_test, feat_names] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups);
 
                 clf = fitrensemble(X_train, Y_train, 'Method', 'Bag', ...
                     'NumLearningCycles', 500, 'Learners', t, ...
                     'Options', statset('UseParallel', true));
                 Y_pred = predict(clf, X_test);
+
+                predImp = oobPermutedPredictorImportance(clf, 'Options', statset('UseParallel', true));
 
                 result(k) = RegressionResult( ...
                     'Mdl',       clf, ...
@@ -68,8 +83,8 @@ classdef Regressor
                     'Y_test',    Y_test, ...
                     'mse_train', resubLoss(clf), ...
                     'objects',   [], ...
-                    'predImp',   [], ...
-                    'Features',  [], ...
+                    'predImp',   predImp, ...
+                    'Features',  feat_names, ...
                     'Parameters', struct('normalization_var', opts.NormalizationGroups, 'K_fold', K));
             end
 
@@ -89,6 +104,7 @@ classdef Regressor
             if ~isfield(opts, 'KFold'),              opts.KFold = 5;              end
             if ~isfield(opts, 'NHyper'),             opts.NHyper = 0;             end
             if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
+            if ~isfield(opts, 'CVGroups'),           opts.CVGroups = [];          end
             if ~isfield(opts, 'StratificationVar'),  opts.StratificationVar = []; end
         end
 
@@ -108,10 +124,11 @@ classdef Regressor
             end
         end
 
-        function [X_train, X_test] = normalizeFeatures(X, train_idx, test_idx, norm_groups)
-            mat = X.Variables;
+        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)
+            mat        = X.Variables;
+            feat_names = string(X.Properties.VariableNames);
 
-            % Impute NaN
+            % Impute NaN using training-set median
             for col = 1:size(mat, 2)
                 train_col = mat(train_idx, col);
                 med = median(train_col(~isnan(train_col)));
@@ -138,6 +155,7 @@ classdef Regressor
             bad = any(isnan(X_train)) | any(isnan(X_test));
             X_train(:, bad) = [];
             X_test(:, bad)  = [];
+            feat_names(bad) = [];
         end
 
     end

@@ -235,23 +235,30 @@ classdef FeatureStore < handle
     % =====================================================================
     methods
 
-        function [X, unit_ids] = unitMatrix(fs, feature_groups, parent_features)
+        function [X, unit_ids] = unitMatrix(fs, feature_groups, parent_features, options)
         % UNITMATRIX  Return feature table and unit IDs for ML.
         %
         %   [X, unit_ids] = fs.unitMatrix('all')
         %   [X, unit_ids] = fs.unitMatrix(["ActivityFeatures","ReferenceWaveform"])
-        %   [X, unit_ids] = fs.unitMatrix('all', ["ACG"])     % prefer parent ACGs
-        %   [X, unit_ids] = fs.unitMatrix('all', "all")        % all parent features
+        %   [X, unit_ids] = fs.unitMatrix('all', ["ACG"])          % prefer parent ACGs
+        %   [X, unit_ids] = fs.unitMatrix('all', "all")             % all parent features
+        %   [X, unit_ids] = fs.unitMatrix('all', FeatureSet="core") % core features only
+        %   [X, unit_ids] = fs.unitMatrix('ActivityFeatures', FeatureSet="core")
         %
         % X is a table with only feature columns (no identity/metadata cols).
         % Output column names are always child names (ACG1, not Parent_ACG1).
         % unit_ids is a string vector of UnitIDs corresponding to rows.
+        %
+        % FeatureSet options (see FeatureCatalog for definitions):
+        %   "full" (default) — all features in each group (backwards compatible)
+        %   "core"           — curated non-redundant, interpretable scalar features
             arguments
                 fs              FeatureStore
                 feature_groups  string = "all"
                 parent_features string = string.empty
+                options.FeatureSet (1,1) string = "full"
             end
-            cols     = fs.selectFeatureCols(fs.UnitTable, feature_groups);
+            cols     = fs.selectFeatureCols(fs.UnitTable, feature_groups, options.FeatureSet);
             X        = fs.resolveParentFeatures(fs.UnitTable, cols, parent_features);
             unit_ids = fs.UnitTable.UnitID;
         end
@@ -261,17 +268,23 @@ classdef FeatureStore < handle
         %
         %   [X, rec_ids] = fs.recordingMatrix('all')
         %   [X, rec_ids] = fs.recordingMatrix('all', ["ACG"])
+        %   [X, rec_ids] = fs.recordingMatrix('all', FeatureSet="core")
+        %
+        % FeatureSet options (see FeatureCatalog for definitions):
+        %   "full" (default) — all features in each group (backwards compatible)
+        %   "core"           — curated non-redundant, interpretable scalar features
             arguments
                 fs              FeatureStore
                 feature_groups  string = "all"
                 parent_features string = string.empty
+                options.FeatureSet (1,1) string = "full"
             end
-            cols    = fs.selectFeatureCols(fs.RecordingTable, feature_groups);
+            cols    = fs.selectFeatureCols(fs.RecordingTable, feature_groups, options.FeatureSet);
             X       = fs.resolveParentFeatures(fs.RecordingTable, cols, parent_features);
             rec_ids = fs.RecordingTable.RecordingID;
         end
 
-        function [X, culture_ids] = cultureMatrix(fs, identity_keys, grouping_var, grouping_values, normalization, feature_groups)
+        function [X, culture_ids] = cultureMatrix(fs, identity_keys, grouping_var, grouping_values, normalization, feature_groups, options)
         % CULTUREMATRIX  Culture-level feature table (one row per culture).
         %
         % Groups recordings by identity_keys (e.g. ["ChipID","PlatingDate"]),
@@ -279,6 +292,10 @@ classdef FeatureStore < handle
         % and returns a wide table with feature columns suffixed by grouping value.
         %
         % Replaces aggregateCultureFeatureTables + Culture object traversal.
+        %
+        % FeatureSet options (see FeatureCatalog for definitions):
+        %   "full" (default) — all features in each group (backwards compatible)
+        %   "core"           — curated non-redundant, interpretable scalar features
             arguments
                 fs              FeatureStore
                 identity_keys   string              = ["ChipID","PlatingDate"]
@@ -286,10 +303,11 @@ classdef FeatureStore < handle
                 grouping_values                      = [7, 14, 21, 28]
                 normalization   (1,1) string         = ""   % "baseline", "scaled", or ""
                 feature_groups  string               = "all"
+                options.FeatureSet (1,1) string = "full"
             end
 
             % Get recording-level feature columns
-            [rec_feat, rec_ids] = fs.recordingMatrix(feature_groups);
+            [rec_feat, rec_ids] = fs.recordingMatrix(feature_groups, FeatureSet=options.FeatureSet);
             meta = fs.MetadataTable;
 
             % Build culture ID string per recording
@@ -298,6 +316,7 @@ classdef FeatureStore < handle
             unique_cultures = unique(culture_ids_per_rec, 'stable');
             wide_rows = {};
             out_culture_ids = string.empty;
+            n_dropped = 0;
 
             for c = 1:numel(unique_cultures)
                 cid = unique_cultures(c);
@@ -331,14 +350,19 @@ classdef FeatureStore < handle
                 end
 
                 if ~has_all
+                    n_dropped = n_dropped + 1;
                     continue
                 end
 
                 % Normalize
                 if normalization == "baseline" && ~isempty(row_data)
                     baseline = row_data{1}.Variables;
+                    % Zero-baseline features are undefined ratios — set to NaN
+                    % rather than ~10^16 (eps denominator would create extreme outliers).
+                    safe_denom = baseline;
+                    safe_denom(abs(baseline) < 1e-9) = NaN;
                     for v = 1:numel(row_data)
-                        row_data{v}.Variables = row_data{v}.Variables ./ (baseline + eps);
+                        row_data{v}.Variables = row_data{v}.Variables ./ safe_denom;
                     end
                 elseif normalization == "scaled" && ~isempty(row_data)
                     all_vals = vertcat(row_data{:}).Variables;
@@ -360,6 +384,13 @@ classdef FeatureStore < handle
                 out_culture_ids(end+1) = cid; %#ok<AGROW>
             end
 
+            if n_dropped > 0
+                warning('FeatureStore:cultureMatrix', ...
+                    '%d of %d cultures dropped: missing at least one required %s timepoint (%s).', ...
+                    n_dropped, numel(unique_cultures), grouping_var, ...
+                    strjoin(string(grouping_values), ', '));
+            end
+
             if isempty(wide_rows)
                 X = table();
                 culture_ids = string.empty;
@@ -376,8 +407,15 @@ classdef FeatureStore < handle
     % =====================================================================
     methods (Access = private)
 
-        function cols = selectFeatureCols(fs, tbl, feature_groups)
-        % Return column names matching the requested feature groups.
+        function cols = selectFeatureCols(fs, tbl, feature_groups, feature_set)
+        % Return column names matching the requested feature groups, then
+        % optionally filtered to the named feature set (e.g. "core").
+        %
+        %   cols = fs.selectFeatureCols(tbl, feature_groups)
+        %   cols = fs.selectFeatureCols(tbl, feature_groups, "core")
+            if nargin < 4
+                feature_set = "full";
+            end
             all_cols  = string(tbl.Properties.VariableNames);
             id_cols   = ["UnitID","RecordingID"];
             meta_cols = fs.MetadataFields;
@@ -386,47 +424,97 @@ classdef FeatureStore < handle
             if isscalar(feature_groups) && feature_groups == "all"
                 % Exclude Parent_* columns — they are accessed only via resolveParentFeatures
                 cols = all_cols(~ismember(all_cols, exclude) & ~startsWith(all_cols, "Parent_"));
-                return
+            else
+                selected = false(1, numel(all_cols));
+                for g = 1:numel(feature_groups)
+                    fg = feature_groups(g);
+                    switch fg
+                        case "ActivityFeatures"
+                            names = Unit.returnFeatureNames("act");
+                            selected = selected | ismember(all_cols, names);
+                        case "WaveformFeatures"
+                            % Actual column names written by inferWaveformFeatures
+                            wf_names = ["AUC_peak_1","AUC_trough","AUC_peak_2", ...
+                                        "Rise","Decay","HalfWidth","Asymmetry", ...
+                                        "T2Pdelay","T2Pratio"];
+                            selected = selected | ismember(all_cols, wf_names);
+                        case "RegularityFeatures"
+                            names = Unit.returnFeatureNames("reg");
+                            selected = selected | ismember(all_cols, names);
+                        case "Catch22"
+                            % Catch22 columns are stored with SC_ prefix
+                            try
+                                names = "SC_" + string(GetAllFeatureNames());
+                                selected = selected | ismember(all_cols, names);
+                            catch
+                                selected = selected | startsWith(all_cols, "SC_");
+                            end
+                        case "GraphFeatures"
+                            % Per-unit graph columns: suffixed by algorithm (e.g. _CCG, _STTC)
+                            graph_roots = ["ClusteringCoefficient","LocalEfficiency", ...
+                                           "EigenCentrality","Betweenness"];
+                            for r = graph_roots
+                                selected = selected | startsWith(all_cols, r);
+                            end
+                        case "BombcellMetrics"
+                            names = Unit.returnFeatureNames("bc");
+                            selected = selected | ismember(all_cols, names);
+                        case {"ReferenceWaveform","Waveform"}
+                            selected = selected | (startsWith(all_cols,"Waveform") & ~ismember(all_cols, exclude));
+                        case "ACG"
+                            selected = selected | (startsWith(all_cols,"ACG") & ~startsWith(all_cols,"FullACG"));
+                        case "FullACG"
+                            selected = selected | startsWith(all_cols,"FullACG");
+                        case "NetworkBurst"
+                            names = ["MeanInterBurstInterval","BurstDuration", ...
+                                     "RiseTime","FallTime","PeakFR","StdFR", ...
+                                     "StdBurstDuration","StdInterBurstInterval", ...
+                                     "IntraFiringRate","InterFiringRate"];
+                            selected = selected | ismember(all_cols, names);
+                        case "NetworkRegularity"
+                            names = Unit.returnFeatureNames("reg");
+                            selected = selected | ismember(all_cols, names);
+                        case "NetworkCatch22"
+                            try
+                                names = "SC_" + string(GetAllFeatureNames());
+                                selected = selected | ismember(all_cols, names);
+                            catch
+                                selected = selected | startsWith(all_cols, "SC_");
+                            end
+                        case "NetworkGraph"
+                            % Network-level graph columns: suffixed by algorithm (e.g. _CCG)
+                            graph_roots = ["Density","Assortativity","RichClub", ...
+                                           "GlobalEfficiency","Modularity","SmallWorldness"];
+                            for r = graph_roots
+                                selected = selected | startsWith(all_cols, r);
+                            end
+                        otherwise
+                            % Treat as a column-name prefix
+                            selected = selected | startsWith(all_cols, fg);
+                    end
+                end
+                cols = all_cols(selected & ~ismember(all_cols, exclude) & ~startsWith(all_cols, "Parent_"));
             end
 
-            selected = false(1, numel(all_cols));
-            for g = 1:numel(feature_groups)
-                fg = feature_groups(g);
-                switch fg
-                    case "ActivityFeatures"
-                        names = Unit.returnFeatureNames("act");
-                        selected = selected | ismember(all_cols, names);
-                    case "WaveformFeatures"
-                        % WaveformFeatures columns: check against known names
-                        wf_names = ["PeakTroughRatio","AUC","RiseSlope","DecaySlope","HalfWidth","Asymmetry","ZeroCrossings"];
-                        selected = selected | ismember(all_cols, wf_names);
-                    case "RegularityFeatures"
-                        names = Unit.returnFeatureNames("reg");
-                        selected = selected | ismember(all_cols, names);
-                    case "Catch22"
-                        try
-                            names = string(GetAllFeatureNames());
-                            selected = selected | ismember(all_cols, names);
-                        catch
-                            selected = selected | startsWith(all_cols, "SC_");  % catch22 prefix fallback
+            % Apply feature set filter (post-group selection).
+            % "full" → no filter. "core" → intersect with core whitelist.
+            % For NetworkGraph, core names are roots — apply prefix matching.
+            if feature_set ~= "full"
+                whitelist = FeatureCatalog.features("all", feature_set);
+                if ~isempty(whitelist)
+                    % Exact match OR prefix match (for algorithm-suffixed columns)
+                    keep = false(1, numel(cols));
+                    for k = 1:numel(cols)
+                        if ismember(cols(k), whitelist)
+                            keep(k) = true;
+                        else
+                            % prefix match: any whitelist entry is a leading substring
+                            keep(k) = any(startsWith(cols(k), whitelist));
                         end
-                    case "GraphFeatures"
-                        selected = selected | startsWith(all_cols, "Graph");
-                    case "BombcellMetrics"
-                        names = Unit.returnFeatureNames("bc");
-                        selected = selected | ismember(all_cols, names);
-                    case {"ReferenceWaveform","Waveform"}
-                        selected = selected | (startsWith(all_cols,"Waveform") & ~ismember(all_cols, exclude));
-                    case "ACG"
-                        selected = selected | (startsWith(all_cols,"ACG") & ~startsWith(all_cols,"FullACG"));
-                    case "FullACG"
-                        selected = selected | startsWith(all_cols,"FullACG");
-                    otherwise
-                        % Treat as a column-name prefix
-                        selected = selected | startsWith(all_cols, fg);
+                    end
+                    cols = cols(keep);
                 end
             end
-            cols = all_cols(selected & ~ismember(all_cols, exclude) & ~startsWith(all_cols, "Parent_"));
         end
 
         function out_tbl = resolveParentFeatures(~, tbl, child_cols, parent_features)

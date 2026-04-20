@@ -7,7 +7,7 @@ classdef Classifier
 %
 % USAGE:
 %   opts.Algorithm         = 'rf';          % 'rf', 'svm', 'cnb', 'knn'
-%   opts.KFold             = -1;            % -1 = LOOCV
+%   opts.KFold             = 5;             % -1 = leave-one-group-out
 %   opts.NHyper            = 0;             % 0 = no hyperparam search
 %   opts.CVGroups          = fs.UnitTable.RecordingID;   % recording-level CV grouping
 %   opts.NormalizationGroups = fs.UnitTable.PlatingDate; % per-plate normalization
@@ -27,7 +27,7 @@ classdef Classifier
         %   Y    - (N x 1) categorical / string / double label vector
         %   opts - struct with optional fields:
         %     .Algorithm         - 'rf' (default), 'svm', 'cnb', 'knn'
-        %     .KFold             - number of folds; -1 = LOOCV (default -1)
+        %     .KFold             - number of folds; -1 = leave-one-group-out (default 5)
         %     .NHyper            - hyperparam search evaluations (default 0)
         %     .CVGroups          - (N x 1) string/categorical for hierarchy-aware CV
         %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
@@ -36,6 +36,7 @@ classdef Classifier
         %                           (e.g. fs.UnitTable.PlatingDate). [] = global z-score.
         %     .PoolingValues     - cell array to merge label values
         %     .GroupLabels       - (optional) string array of class label names
+        %     .Prior             - 'empirical' (default) or 'uniform' (equal class weight)
         %
         % OUTPUTS:
         %   result - (1 x K) ClassificationResult array, one per fold
@@ -47,6 +48,14 @@ classdef Classifier
 
             opts = Classifier.defaultOpts(opts);
             [Y, group_labels] = Classifier.prepareLabels(Y, opts.PoolingValues);
+
+            % Reproducibility: fix rng seed before building CV partition.
+            if ~isempty(opts.Seed)
+                rng(opts.Seed);
+            end
+
+            % Warn if class distribution is severely imbalanced (>3:1 ratio).
+            Classifier.checkClassBalance(Y);
 
             norm_groups = Classifier.resolveGroups(opts.NormalizationGroups, height(X));
             cv_groups   = Classifier.resolveGroups(opts.CVGroups, height(X));
@@ -81,7 +90,9 @@ classdef Classifier
                 [X_train, X_test, feat_names] = Classifier.normalizeFeatures( ...
                     X, train_idx, test_idx, norm_groups);
 
-                [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, opts.Algorithm, opts.NHyper);
+                clf_params = MLPipeline.returnDefaultParams();
+                clf_params.RF.Prior = opts.Prior;
+                [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, opts.Algorithm, opts.NHyper, clf_params);
                 [Y_pred, scores] = predict(clf, X_test);
 
                 if opts.Algorithm == "rf"
@@ -104,7 +115,8 @@ classdef Classifier
                         'algorithm',        opts.Algorithm, ...
                         'normalization_var', opts.NormalizationGroups, ...
                         'K_fold',           K, ...
-                        'N_hyper',          opts.NHyper));
+                        'N_hyper',          opts.NHyper, ...
+                        'seed',             opts.Seed));
             end
 
             elapsed = toc(t_start);
@@ -167,12 +179,31 @@ classdef Classifier
 
         function opts = defaultOpts(opts)
             if ~isfield(opts, 'Algorithm'),          opts.Algorithm = 'rf';       end
-            if ~isfield(opts, 'KFold'),              opts.KFold = -1;             end
+            if ~isfield(opts, 'KFold'),              opts.KFold = 5;              end
             if ~isfield(opts, 'NHyper'),             opts.NHyper = 0;             end
             if ~isfield(opts, 'CVGroups'),           opts.CVGroups = [];          end
             if ~isfield(opts, 'CVLevel'),            opts.CVLevel = 'recording';  end
             if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
             if ~isfield(opts, 'PoolingValues'),      opts.PoolingValues = {};     end
+            if ~isfield(opts, 'Prior'),              opts.Prior = 'empirical';    end
+            if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
+        end
+
+        function checkClassBalance(Y)
+        % Warn if the majority class is more than 3× larger than the minority.
+            classes = unique(Y);
+            if numel(classes) < 2, return, end
+            counts = arrayfun(@(c) sum(Y == c), classes);
+            ratio  = max(counts) / min(counts);
+            if ratio > 3
+                [~, maj_idx] = max(counts);
+                [~, min_idx] = min(counts);
+                warning('Classifier:imbalanced', ...
+                    'Class imbalance detected (%.1f:1 ratio). Majority "%s" (%d) vs minority "%s" (%d). ' ...
+                    'Consider opts.Prior = ''uniform'' to weight classes equally.', ...
+                    ratio, string(classes(maj_idx)), counts(maj_idx), ...
+                    string(classes(min_idx)), counts(min_idx));
+            end
         end
 
         function [Y_out, group_labels] = prepareLabels(Y, pooling_vals)

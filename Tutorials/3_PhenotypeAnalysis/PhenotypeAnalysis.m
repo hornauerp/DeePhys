@@ -31,10 +31,9 @@ opts.CVLevel       = 'recording';  % group CV at recording level
 
 result_unit = exp.classify('Unit', 'Mutation', opts);
 
-% Inspect result
-disp(result_unit);
-fprintf('Unit-level accuracy: %.2f ± %.2f\n', ...
-    mean(result_unit.Accuracy), std(result_unit.Accuracy));
+% Inspect result — classify() returns a (1xK) ClassificationResult array, one per fold.
+summary_unit = ClassificationResult.summarizeFolds(result_unit);
+fprintf('Unit-level accuracy: %.2f ± %.2f\n', summary_unit.mean_accuracy, summary_unit.std_accuracy);
 
 %% 3  Unit-level classification with parent ACGs
 %
@@ -60,7 +59,7 @@ reduction = exp.Results.DimReduction.Unit.UMAP;
 disp(reduction);
 
 % Scatter plot coloured by Mutation
-embedding = reduction.Embedding;
+embedding = reduction.Reduction;   % DimReductionResult stores coords in .Reduction
 labels    = string(exp.FeatureStore.UnitTable.Mutation);
 if ~isempty(embedding) && size(embedding, 2) >= 2
     figure;
@@ -76,8 +75,8 @@ opts_rec.Algorithm = 'rf';
 opts_rec.KFold     = 5;
 
 result_rec = exp.classify('Recording', 'Mutation', opts_rec);
-fprintf('Recording-level accuracy: %.2f ± %.2f\n', ...
-    mean(result_rec.Accuracy), std(result_rec.Accuracy));
+summary_rec = ClassificationResult.summarizeFolds(result_rec);
+fprintf('Recording-level accuracy: %.2f ± %.2f\n', summary_rec.mean_accuracy, summary_rec.std_accuracy);
 
 %% 6  Recording-level dimensionality reduction
 
@@ -98,8 +97,8 @@ opts_cult.Algorithm      = 'rf';
 opts_cult.KFold          = 5;
 
 result_cult = exp.classify('Culture', 'Mutation', opts_cult);
-fprintf('Culture-level accuracy: %.2f ± %.2f\n', ...
-    mean(result_cult.Accuracy), std(result_cult.Accuracy));
+summary_cult = ClassificationResult.summarizeFolds(result_cult);
+fprintf('Culture-level accuracy: %.2f ± %.2f\n', summary_cult.mean_accuracy, summary_cult.std_accuracy);
 
 %% 8  Culture-level regression
 %
@@ -113,7 +112,8 @@ opts_reg.GroupingValues = [7, 14, 21, 28];
 opts_reg.KFold          = 5;
 
 result_conc = exp.regress('Culture', 'Concentration', opts_reg);
-fprintf('Concentration regression R2: %.2f\n', mean(result_conc.R2));
+summary_conc = RegressionResult.summarizeFolds(result_conc);
+fprintf('Concentration regression R2: %.2f\n', summary_conc.mean_R2);
 
 %% 9  Access stored results
 
@@ -165,12 +165,15 @@ opts_fg.FeatureGroups = ["ActivityFeatures", "WaveformFeatures"];
 opts_fg.Algorithm     = 'rf';
 
 result_fg = exp.classify('Unit', 'Mutation', opts_fg);
-fprintf('Activity+Waveform accuracy: %.2f\n', mean(result_fg.Accuracy));
+summary_fg = ClassificationResult.summarizeFolds(result_fg);
+fprintf('Activity+Waveform accuracy: %.2f\n', summary_fg.mean_accuracy);
 
 %% 14  Confusion matrix visualization
 
-if ~isempty(result_unit.ConfusionMatrix)
+% Aggregate predictions across all folds for a single confusion chart.
+T_unit = ClassificationResult.results2table(result_unit);
+if ~isempty(T_unit)
     figure;
-    confusionchart(result_unit.ConfusionMatrix, result_unit.ClassNames);
-    title('Unit classification — confusion matrix');
+    confusionchart(T_unit.Y_test, T_unit.Y_pred);
+    title('Unit classification — confusion matrix (all folds)');
 end
