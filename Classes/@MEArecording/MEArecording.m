@@ -738,6 +738,7 @@ classdef MEArecording < handle
             defaultParams.QC.NoiseCutout = [-1 1]; % [ms] before and after peak to be considered for noise detection
             defaultParams.QC.PowerCutoff = 1.3; % Maximum allowed power of the fourier transform of the reference waveform (excludes oscillating noise units)
             defaultParams.QC.N_Units = 10; % Minimum number of units that need to pass the QC to continue with the analysis
+            defaultParams.QC.MinSpikeCount = 10; % Minimum spike count; ISI-based metrics (CV2, LvR, regularity) are unreliable below ~10 spikes (Shinomoto et al. 2009)
             defaultParams.QC.GoodUnits = []; % Units to keep if some previous analyses already determined good units IDs (e.g. manual curation, KS good units)
                                              % Skips the actual QC if not empty
 

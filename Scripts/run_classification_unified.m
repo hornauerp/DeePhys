@@ -19,7 +19,10 @@
 
 %% 0 — Setup
 
-deephys_root = 'C:/Users/pjhor/Documents/Code/DeePhys';
+deephys_root = getenv('DEEPHYS_ROOT');
+if isempty(deephys_root)
+    deephys_root = fileparts(fileparts(mfilename('fullpath')));
+end
 addpath(genpath(deephys_root));
 
 %% 1 — Configuration

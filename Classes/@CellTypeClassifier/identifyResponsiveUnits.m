@@ -308,7 +308,9 @@ for c = 1:numel(unique_cultures)
             case "decrease"
                 flag_uids = tw_uids(response.decrease);
             case "both"
-                flag_uids = tw_uids(response.increase | response.decrease);
+                % response.increase / response.decrease are index vectors —
+                % use union, not bitwise OR, to avoid dimension-mismatch crashes.
+                flag_uids = tw_uids(unique([response.increase, response.decrease]));
             otherwise
                 error('CellTypeClassifier:invalidDirection', ...
                     'Bootstrap.Direction must be "increase", "decrease", or "both". Got "%s".', ...
@@ -318,9 +320,9 @@ for c = 1:numel(unique_cultures)
             all_uid_rows = unit_rows(row_unit_ids_c == flag_uids(fi));
             responsive_idx(all_uid_rows) = true;
             if direction == "both"
-                % Determine direction for this specific unit
+                % Determine direction using set membership on the index vectors
                 uid_ti = find(tw_uids == flag_uids(fi), 1);
-                if response.increase(uid_ti)
+                if ismember(uid_ti, response.increase)
                     responsive_direction(all_uid_rows) = "increase";
                 else
                     responsive_direction(all_uid_rows) = "decrease";
@@ -547,7 +549,9 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
         rhos(full_mask) = r';
     end
 
-    partial_idx = find(~full_mask & sum(~isnan(fr_matrix), 2) >= 2);
+    % Require at least 4 valid dose levels for a meaningful rank correlation.
+    % Spearman rho on 2 points is always exactly +/-1, trivially passing any threshold.
+    partial_idx = find(~full_mask & sum(~isnan(fr_matrix), 2) >= 4);
     for u = partial_idx'
         valid_pts = ~isnan(fr_matrix(u, :));
         try
@@ -600,6 +604,8 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
     s3_idx = find(pass_s2);  % indices into unique_uids
     pass_s3 = false(n_unique, 1);
     boot_pvals = nan(n_unique, 1);
+    boot_inc_mask = false(n_unique, 1);  % bootstrap-determined increase direction
+    boot_dec_mask = false(n_unique, 1);  % bootstrap-determined decrease direction
 
     if ~isempty(s3_idx)
         % Identify baseline and max-dose recording IDs
@@ -671,6 +677,8 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
                     case "both"
                         pass_s3(u) = is_inc(ki) || is_dec(ki);
                 end
+                boot_inc_mask(u) = is_inc(ki);
+                boot_dec_mask(u) = is_dec(ki);
             end
         end
     end
@@ -687,7 +695,13 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
 
         if pass_s3(u)
             if direction == "both"
-                if rhos(u) > 0
+                % Use bootstrap-determined direction; fall back to Spearman rho
+                % sign only when bootstrap did not test this unit (no pre+post match).
+                if boot_inc_mask(u)
+                    flag_inc(local_idx) = true;
+                elseif boot_dec_mask(u)
+                    flag_dec(local_idx) = true;
+                elseif rhos(u) > 0
                     flag_inc(local_idx) = true;
                 else
                     flag_dec(local_idx) = true;

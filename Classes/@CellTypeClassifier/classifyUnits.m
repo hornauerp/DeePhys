@@ -20,6 +20,12 @@ arguments
     ctc CellTypeClassifier
 end
 
+% Delegate to ensemble path when enabled (majority vote across multiple seeds).
+if ctc.Parameters.Ensemble.Enabled
+    ctc.classifyUnitsEnsemble();
+    return
+end
+
 assert(~isempty(ctc.TrainLabels), ...
     'Run generateTrainLabels() before classifyUnits()');
 assert(~isempty(ctc.NormalizationParams), ...

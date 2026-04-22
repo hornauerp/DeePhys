@@ -156,8 +156,10 @@ classdef Experiment < handle
 
             switch level
                 case "Unit"
-                    [X, ~] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet);
-                    norm_groups = exp.metadataColumn(exp.FeatureStore.UnitTable, opts.NormalizationVar);
+                    [X, unit_ids] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet, MinFiringRate=opts.MinFiringRate);
+                    full_tbl    = exp.FeatureStore.UnitTable;
+                    unit_tbl    = full_tbl(ismember(full_tbl.UnitID, unit_ids), :);
+                    norm_groups = exp.metadataColumn(unit_tbl, opts.NormalizationVar);
                 case "Recording"
                     [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf, FeatureSet=opts.FeatureSet);
                     norm_groups = exp.metadataColumn(exp.FeatureStore.RecordingTable, opts.NormalizationVar);
@@ -204,8 +206,11 @@ classdef Experiment < handle
             pf = opts.ParentFeatures;
             switch level
                 case "Unit"
-                    [X, ~] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet);
-                    tbl    = exp.FeatureStore.UnitTable;
+                    [X, unit_ids] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet, MinFiringRate=opts.MinFiringRate);
+                    % Filter UnitTable to only the rows returned by unitMatrix
+                    % (important when MinFiringRate drops some units).
+                    full_tbl = exp.FeatureStore.UnitTable;
+                    tbl = full_tbl(ismember(full_tbl.UnitID, unit_ids), :);
                     if opts.CVLevel == "culture"
                         cv_groups = FeatureStore.getCultureIDsForUnits( ...
                             tbl.RecordingID, exp.FeatureStore.MetadataTable, ...
@@ -282,19 +287,31 @@ classdef Experiment < handle
             end
             % Build culture IDs per recording (same keys as cultureMatrix)
             rec_culture_ids = FeatureStore.buildCultureIDs(meta, identity_keys);
-            % For each culture_id, find the first matching recording and read label
+            % For each culture_id, find all matching recordings and verify label consistency.
             Y = cell(numel(culture_ids), 1);
             for c = 1:numel(culture_ids)
-                idx = find(rec_culture_ids == culture_ids(c), 1);
-                if isempty(idx)
+                all_idx = find(rec_culture_ids == culture_ids(c));
+                if isempty(all_idx)
                     Y{c} = missing;
+                    continue
+                end
+                % Gather all labels for recordings in this culture
+                all_vals = meta.(label_var)(all_idx);
+                if iscell(all_vals)
+                    uniq_vals = unique(string(all_vals));
                 else
-                    val = meta.(label_var)(idx);
-                    if iscell(val)
-                        Y{c} = val{1};
-                    else
-                        Y{c} = val;
-                    end
+                    uniq_vals = unique(string(all_vals));
+                end
+                if numel(uniq_vals) > 1
+                    warning('Experiment:cultureLabels', ...
+                        'Culture "%s" has inconsistent "%s" labels across recordings: [%s]. Using first.', ...
+                        culture_ids(c), label_var, strjoin(uniq_vals, ', '));
+                end
+                val = meta.(label_var)(all_idx(1));
+                if iscell(val)
+                    Y{c} = val{1};
+                else
+                    Y{c} = val;
                 end
             end
             % Flatten to vector / string array
@@ -320,6 +337,7 @@ classdef Experiment < handle
             if ~isfield(opts, 'GroupingValues'),   opts.GroupingValues = [7,14,21,28]; end
             if ~isfield(opts, 'Normalization'),    opts.Normalization = "";             end
             if ~isfield(opts, 'ParentFeatures'),   opts.ParentFeatures = string.empty;  end
+            if ~isfield(opts, 'MinFiringRate'),    opts.MinFiringRate = 0;              end
         end
 
     end

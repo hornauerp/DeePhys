@@ -177,3 +177,37 @@ if ~isempty(T_unit)
     confusionchart(T_unit.Y_test, T_unit.Y_pred);
     title('Unit classification — confusion matrix (all folds)');
 end
+
+%% 15  Feature importance across folds
+%
+% Aggregates OOB permutation importance across all CV folds (RF only).
+% Provides mean ± std per feature — more reliable than single-fold importance.
+
+T_imp = ClassificationResult.summarizeImportance(result_unit);
+if ~isempty(T_imp)
+    disp(T_imp(1:min(10, height(T_imp)), :));   % top 10 features
+end
+
+%% 16  Minimum firing rate filter
+%
+% Exclude near-silent units (< 0.1 Hz) before classification.
+% These units have unreliable ACG, waveform, and ISI features.
+
+opts_filt = struct('Algorithm', 'rf', 'MinFiringRate', 0.1);
+result_filt = exp.classify('Unit', 'Mutation', opts_filt);
+summary_filt = ClassificationResult.summarizeFolds(result_filt);
+fprintf('Accuracy (FR≥0.1 Hz): %.2f ± %.2f\n', summary_filt.mean_accuracy, summary_filt.std_accuracy);
+
+%% 17  Permutation test — significance of classification accuracy
+%
+% Builds a null distribution by shuffling labels 100 times.
+% p-value = fraction of null runs with accuracy >= observed.
+% Recommended for confirming that accuracy exceeds chance, especially
+% with small sample sizes or mild batch effects.
+
+opts_perm = struct('Algorithm', 'rf', 'KFold', 5);
+opts_perm.CVGroups = exp.FeatureStore.UnitTable.RecordingID;
+[p_val, null_accs, obs_acc] = Classifier.permutationTest( ...
+    exp.FeatureStore.unitMatrix('all'), exp.FeatureStore.UnitTable.Mutation, ...
+    opts_perm, 100);
+fprintf('Observed accuracy: %.3f,  permutation p = %.4f\n', obs_acc, p_val);

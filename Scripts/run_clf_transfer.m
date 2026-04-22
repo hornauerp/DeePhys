@@ -2,17 +2,21 @@
 %
 % Cell-type classification with train/test culture split.
 %
-% A subset of cultures (training_culture_idx) seeds the supervised UMAP;
-% the classifier is then applied to the remaining cultures.
+% All cultures are classified in a single CellTypeClassifier — generateTrainLabels()
+% and classifyUnits() operate transductively on the full NxN UMAP graph, so
+% no separate per-culture classifier is needed.
 % Results are visualised as split heatmaps and mean traces.
 %
-% For cross-dataset transfer (different FeatureStore / different lab),
-% use ctc.applyTo(fs_target, ud_target) instead of classifyUnits — see
-% Tutorial 6 (TransferLearning.m) for that workflow.
+% For classifying external units from a different platform, see
+% Tutorial 6 (ExternalDataInterop.m) — classifyExternalUnits() and
+% classifyUnitsWithExternalTrain() build a joint UMAP for that purpose.
 
 %% 0 — Setup
 
-deephys_root = 'C:/Users/pjhor/Documents/Code/DeePhys';
+deephys_root = getenv('DEEPHYS_ROOT');
+if isempty(deephys_root)
+    deephys_root = fileparts(fileparts(mfilename('fullpath')));
+end
 addpath(genpath(deephys_root));
 
 %% 1 — Load data  (checkpoint-guarded — skipped on re-runs if ctc exists)
@@ -145,18 +149,18 @@ nexttile; imagesc(norm_bursts(sorted_idx, :)); colorbar; axis tight
 title('Total activity (train | test)', 'FontWeight', 'normal')
 
 nexttile;
-plot(nanmean(norm_ie), 'r'); hold on; plot(nanmean(norm_bursts), 'k');
+plot(mean(norm_ie, 'omitnan'), 'r'); hold on; plot(mean(norm_bursts, 'omitnan'), 'k');
 legend('I/E', 'Total', 'Location', 'northwest'); xlabel('Bin'); box off
 title('All cultures', 'FontWeight', 'normal')
 
 nexttile;
-plot(nanmean(norm_ie(training_culture_idx, :)), 'r'); hold on
-plot(nanmean(norm_bursts(training_culture_idx, :)), 'k');
+plot(mean(norm_ie(training_culture_idx, :), 'omitnan'), 'r'); hold on
+plot(mean(norm_bursts(training_culture_idx, :), 'omitnan'), 'k');
 title('Training', 'FontWeight', 'normal'); box off
 
 nexttile;
-plot(nanmean(norm_ie(test_culture_idx, :)), 'r'); hold on
-plot(nanmean(norm_bursts(test_culture_idx, :)), 'k');
+plot(mean(norm_ie(test_culture_idx, :), 'omitnan'), 'r'); hold on
+plot(mean(norm_bursts(test_culture_idx, :), 'omitnan'), 'k');
 title('Test', 'FontWeight', 'normal'); box off
 
 %% 7 — Save

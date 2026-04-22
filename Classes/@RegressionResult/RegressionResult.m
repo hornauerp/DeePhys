@@ -33,7 +33,12 @@ classdef RegressionResult
             metrics.MSE = mean(residuals.^2);
             metrics.RMSE = sqrt(metrics.MSE);
             metrics.MAE = mean(abs(residuals));
-            metrics.R2 = 1 - sum(residuals.^2) / sum((Y_test - mean(Y_test)).^2);
+            ss_tot = sum((Y_test - mean(Y_test)).^2);
+            if ss_tot == 0
+                metrics.R2 = NaN;   % undefined when all Y_test values are identical
+            else
+                metrics.R2 = 1 - sum(residuals.^2) / ss_tot;
+            end
             metrics.Correlation = corr(Y_pred, Y_test);
             metrics.N = length(Y_test);
             metrics.mse_train = r.mse_train;

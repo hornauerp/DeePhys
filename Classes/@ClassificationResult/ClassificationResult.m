@@ -125,5 +125,54 @@ classdef ClassificationResult
             summary.std_F1        = std(f1s);
         end
 
+        function T = summarizeImportance(result_array)
+        % SUMMARIZEIMPORTANCE  Aggregate OOB feature importance across CV folds.
+        %
+        %   T = ClassificationResult.summarizeImportance(result_array)
+        %
+        % Returns a table sorted by mean importance (descending):
+        %   Feature | MeanImportance | StdImportance | MinImportance | MaxImportance
+        %
+        % Only folds with non-empty predImp and Features are included.
+        % Returns empty table if no fold has importance data (e.g., non-RF algorithm).
+        %
+        % EXAMPLE:
+        %   result = exp.classify('Unit', 'Mutation', opts);
+        %   T = ClassificationResult.summarizeImportance(result);
+        %   disp(T(1:10, :));   % top 10 features
+            valid_folds = find(~cellfun(@isempty, {result_array.predImp}));
+            if isempty(valid_folds)
+                T = table();
+                return
+            end
+
+            % Collect all unique feature names across valid folds
+            all_names = string.empty;
+            for k = valid_folds
+                all_names = union(all_names, string(result_array(k).Features), 'stable');
+            end
+            n_feat = numel(all_names);
+            imp_mat = NaN(numel(valid_folds), n_feat);
+
+            for fi = 1:numel(valid_folds)
+                k     = valid_folds(fi);
+                names = string(result_array(k).Features);
+                imp   = result_array(k).predImp(:)';
+                [~, loc] = ismember(names, all_names);
+                imp_mat(fi, loc) = imp;
+            end
+
+            mean_imp = mean(imp_mat, 1, 'omitnan');
+            std_imp  = std(imp_mat,  0, 1, 'omitnan');
+            min_imp  = min(imp_mat,  [], 1);
+            max_imp  = max(imp_mat,  [], 1);
+
+            T = table(all_names(:), mean_imp(:), std_imp(:), min_imp(:), max_imp(:), ...
+                'VariableNames', {'Feature','MeanImportance','StdImportance','MinImportance','MaxImportance'});
+
+            % Sort by mean importance descending
+            T = sortrows(T, 'MeanImportance', 'descend');
+        end
+
     end
 end

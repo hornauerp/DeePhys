@@ -54,6 +54,11 @@ classdef GroupedCV
             if K == -1
                 K = n_groups;  % leave-one-group-out
             end
+            if K > n_groups && K ~= -1
+                warning('GroupedCV:foldReduction', ...
+                    'Requested K=%d folds but only %d unique groups available — reducing to %d folds.', ...
+                    K, n_groups, n_groups);
+            end
             gcv.NumFolds = min(K, n_groups);
 
             % Build group-level labels for stratified partitioning

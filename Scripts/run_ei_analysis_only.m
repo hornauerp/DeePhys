@@ -7,13 +7,16 @@
 
 %% 0 — Setup
 
-deephys_root = 'C:/Users/pjhor/Documents/Code/DeePhys';
+deephys_root = getenv('DEEPHYS_ROOT');
+if isempty(deephys_root)
+    deephys_root = fileparts(fileparts(mfilename('fullpath')));
+end
 addpath(genpath(deephys_root));
 
 %% 1 — Load pre-computed CellTypeClassifier
 
-save_path = fullfile(deephys_root, 'Data', 'Classification', ...
-                     'cell_type_classification_results.mat');
+% Set save_path to the .mat file produced by run_cell_type_classification.m
+save_path = '/path/to/cell_type_classification_results.mat';
 loaded = load(save_path, 'ctc');
 ctc    = loaded.ctc;
 
@@ -62,13 +65,13 @@ tiledlayout(2, 3, 'TileSpacing', 'compact');
 nexttile; imagesc(norm_ie);     title('I/E ratio — all cultures',      'FontWeight', 'normal'); colorbar; axis tight
 nexttile; imagesc(norm_bursts); title('Total activity — all cultures', 'FontWeight', 'normal'); colorbar; axis tight
 nexttile;
-plot(nanmean(norm_ie), 'r'); hold on;
-plot(nanmean(norm_bursts), 'k');
+plot(mean(norm_ie, 'omitnan'), 'r'); hold on;
+plot(mean(norm_bursts, 'omitnan'), 'k');
 legend('I/E', 'Total', 'Location', 'northwest'); xlabel('Bin (10 ms)'); box off
 
 %% 5 — Save
 
-save_dir_eia = fullfile(deephys_root, 'Data', 'Classification');
+save_dir_eia = fileparts(save_path);
 if ~isfolder(save_dir_eia); mkdir(save_dir_eia); end
 save_path_eia = fullfile(save_dir_eia, 'ei_analysis_results');
 save(save_path_eia, 'eia');

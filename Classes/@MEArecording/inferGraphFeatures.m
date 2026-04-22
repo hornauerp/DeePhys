@@ -40,10 +40,18 @@
              global_efficiency = efficiency_bin(con_mat);
              local_efficiency = efficiency_bin(con_mat,1);
 
-             % Modularity (Louvain community detection)
-             try
-                 [~, Q_modularity] = community_louvain(con_mat);
-             catch
+             % Modularity (Louvain community detection) — 5 restarts, take max Q
+             % (Louvain is non-deterministic; multiple runs stabilize the estimate)
+             n_louvain = 5;
+             Q_vals = nan(1, n_louvain);
+             for lr = 1:n_louvain
+                 try
+                     [~, Q_vals(lr)] = community_louvain(con_mat);
+                 catch
+                 end
+             end
+             Q_modularity = max(Q_vals, [], 'omitnan');
+             if isempty(Q_modularity) || all(isnan(Q_vals))
                  Q_modularity = NaN;
              end
 
@@ -85,7 +93,11 @@
                  small_worldness = NaN;
              end
 
-             eigen_centrality = eigenvector_centrality_und(double(con_mat ~= 0));
+             if is_directed
+                 eigen_centrality = eigenvector_centrality_dir(double(con_mat ~= 0));
+             else
+                 eigen_centrality = eigenvector_centrality_und(double(con_mat ~= 0));
+             end
              betweenness = betweenness_bin(con_mat);
              nw_feat = [nw_feat, "GlobalEfficiency", "Modularity", "SmallWorldness"] + "_" + alg(a);
              nw_val = [nw_val, global_efficiency, Q_modularity, small_worldness];

@@ -16,7 +16,10 @@
 
 %% 0 — Setup
 
-deephys_root = 'C:/Users/pjhor/Documents/Code/DeePhys';
+deephys_root = getenv('DEEPHYS_ROOT');
+if isempty(deephys_root)
+    deephys_root = fileparts(fileparts(mfilename('fullpath')));
+end
 addpath(genpath(deephys_root));
 
 %% 1 — Load data
@@ -54,11 +57,11 @@ parameters.Bootstrap.PreCutout  = [];
 parameters.Bootstrap.PostCutout = [];
 parameters.Bootstrap.BinSize    = 20;
 parameters.Bootstrap.NIter      = 1000;
-parameters.Bootstrap.Alpha      = 1e-10;
+parameters.Bootstrap.Alpha      = 1e-3;   % statistically defensible for 1000 bootstrap iterations
 parameters.Bootstrap.Direction  = 'increase';  % 'increase' | 'decrease' | 'both'
 
 % UMAP embedding
-parameters.UMAP.TemplateDir        = 'C:/Users/pjhor/Documents/Code/DeePhys/Output';  % directory for UMAP template .mat
+parameters.UMAP.TemplateDir        = fullfile(deephys_root, 'Output');  % directory for UMAP template .mat
 parameters.UMAP.NormalizationVar   = 'ChipID';
 parameters.UMAP.GroupingVar        = 'Concentration';
 parameters.UMAP.GroupingValues     = 0;
@@ -158,9 +161,9 @@ figure('Color', 'w');
 tiledlayout(2, 2, 'TileSpacing', 'compact');
 nexttile; imagesc(norm_ie);     title('I/E ratio (normalised)',      'FontWeight', 'normal'); colorbar
 nexttile; imagesc(norm_bursts); title('Total activity (normalised)', 'FontWeight', 'normal'); colorbar
-nexttile; plot(nanmean(norm_ie), 'r'); hold on; plot(nanmean(norm_bursts), 'k');
+nexttile; plot(mean(norm_ie, 'omitnan'), 'r'); hold on; plot(mean(norm_bursts, 'omitnan'), 'k');
           legend('I/E', 'Total'); xlabel('Bin'); box off
-nexttile; plot(gradient(nanmean(norm_bursts)));
+nexttile; plot(gradient(mean(norm_bursts, 'omitnan')));
           xlabel('Bin'); title('d/dt total activity', 'FontWeight', 'normal'); box off
 
 %% 9 — Save

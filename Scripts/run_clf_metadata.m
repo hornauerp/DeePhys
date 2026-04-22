@@ -12,7 +12,10 @@
 
 %% 0 — Setup
 
-deephys_root = 'C:/Users/pjhor/Documents/Code/DeePhys';
+deephys_root = getenv('DEEPHYS_ROOT');
+if isempty(deephys_root)
+    deephys_root = fileparts(fileparts(mfilename('fullpath')));
+end
 addpath(genpath(deephys_root));
 
 %% 1 — Configuration
@@ -184,9 +187,9 @@ figure('Color', 'w');
 tiledlayout(2, 2, 'TileSpacing', 'compact');
 nexttile; imagesc(norm_ie);     title('I/E ratio (normalised)',      'FontWeight', 'normal'); colorbar
 nexttile; imagesc(norm_bursts); title('Total activity (normalised)', 'FontWeight', 'normal'); colorbar
-nexttile; plot(nanmean(norm_ie), 'r'); hold on; plot(nanmean(norm_bursts), 'k');
+nexttile; plot(mean(norm_ie, 'omitnan'), 'r'); hold on; plot(mean(norm_bursts, 'omitnan'), 'k');
           legend('I/E', 'Total'); xlabel('Bin'); box off
-nexttile; plot(gradient(nanmean(norm_bursts)));
+nexttile; plot(gradient(mean(norm_bursts, 'omitnan')));
           xlabel('Bin'); title('d/dt total activity', 'FontWeight', 'normal'); box off
 
 %% 8 — Save

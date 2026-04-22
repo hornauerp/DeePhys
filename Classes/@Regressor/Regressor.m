@@ -4,8 +4,10 @@ classdef Regressor
 % Zero coupling to MEArecording, Unit, or RecordingGroup.
 %
 % USAGE:
+%   opts.Algorithm         = 'rf';          % 'rf', 'svm', 'knn'
 %   opts.KFold             = 5;
-%   opts.NHyper            = 0;
+%   opts.NHyper            = 0;             % 0 = no hyperparam search
+%   opts.Seed              = 42;            % RNG seed for reproducibility
 %   opts.NormalizationGroups = fs.RecordingTable.PlatingDate;
 %   opts.CVGroups            = fs.UnitTable.RecordingID;  % hierarchy-aware CV
 %
@@ -20,8 +22,10 @@ classdef Regressor
         %   X    - (N x F) table of feature values
         %   Y    - (N x 1) numeric target vector
         %   opts - struct with optional fields:
+        %     .Algorithm         - 'rf' (default), 'svm', 'knn'
         %     .KFold             - number of folds (default 5)
-        %     .NHyper            - hyperparam evaluations (default 0)
+        %     .NHyper            - Bayesian hyperparam evaluations (default 0)
+        %     .Seed              - RNG seed for reproducibility (default [])
         %     .NormalizationGroups - (N x 1) string/numeric for per-group z-score
         %     .CVGroups          - (N x 1) string/numeric for hierarchy-aware CV
         %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
@@ -36,6 +40,12 @@ classdef Regressor
             end
 
             opts = Regressor.defaultOpts(opts);
+
+            % Reproducibility
+            if ~isempty(opts.Seed)
+                rng(opts.Seed);
+            end
+
             norm_groups = Regressor.resolveGroups(opts.NormalizationGroups, height(X));
             cv_groups   = Regressor.resolveGroups(opts.CVGroups, height(X));
 
@@ -54,7 +64,6 @@ classdef Regressor
             end
 
             t_start = tic;
-            t = templateTree('Surrogate', 'on', 'MinLeafSize', 5, 'NumVariablesToSample', 'auto');
             result(K) = RegressionResult();
 
             for k = 1:K
@@ -70,27 +79,36 @@ classdef Regressor
 
                 [X_train, X_test, feat_names] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups);
 
-                clf = fitrensemble(X_train, Y_train, 'Method', 'Bag', ...
-                    'NumLearningCycles', 500, 'Learners', t, ...
-                    'Options', statset('UseParallel', true));
-                Y_pred = predict(clf, X_test);
+                [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, opts.NHyper);
+                Y_pred = predict(mdl, X_test);
 
-                predImp = oobPermutedPredictorImportance(clf, 'Options', statset('UseParallel', true));
+                if opts.Algorithm == "rf"
+                    predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
+                else
+                    predImp = [];
+                end
 
                 result(k) = RegressionResult( ...
-                    'Mdl',       clf, ...
+                    'Mdl',       mdl, ...
                     'Y_pred',    Y_pred, ...
                     'Y_test',    Y_test, ...
-                    'mse_train', resubLoss(clf), ...
+                    'mse_train', resubLoss(mdl), ...
+                    'train_acc', train_r2, ...
                     'objects',   [], ...
                     'predImp',   predImp, ...
                     'Features',  feat_names, ...
-                    'Parameters', struct('normalization_var', opts.NormalizationGroups, 'K_fold', K));
+                    'Parameters', struct( ...
+                        'algorithm',        opts.Algorithm, ...
+                        'normalization_var', opts.NormalizationGroups, ...
+                        'K_fold',           K, ...
+                        'N_hyper',          opts.NHyper, ...
+                        'seed',             opts.Seed));
             end
 
             elapsed = toc(t_start);
+            summary = RegressionResult.summarizeFolds(result);
             AnalysisLog.instance().add('Regressor.regress', opts, ...
-                sprintf('%d folds, RMSE=%.4f', K, sqrt(mean([result.mse_train]))), elapsed);
+                sprintf('%d folds, %s, R2=%.3f', K, opts.Algorithm, summary.mean_R2), elapsed);
         end
 
     end
@@ -101,27 +119,17 @@ classdef Regressor
     methods (Static, Access = private)
 
         function opts = defaultOpts(opts)
+            if ~isfield(opts, 'Algorithm'),          opts.Algorithm = 'rf';       end
             if ~isfield(opts, 'KFold'),              opts.KFold = 5;              end
             if ~isfield(opts, 'NHyper'),             opts.NHyper = 0;             end
+            if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
             if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
             if ~isfield(opts, 'CVGroups'),           opts.CVGroups = [];          end
             if ~isfield(opts, 'StratificationVar'),  opts.StratificationVar = []; end
         end
 
         function g = resolveGroups(groups_input, N)
-            if isempty(groups_input)
-                g = [];
-                return
-            end
-            if ischar(groups_input) || isstring(groups_input)
-                [~, ~, g] = unique(string(groups_input(:)), 'stable');
-            else
-                [~, ~, g] = unique(groups_input(:), 'stable');
-            end
-            if numel(g) ~= N
-                error('Regressor:resolveGroups', ...
-                    'Group vector length (%d) must match number of observations (%d).', numel(g), N);
-            end
+            g = MLUtils.resolveGroups(groups_input, N);
         end
 
         function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)

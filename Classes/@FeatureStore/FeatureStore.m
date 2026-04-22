@@ -243,7 +243,7 @@ classdef FeatureStore < handle
         %   [X, unit_ids] = fs.unitMatrix('all', ["ACG"])          % prefer parent ACGs
         %   [X, unit_ids] = fs.unitMatrix('all', "all")             % all parent features
         %   [X, unit_ids] = fs.unitMatrix('all', FeatureSet="core") % core features only
-        %   [X, unit_ids] = fs.unitMatrix('ActivityFeatures', FeatureSet="core")
+        %   [X, unit_ids] = fs.unitMatrix('all', MinFiringRate=0.1) % exclude quiet units
         %
         % X is a table with only feature columns (no identity/metadata cols).
         % Output column names are always child names (ACG1, not Parent_ACG1).
@@ -252,15 +252,39 @@ classdef FeatureStore < handle
         % FeatureSet options (see FeatureCatalog for definitions):
         %   "full" (default) — all features in each group (backwards compatible)
         %   "core"           — curated non-redundant, interpretable scalar features
+        %
+        % MinFiringRate: exclude units whose FiringRate feature is below this threshold
+        %   (Hz). Default 0 = no filtering. Recommended: 0.1 Hz to exclude
+        %   near-silent units with unreliable waveform/ISI/ACG features.
             arguments
                 fs              FeatureStore
                 feature_groups  string = "all"
                 parent_features string = string.empty
-                options.FeatureSet (1,1) string = "full"
+                options.FeatureSet    (1,1) string = "full"
+                options.MinFiringRate (1,1) double = 0
             end
-            cols     = fs.selectFeatureCols(fs.UnitTable, feature_groups, options.FeatureSet);
-            X        = fs.resolveParentFeatures(fs.UnitTable, cols, parent_features);
-            unit_ids = fs.UnitTable.UnitID;
+
+            tbl = fs.UnitTable;
+
+            % Apply minimum firing rate filter when requested and column exists.
+            if options.MinFiringRate > 0
+                if ismember('FiringRate', tbl.Properties.VariableNames)
+                    keep = tbl.FiringRate >= options.MinFiringRate;
+                    n_dropped = sum(~keep);
+                    if n_dropped > 0
+                        warning('FeatureStore:unitMatrix', ...
+                            '%d units dropped (FiringRate < %.3g Hz).', n_dropped, options.MinFiringRate);
+                    end
+                    tbl = tbl(keep, :);
+                else
+                    warning('FeatureStore:unitMatrix', ...
+                        'MinFiringRate filter requested but "FiringRate" column not found — filter skipped.');
+                end
+            end
+
+            cols     = fs.selectFeatureCols(tbl, feature_groups, options.FeatureSet);
+            X        = fs.resolveParentFeatures(tbl, cols, parent_features);
+            unit_ids = tbl.UnitID;
         end
 
         function [X, rec_ids] = recordingMatrix(fs, feature_groups, parent_features)
@@ -303,7 +327,8 @@ classdef FeatureStore < handle
                 grouping_values                      = [7, 14, 21, 28]
                 normalization   (1,1) string         = ""   % "baseline", "scaled", or ""
                 feature_groups  string               = "all"
-                options.FeatureSet (1,1) string = "full"
+                options.FeatureSet        (1,1) string = "full"
+                options.NumericTolerance  (1,1) double = 1   % ±tolerance for numeric grouping_var matching (e.g. ±1 DIV)
             end
 
             % Get recording-level feature columns
@@ -329,10 +354,10 @@ classdef FeatureStore < handle
                 has_all = true;
                 for v = 1:numel(grouping_values)
                     val = grouping_values(v);
-                    % Find recording in this culture with grouping_var == val (±1 tolerance)
+                    % Find recording in this culture with grouping_var == val
                     gv_col = meta.(grouping_var)(cult_mask);
                     if isnumeric(val)
-                        match_mask = abs(gv_col - val) <= 1;
+                        match_mask = abs(gv_col - val) <= options.NumericTolerance;
                     else
                         match_mask = string(gv_col) == string(val);
                     end
@@ -367,8 +392,10 @@ classdef FeatureStore < handle
                 elseif normalization == "scaled" && ~isempty(row_data)
                     all_vals = vertcat(row_data{:}).Variables;
                     lo = min(all_vals); hi = max(all_vals);
+                    denom = hi - lo;
+                    denom(abs(denom) < 1e-9) = NaN;  % constant features → NaN, not ~1/eps
                     for v = 1:numel(row_data)
-                        row_data{v}.Variables = (row_data{v}.Variables - lo) ./ (hi - lo + eps);
+                        row_data{v}.Variables = (row_data{v}.Variables - lo) ./ denom;
                     end
                 end
 

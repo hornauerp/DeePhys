@@ -1,39 +1,8 @@
-classdef MLPipeline < handle
-% MLPIPELINE  Machine learning pipeline for classification, regression, and dimensionality reduction.
+classdef MLPipeline
+% MLPIPELINE  Static ML helpers: classifier/regressor creation, CV splits, label pooling.
 %
-%   Encapsulates the shared workflow: feature assembly → normalization → train/predict → results.
-%   Extracted from RecordingGroup to separate ML logic from data container.
-%
-%   USAGE:
-%     mlp = MLPipeline(recording_group);
-%     result = mlp.classify("Recording", "rf", "Mutation");
-%     result = mlp.regress("Recording", "Concentration");
-%     result = mlp.reduceDim("Unit", "UMAP");
-%
-%   Default hyperparameters are stored in mlp.DefaultParams and can be overridden.
-
-    properties
-        DataSource          % RecordingGroup (or any object providing Recordings, Units, Cultures)
-        Normalization       % NormalizationPipeline (optional override)
-        DefaultParams       % Struct of default hyperparameters
-    end
-
-    methods
-
-        function mlp = MLPipeline(data_source, normalization)
-        % Constructor.
-        %   mlp = MLPipeline(rg)
-        %   mlp = MLPipeline(rg, normalization_pipeline)
-            arguments
-                data_source = []
-                normalization = []
-            end
-            mlp.DataSource = data_source;
-            mlp.Normalization = normalization;
-            mlp.DefaultParams = MLPipeline.returnDefaultParams();
-        end
-
-    end
+%   All methods are static — no instantiation needed.
+%   Access default hyperparameters via MLPipeline.returnDefaultParams().
 
     methods (Static)
 
@@ -117,6 +86,79 @@ classdef MLPipeline < handle
                             'Learners', t, 'Options', statset("UseParallel", true));
                 end
                 train_acc = 1 - resubLoss(clf, 'LossFun', 'classerror');
+            end
+        end
+
+        function [mdl, train_r2] = createRegressor(X_train, Y_train, alg, N_hyper)
+        % CREATEREGRESSOR  Train a regression model with optional hyperparameter optimization.
+        %
+        % INPUTS:
+        %   X_train - (N x F) training feature matrix
+        %   Y_train - (N x 1) numeric training targets
+        %   alg     - "rf", "svm", "knn"
+        %   N_hyper - Bayesian optimization evaluations (0 = none)
+        %
+        % OUTPUTS:
+        %   mdl      - trained MATLAB regression model
+        %   train_r2 - training-set R² (in-bag for RF, resubstitution for SVM/KNN)
+            arguments
+                X_train {isnumeric}
+                Y_train {isnumeric}
+                alg     string = "rf"
+                N_hyper (1,1) double = 0
+            end
+
+            params = MLPipeline.returnDefaultParams();
+            opt_opts = struct('AcquisitionFunctionName', 'expected-improvement-plus', ...
+                'MaxObjectiveEvaluations', N_hyper, 'ShowPlots', false, 'Verbose', 0);
+
+            if N_hyper > 0
+                switch alg
+                    case 'svm'
+                        mdl = fitrsvm(X_train, Y_train, ...
+                            'OptimizeHyperparameters', 'all', ...
+                            'HyperparameterOptimizationOptions', opt_opts);
+                    case 'knn'
+                        mdl = fitrknn(X_train, Y_train, ...
+                            'OptimizeHyperparameters', 'all', ...
+                            'HyperparameterOptimizationOptions', opt_opts);
+                    case 'rf'
+                        hyperparams = {'NumLearningCycles', 'MinLeafSize', 'MaxNumSplits', 'NumVariablesToSample'};
+                        t = templateTree('Reproducible', true);
+                        mdl = fitrensemble(X_train, Y_train, 'Method', 'Bag', ...
+                            'Learners', t, ...
+                            'OptimizeHyperparameters', hyperparams, ...
+                            'HyperparameterOptimizationOptions', opt_opts);
+                    otherwise
+                        error('MLPipeline:createRegressor', 'Unknown algorithm "%s". Use rf, svm, or knn.', alg);
+                end
+            else
+                switch alg
+                    case 'svm'
+                        mdl = fitrsvm(X_train, Y_train);
+                    case 'knn'
+                        mdl = fitrknn(X_train, Y_train);
+                    case 'rf'
+                        t = templateTree('Surrogate', params.RF.Surrogate, ...
+                            'MinLeafSize', params.RF.MinLeafSize, ...
+                            'NumVariablesToSample', params.RF.NumVariablesToSample, ...
+                            'Reproducible', params.RF.Reproducible);
+                        mdl = fitrensemble(X_train, Y_train, 'Method', 'Bag', ...
+                            'NumLearningCycles', params.RF.NumCycles, ...
+                            'Learners', t, 'Options', statset('UseParallel', true));
+                    otherwise
+                        error('MLPipeline:createRegressor', 'Unknown algorithm "%s". Use rf, svm, or knn.', alg);
+                end
+            end
+
+            % Training R² (in-bag OOB estimate for RF; resubstitution for others)
+            Y_resub = predict(mdl, X_train);
+            ss_res = sum((Y_train - Y_resub).^2);
+            ss_tot = sum((Y_train - mean(Y_train)).^2);
+            if ss_tot == 0
+                train_r2 = NaN;
+            else
+                train_r2 = 1 - ss_res / ss_tot;
             end
         end
 

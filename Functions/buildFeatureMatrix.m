@@ -158,7 +158,8 @@ for u = 1:N_units
         continue
     end
 
-    % Find trough in raw waveform
+    % Find trough (minimum) — assumes negative-polarity waveforms (Maxwell HDMEA).
+    % Other acquisition systems may require polarity inversion before this step.
     [~, trough_samp] = min(wf_u);
 
     % Build input time axis relative to trough (ms)

@@ -122,8 +122,8 @@ end
 
 % -- Store NormalizationParams -------------------------------------------------
 % Record the actual waveform window produced by buildFeatureMatrix so that
-% applyTo can force the target dataset to use the same dimensions (avoiding
-% feature count mismatches when source and target have different input lengths).
+% classifyExternalUnits can verify the external feature matrix has the same
+% dimensions (avoiding feature count mismatches across platforms).
 n_wf_features = sum(startsWith(nf.feat_names, "Waveform"));
 ph = ctc.Parameters.Harmonization;
 target_sr = ph.WaveformTargetSamplingRate;

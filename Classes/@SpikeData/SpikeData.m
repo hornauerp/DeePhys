@@ -87,8 +87,14 @@ classdef SpikeData
             % Template waveforms (N_samples x N_channels x N_templates)
             sd.TemplateWaveforms = readNPY(fullfile(input_path, 'templates.npy'));
 
-            % Duration: latest spike time (rounded up)
-            sd.Duration = ceil(max(sd.SpikeTimes));
+            % Duration from params.py n_samples (more accurate than max spike time,
+            % which underestimates when the recording goes silent at the end).
+            n_samples = SpikeData.parseNSamples(input_path);
+            if ~isnan(n_samples)
+                sd.Duration = n_samples / sd.SamplingRate;
+            else
+                sd.Duration = ceil(max(sd.SpikeTimes));
+            end
 
             % Deterministic recording ID
             sd.RecordingID = paramHash(struct('InputPath', char(input_path)));
@@ -137,6 +143,22 @@ classdef SpikeData
             sr_line = lines{startsWith(lines, 'sample')};
             parts   = strsplit(sr_line, ' = ');
             sr      = str2double(parts{2});
+        end
+
+        function n = parseNSamples(input_path)
+        % Parse n_samples (or n_samples_dat) from params.py. Returns NaN when absent.
+            params_path = fullfile(input_path, 'params.py');
+            fid = fopen(params_path, 'r');
+            txt = fscanf(fid, '%c');
+            fclose(fid);
+            lines = strsplit(txt, newline);
+            idx   = find(startsWith(lines, 'n_samples'), 1);
+            if isempty(idx)
+                n = NaN;
+                return
+            end
+            parts = strsplit(lines{idx}, ' = ');
+            n     = str2double(parts{2});
         end
 
     end

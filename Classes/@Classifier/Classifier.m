@@ -15,7 +15,7 @@ classdef Classifier
 %
 %   result = Classifier.classify(X, Y, opts);
 %   result = Classifier.classifyByGroups(X, Y, feature_group_defs, opts);
-%   [Y_pred, scores] = Classifier.predict(trained_model, X);
+%   [Y_pred, scores] = Classifier.predict(result(k).Mdl, X);
 
     methods (Static)
 
@@ -126,12 +126,74 @@ classdef Classifier
                 elapsed);
         end
 
+        function [p_value, null_accs, obs_acc] = permutationTest(X, Y, opts, n_permutations)
+        % PERMUTATIONTEST  Estimate classification significance via label permutation.
+        %
+        % Shuffles class labels n_permutations times and runs classify() each time,
+        % building a null distribution of accuracies. Returns a one-sided p-value:
+        %   P(null_accuracy >= observed_accuracy)
+        %
+        % INPUTS:
+        %   X              - (N x F) feature table
+        %   Y              - (N x 1) label vector
+        %   opts           - same opts struct as Classifier.classify (reused for each run)
+        %   n_permutations - number of permutations (default 100)
+        %
+        % OUTPUTS:
+        %   p_value   - fraction of null runs with accuracy >= observed
+        %   null_accs - (n_permutations x 1) null accuracy distribution
+        %   obs_acc   - observed mean accuracy from unpermuted classify()
+        %
+        % EXAMPLE:
+        %   [p, null, obs] = Classifier.permutationTest(X, Y, opts, 500);
+        %   fprintf('Observed: %.3f, p = %.4f\n', obs, p);
+            arguments
+                X              table
+                Y
+                opts           struct = struct()
+                n_permutations (1,1) double = 100
+            end
+
+            % Observed accuracy
+            obs_result = Classifier.classify(X, Y, opts);
+            obs_summary = ClassificationResult.summarizeFolds(obs_result);
+            obs_acc = obs_summary.mean_accuracy;
+
+            % Permutation null distribution — suppress imbalance warning during shuffles.
+            % Each permutation uses a unique derived seed so both Y-shuffle and CV
+            % partition vary across runs (avoids conditioning the null on one partition).
+            null_accs = zeros(n_permutations, 1);
+            perm_opts = opts;
+            base_seed = opts.Seed;
+            w = warning('off', 'Classifier:imbalanced');
+            try
+                for p = 1:n_permutations
+                    if ~isempty(base_seed)
+                        perm_opts.Seed = base_seed + p;
+                    end
+                    Y_perm = Y(randperm(numel(Y)));
+                    perm_result = Classifier.classify(X, Y_perm, perm_opts);
+                    perm_summary = ClassificationResult.summarizeFolds(perm_result);
+                    null_accs(p) = perm_summary.mean_accuracy;
+                end
+            finally
+                warning(w);
+            end
+
+            p_value = mean(null_accs >= obs_acc);
+
+            AnalysisLog.instance().add('Classifier.permutationTest', ...
+                struct('n_permutations', n_permutations, 'opts', opts), ...
+                sprintf('obs=%.3f p=%.4f (n=%d)', obs_acc, p_value, n_permutations), 0);
+        end
+
         function results = classifyByGroups(X, Y, feature_group_defs, opts)
         % CLASSIFYBYGROUPS  Run classify() over a set of feature-column subsets.
         %
         % feature_group_defs is a struct array where each element has:
         %   .Name    - string label for the group
-        %   .Columns - string array of column names (or a FeatureStore feature group name)
+        %   .Columns - string array of exact column names from X.Properties.VariableNames
+        %              (use FeatureStore.unitMatrix(feature_groups) for group-based selection)
         %
         % Returns a struct array with .Name and .Result fields.
             arguments
@@ -145,7 +207,7 @@ classdef Classifier
                 fg   = feature_group_defs(g);
                 cols = string(fg.Columns);
                 all_cols = string(X.Properties.VariableNames);
-                sel = ismember(all_cols, cols) | startsWith(all_cols, cols);
+                sel = ismember(all_cols, cols);
                 if ~any(sel)
                     warning('Classifier:classifyByGroups', ...
                         'No columns matched for group "%s" — skipped.', fg.Name);
@@ -158,16 +220,11 @@ classdef Classifier
         end
 
         function [Y_pred, scores] = predict(trained_model, X)
-        % PREDICT  Apply a trained classifier (TrainedModel or raw clf) to new data.
+        % PREDICT  Apply a trained MATLAB classifier to new data.
         %
-        %   trained_model - TrainedModel object (from classifyByFeatureGroups) or
-        %                   a raw MATLAB classifier
+        %   trained_model - raw MATLAB classifier (from Classifier.classify result.Mdl)
         %   X             - (N x F) table of feature values
-            if isa(trained_model, 'TrainedModel')
-                [Y_pred, scores] = trained_model.predict(X);
-            else
-                [Y_pred, scores] = predict(trained_model, X.Variables);
-            end
+            [Y_pred, scores] = predict(trained_model, X.Variables);
         end
 
     end
@@ -212,30 +269,16 @@ classdef Classifier
                 Y = string(Y);
             end
             if ~isempty(pooling_vals) && iscell(pooling_vals) && ~isempty(pooling_vals{1})
-                [Y_out, group_labels] = MLPipeline.poolMetadataValues(Y, unique(Y,'stable'), pooling_vals);
+                [group_labels, ~, group_idx] = unique(Y, 'stable');
+                [Y_out, group_labels] = MLPipeline.poolMetadataValues( ...
+                    double(group_idx), group_labels, string(pooling_vals));
             else
                 [group_labels, ~, Y_out] = unique(Y, 'stable');
             end
         end
 
         function g = resolveGroups(groups_input, N)
-        % Normalise the groups input to a (N x 1) double index vector, or [].
-            if isempty(groups_input)
-                g = [];
-                return
-            end
-            if ischar(groups_input) || isstring(groups_input)
-                % String array of group labels → numeric index
-                [~, ~, g] = unique(string(groups_input(:)), 'stable');
-            elseif isnumeric(groups_input) || iscategorical(groups_input)
-                [~, ~, g] = unique(groups_input(:), 'stable');
-            else
-                g = [];
-            end
-            if numel(g) ~= N
-                error('Classifier:resolveGroups', ...
-                    'Group vector length (%d) must match number of observations (%d).', numel(g), N);
-            end
+            g = MLUtils.resolveGroups(groups_input, N);
         end
 
         function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)

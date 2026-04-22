@@ -30,7 +30,7 @@ function results = optimizeHyperparameters(ctc, opts)
 % Fixed: 60 Bayesian evaluations (10 per variable).
 %
 % Efficiency: training labels and normalised feature matrix are generated once.
-% ACGWeight/WaveformWeight are applied per-evaluation before supervisedUMAP.
+% ACGWeight/WaveformWeight are applied per-evaluation inside each objective call.
 % High-D kNN is precomputed once for trustworthiness (if that metric is used).
 %
 % Requires identifyResponsiveUnits() to have been run first.

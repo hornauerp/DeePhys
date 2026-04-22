@@ -91,7 +91,9 @@ classdef RecordingProcessor < handle
             c_idx  = repmat(ref_elec(:), 1, n_s);
             lin_idx = sub2ind(size(tmpl), t_idx, s_idx, c_idx);
             peak_wf = tmpl(lin_idx)';                            % n_samples × n_templates
-            norm_wf = peak_wf ./ max(abs(peak_wf));
+            mx = max(abs(peak_wf));
+            mx(mx == 0) = 1;        % guard: all-zero template → keep zeros, not NaN/Inf
+            norm_wf = peak_wf ./ mx;
 
             % Firing rates + spike times per unit
             st  = sd.SpikeTimes;
@@ -107,7 +109,10 @@ classdef RecordingProcessor < handle
                 bad_fr    = RecordingProcessor.checkFiringRate(firing_rates, p.QC.FiringRate);
                 bad_rpv   = RecordingProcessor.checkRPV(unit_spike_times, p.QC.RPV, p.QC.RefractoryPeriod);
                 [is_axon, is_noisy] = RecordingProcessor.checkWaveform(norm_wf, p.QC.Axon, p.QC.Noise, p.QC.NoiseCutout);
-                good = ~(bad_power | bad_amp | bad_fr | bad_rpv | is_axon | is_noisy);
+                spike_counts = cellfun(@numel, unit_spike_times);
+                min_n = p.QC.MinSpikeCount;
+                bad_spike_count = spike_counts(:) < min_n;
+                good = ~(bad_power | bad_amp | bad_fr | bad_rpv | is_axon | is_noisy | bad_spike_count);
             else
                 good = p.QC.GoodUnits;
             end
@@ -266,13 +271,13 @@ classdef RecordingProcessor < handle
             end
             n_bins = numel(acg_map(map_keys{1}));
 
-            full_acgs = zeros(n_bins, n_units);
+            full_acgs = NaN(n_bins, n_units);
             for u = 1:n_units
                 tid_key = num2str(proc.Units(u).TemplateID);
                 if acg_map.isKey(tid_key)
                     full_acgs(:, u) = acg_map(tid_key);
                 end
-                % If not found: column stays zero (unit may have been QC-rejected in parent)
+                % If not found: column stays NaN (unit QC-rejected in parent or missing)
             end
 
             % Build table with Parent_ prefix columns (storage-only convention)

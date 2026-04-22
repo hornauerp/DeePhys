@@ -99,6 +99,38 @@ classdef CellTypeClassifier < handle
             ctc.validateParameters();
         end
 
+        function s = saveobj(ctc)
+        % SAVEOBJ  Custom serialization — strips non-serializable handles.
+        %
+        % The UMAP model (ctc.UMAP) is a Java/handle object from run_umap that
+        % does not survive save/load across MATLAB sessions. It is stripped here
+        % and set to [] on reload. Re-run classifyUnits() after loading if you
+        % need a fresh embedding.
+        %
+        % Computation caches (NormalizedFeatures, CachedExtraction,
+        % HarmonizedWaveforms/ACGs) are also stripped — they are regenerated
+        % automatically on the next pipeline call.
+        %
+        % All inference-critical state (TrainLabels, NormalizationParams,
+        % UnitLabels, UnitConfidence, FeatureStore, UnitDataArray, Parameters)
+        % is preserved.
+            s = struct();
+            mc = ?CellTypeClassifier;
+            for pi = 1:numel(mc.PropertyList)
+                pname = mc.PropertyList(pi).Name;
+                if mc.PropertyList(pi).GetAccess == "public"
+                    s.(pname) = ctc.(pname);
+                end
+            end
+            % Strip the non-serializable UMAP handle and regeneratable caches.
+            s.UMAP              = [];
+            s.NormalizedFeatures = [];
+            s.CachedExtraction  = [];
+            s.HarmonizedWaveforms = [];
+            s.HarmonizedACGs    = [];
+            s.HarmonizedSR      = [];
+        end
+
         function clearCache(ctc)
         % CLEARCACHE  Invalidate all cached preprocessing and classification state.
         %
@@ -157,6 +189,15 @@ classdef CellTypeClassifier < handle
                         n_few, numel(unique_c), p.Bootstrap.MinRecordings);
                     n_warn = n_warn + 1;
                 end
+            end
+
+            % ── TemplateDir ─────────────────────────────────────────────────
+            td = p.UMAP.TemplateDir;
+            if ~isempty(td) && ~isfolder(td)
+                warning('CellTypeClassifier:templateDirMissing', ...
+                    ['UMAP.TemplateDir "%s" does not exist. ' ...
+                     'Create the directory or set Parameters.UMAP.TemplateDir to a valid path.'], td);
+                n_warn = n_warn + 1;
             end
 
             % ── NNeighbors vs dataset size ───────────────────────────────────
@@ -375,6 +416,33 @@ classdef CellTypeClassifier < handle
     % =====================================================================
     methods (Static)
 
+        function ctc = loadobj(s)
+        % LOADOBJ  Reconstruct CellTypeClassifier from a saved struct.
+        %
+        % Called automatically by MATLAB load(). Restores all serialized
+        % properties from the struct written by saveobj(), then warns if
+        % UnitDataArray is empty (required by classifyExternalUnits and
+        % classifyUnitsWithExternalTrain).
+            ctc = CellTypeClassifier();
+            if isstruct(s)
+                fn = fieldnames(s);
+                for fi = 1:numel(fn)
+                    try
+                        ctc.(fn{fi}) = s.(fn{fi});
+                    catch
+                        % Skip properties that no longer exist in the class
+                    end
+                end
+            end
+            if isempty(ctc.UnitDataArray)
+                warning('CellTypeClassifier:loadobj', ...
+                    ['UnitDataArray is empty after load. ' ...
+                     'classifyExternalUnits() and classifyUnitsWithExternalTrain() ' ...
+                     'require UnitDataArray — restore it via ctc.UnitDataArray = ud ' ...
+                     'before calling those methods.']);
+            end
+        end
+
         function ctc = fromProcessors(proc_array, parameters)
         % FROMPROCESSORS  Build CellTypeClassifier from RecordingProcessor array.
         %   ctc = CellTypeClassifier.fromProcessors(procs, params)
@@ -383,7 +451,14 @@ classdef CellTypeClassifier < handle
                 parameters  struct = struct()
             end
             fs  = FeatureStore.fromProcessors(proc_array);
-            ud  = [proc_array.Units];
+            % Match FeatureStore.fromProcessors inclusion logic exactly: skip processors
+            % with empty SpikeData (which FeatureStore skips entirely) and processors
+            % with no features/units (which contribute zero unit rows).
+            has_features = arrayfun(@(p) ...
+                ~isempty(p.SpikeData) && ~isempty(p.SpikeData.RecordingID) && ...
+                ~isempty(p.UnitFeatureTable) && ~isempty(p.Units), ...
+                proc_array);
+            ud  = [proc_array(has_features).Units];
             ctc = CellTypeClassifier(fs, ud, parameters);
         end
 
@@ -486,7 +561,7 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.MinRecordings         = 4;
             defaultParams.Bootstrap.BinSize               = 20;           % two_window only (seconds)
             defaultParams.Bootstrap.NIter                 = 1000;         % two_window only
-            defaultParams.Bootstrap.Alpha                 = 1e-10;        % two_window only
+            defaultParams.Bootstrap.Alpha                 = 1e-3;         % two_window only; 1e-10 was unreliable for 1000 bootstrap samples
             defaultParams.Bootstrap.FullCurveAlpha        = 0.05;         % full_curve: per-unit Spearman p-value threshold (legacy, unused by staged pipeline)
             defaultParams.Bootstrap.MonotonicityThreshold = 0.75;        % full_curve stage 1: min |Spearman rho|
             defaultParams.Bootstrap.MinFoldChange         = 1.5;         % full_curve stage 2: min fold change (baseline to max dose)
@@ -833,54 +908,60 @@ classdef CellTypeClassifier < handle
             end
         end
 
-        function acg = computeACG(spike_times, bin_size, lag)
+        function acg = computeACG(spike_times, bin_size, lag, sampling_rate)
         % COMPUTEACG  Autocorrelogram for a single unit from spike times.
         %
         %   acg = CellTypeClassifier.computeACG(spike_times)
         %   acg = CellTypeClassifier.computeACG(spike_times, bin_size, lag)
+        %   acg = CellTypeClassifier.computeACG(spike_times, bin_size, lag, sampling_rate)
         %
-        %   spike_times - (N x 1) spike times in seconds
-        %   bin_size    - bin width in seconds (default: 0.0005)
-        %   lag         - half-width of the ACG window in seconds (default: 0.1)
+        %   spike_times   - (N x 1) spike times in seconds
+        %   bin_size      - bin width in seconds (default: 0.0005)
+        %   lag           - half-width of the ACG window in seconds (default: 0.1)
+        %   sampling_rate - recording sampling rate in Hz (default: 20000, Maxwell HDMEA)
         %
         %   Returns acg as (N_bins x 1).  Use computeACGs for batches.
             arguments
-                spike_times (:,1) double
-                bin_size    (1,1) double = 0.0005
-                lag         (1,1) double = 0.1
+                spike_times   (:,1) double
+                bin_size      (1,1) double = 0.0005
+                lag           (1,1) double = 0.1
+                sampling_rate (1,1) double = 20000
             end
             n_bins = round(lag / bin_size) * 2 + 1;
             acg    = zeros(n_bins, 1);
             if numel(spike_times) > 1
                 [acg_u, ~] = CCG(spike_times, ones(numel(spike_times), 1), ...
-                    'binSize', bin_size, 'duration', lag * 2);
+                    'binSize', bin_size, 'duration', lag * 2, 'Fs', 1 / sampling_rate);
                 if numel(acg_u) == n_bins
                     acg = acg_u;
                 end
             end
         end
 
-        function acgs = computeACGs(spike_times_cell, bin_size, lag)
+        function acgs = computeACGs(spike_times_cell, bin_size, lag, sampling_rate)
         % COMPUTEACGS  Autocorrelograms for multiple units from spike times.
         %
         %   acgs = CellTypeClassifier.computeACGs(spike_times_cell)
         %   acgs = CellTypeClassifier.computeACGs(spike_times_cell, bin_size, lag)
+        %   acgs = CellTypeClassifier.computeACGs(spike_times_cell, bin_size, lag, sampling_rate)
         %
         %   spike_times_cell - (1 x N) cell array of spike-time vectors (seconds)
         %   bin_size         - bin width in seconds (default: 0.0005)
         %   lag              - half-width of the ACG window in seconds (default: 0.1)
+        %   sampling_rate    - recording sampling rate in Hz (default: 20000, Maxwell HDMEA)
         %
         %   Returns acgs as (N_bins x N), ready for classifyExternalUnits.
             arguments
                 spike_times_cell (1,:) cell
                 bin_size         (1,1) double = 0.0005
                 lag              (1,1) double = 0.1
+                sampling_rate    (1,1) double = 20000
             end
             N    = numel(spike_times_cell);
             acgs = zeros(round(lag / bin_size) * 2 + 1, N);
             for u = 1:N
                 acgs(:, u) = CellTypeClassifier.computeACG( ...
-                    spike_times_cell{u}(:), bin_size, lag);
+                    spike_times_cell{u}(:), bin_size, lag, sampling_rate);
             end
         end
 
@@ -946,33 +1027,6 @@ classdef CellTypeClassifier < handle
     end
 
     methods (Static, Access = private)
-
-        function [X_tr, X_te, feat_names] = normalizeForClassification(X_tr, X_te, feat_names)
-        % NORMALIZEFORCLASSIFICATION  Steps 2-4 of the shared normalization pipeline.
-        %
-        %   [X_tr, X_te, feat_names] = normalizeForClassification(X_tr, X_te, feat_names)
-        %
-        %   Applies in sequence:
-        %     1. Global z-score: fit on X_tr, apply train statistics to X_te
-        %     2. Drop columns with NaN or Inf in either X_tr or X_te
-        %     3. Scale by max(abs(X_tr)) column-wise
-        %
-        %   Per-group z-score (step 1 of the full pipeline) is the caller's
-        %   responsibility, as it differs between DeePhys-only and transfer paths.
-            [X_tr, mu, sd] = normalize(X_tr, 1, 'zscore');
-            X_te = normalize(X_te, 'center', mu, 'scale', sd);
-
-            bad_cols = any(isnan(X_tr) | isinf(X_tr), 1) | ...
-                       any(isnan(X_te) | isinf(X_te), 1);
-            X_tr(:, bad_cols)    = [];
-            X_te(:, bad_cols)    = [];
-            feat_names(bad_cols) = [];
-
-            scale = max(abs(X_tr), [], 1);
-            scale(scale == 0) = 1;
-            X_tr = X_tr ./ scale;
-            X_te = X_te ./ scale;
-        end
 
         function mask = buildCultureSubsetMask(fs, culture_indices, culture_keys)
         % BUILDCULTURESUBSETMASK  Logical mask over UnitTable for specified culture indices.

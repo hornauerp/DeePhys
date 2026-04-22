@@ -171,8 +171,8 @@ try
     end
     % Mean ± SEM for responsive units
     if ~isempty(r_rows)
-        mean_resp = nanmean(fr_norm(r_rows, :), 1);
-        sem_resp  = nanstd(fr_norm(r_rows, :), 0, 1) / sqrt(numel(r_rows));
+        mean_resp = mean(fr_norm(r_rows, :), 1, 'omitnan');
+        sem_resp  = std(fr_norm(r_rows, :), 0, 1, 'omitnan') / sqrt(numel(r_rows));
         shadedErrorBar_local(x_vals, mean_resp, sem_resp, [0.5 0 0], 0.25);
         plot(x_vals, mean_resp, '-', 'Color', [0.5 0 0], 'LineWidth', 2.5);
         yline(1, '--', 'Color', [0.4 0.4 0.4], 'LineWidth', 1);
