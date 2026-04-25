@@ -760,6 +760,9 @@ classdef CellTypeClassifier < handle
         % Declared here; implemented in diagnosticOptimization.m
         diagnosticOptimization(ctc, results)
 
+        % Declared here; implemented in evaluatePipeline.m
+        cv_results = evaluatePipeline(ctc, opts)
+
     end
 
     % =====================================================================

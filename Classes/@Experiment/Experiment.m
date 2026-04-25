@@ -166,7 +166,7 @@ classdef Experiment < handle
                 case "Culture"
                     [X, ~] = exp.FeatureStore.cultureMatrix( ...
                         opts.IdentityKeys, opts.GroupingVar, opts.GroupingValues, ...
-                        opts.Normalization, fg, FeatureSet=opts.FeatureSet);
+                        opts.Normalization, fg, pf, FeatureSet=opts.FeatureSet);
                     norm_groups = [];
                 otherwise
                     error('Experiment:reduce', 'Unknown level "%s".', level);
@@ -229,7 +229,7 @@ classdef Experiment < handle
                 case "Culture"
                     [X, culture_ids] = exp.FeatureStore.cultureMatrix( ...
                         opts.IdentityKeys, opts.GroupingVar, opts.GroupingValues, ...
-                        opts.Normalization, fg, FeatureSet=opts.FeatureSet);
+                        opts.Normalization, fg, pf, FeatureSet=opts.FeatureSet);
                     cv_groups   = [];
                     norm_groups = [];
                     % Y must be provided explicitly (culture-level labels cannot be

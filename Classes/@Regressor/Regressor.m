@@ -12,6 +12,8 @@ classdef Regressor
 %   opts.CVGroups            = fs.UnitTable.RecordingID;  % hierarchy-aware CV
 %
 %   result = Regressor.regress(X, Y, opts);
+%   [p, null, obs] = Regressor.permutationTest(X, Y, opts, 500);
+%   results = Regressor.regressByGroups(X, Y, feature_group_defs, opts);
 
     methods (Static)
 
@@ -27,6 +29,7 @@ classdef Regressor
         %     .NHyper            - Bayesian hyperparam evaluations (default 0)
         %     .Seed              - RNG seed for reproducibility (default [])
         %     .NormalizationGroups - (N x 1) string/numeric for per-group z-score
+        %     .NormalizationVar    - metadata field name for serialization (default '')
         %     .CVGroups          - (N x 1) string/numeric for hierarchy-aware CV
         %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
         %     .StratificationVar - (N x 1) for stratified CV splitting (ignored when CVGroups set)
@@ -99,7 +102,7 @@ classdef Regressor
                     'Features',  feat_names, ...
                     'Parameters', struct( ...
                         'algorithm',        opts.Algorithm, ...
-                        'normalization_var', opts.NormalizationGroups, ...
+                        'normalization_var', opts.NormalizationVar, ...
                         'K_fold',           K, ...
                         'N_hyper',          opts.NHyper, ...
                         'seed',             opts.Seed));
@@ -111,6 +114,85 @@ classdef Regressor
                 sprintf('%d folds, %s, R2=%.3f', K, opts.Algorithm, summary.mean_R2), elapsed);
         end
 
+        function [p_value, null_r2s, obs_r2] = permutationTest(X, Y, opts, n_permutations)
+        % PERMUTATIONTEST  Estimate regression significance via label permutation.
+        %
+        % Shuffles target values n_permutations times and runs regress() each time,
+        % building a null distribution of R² values. Returns a one-sided p-value:
+        %   P(null_R² >= observed_R²)
+        %
+        % INPUTS:
+        %   X              - (N x F) feature table
+        %   Y              - (N x 1) numeric target vector
+        %   opts           - same opts struct as Regressor.regress (reused each run)
+        %   n_permutations - number of permutations (default 100)
+        %
+        % OUTPUTS:
+        %   p_value   - fraction of null runs with R² >= observed
+        %   null_r2s  - (n_permutations x 1) null R² distribution
+        %   obs_r2    - observed mean R² from unpermuted regress()
+            arguments
+                X              table
+                Y              {isnumeric}
+                opts           struct = struct()
+                n_permutations (1,1) double = 100
+            end
+
+            obs_result  = Regressor.regress(X, Y, opts);
+            obs_summary = RegressionResult.summarizeFolds(obs_result);
+            obs_r2      = obs_summary.mean_R2;
+
+            null_r2s  = zeros(n_permutations, 1);
+            perm_opts = opts;
+            base_seed = opts.Seed;
+            for p = 1:n_permutations
+                if ~isempty(base_seed)
+                    perm_opts.Seed = base_seed + p;
+                end
+                Y_perm = Y(randperm(numel(Y)));
+                perm_result  = Regressor.regress(X, Y_perm, perm_opts);
+                perm_summary = RegressionResult.summarizeFolds(perm_result);
+                null_r2s(p)  = perm_summary.mean_R2;
+            end
+
+            p_value = mean(null_r2s >= obs_r2);
+
+            AnalysisLog.instance().add('Regressor.permutationTest', ...
+                struct('n_permutations', n_permutations, 'opts', opts), ...
+                sprintf('obs_R2=%.3f p=%.4f (n=%d)', obs_r2, p_value, n_permutations), 0);
+        end
+
+        function results = regressByGroups(X, Y, feature_group_defs, opts)
+        % REGRESSBYGROUPS  Run regress() over a set of feature-column subsets.
+        %
+        % feature_group_defs is a struct array where each element has:
+        %   .Name    - string label for the group
+        %   .Columns - string array of exact column names from X.Properties.VariableNames
+        %
+        % Returns a struct array with .Name and .Result fields.
+            arguments
+                X                  table
+                Y                  {isnumeric}
+                feature_group_defs struct
+                opts               struct = struct()
+            end
+            results = struct('Name', {}, 'Result', {});
+            for g = 1:numel(feature_group_defs)
+                fg   = feature_group_defs(g);
+                cols = string(fg.Columns);
+                all_cols = string(X.Properties.VariableNames);
+                sel  = ismember(all_cols, cols);
+                if ~any(sel)
+                    warning('Regressor:regressByGroups', ...
+                        'No columns matched for group "%s" — skipped.', fg.Name);
+                    continue
+                end
+                Xsub = X(:, sel);
+                res  = Regressor.regress(Xsub, Y, opts);
+                results(end+1) = struct('Name', fg.Name, 'Result', res); %#ok<AGROW>
+            end
+        end
+
     end
 
     % =====================================================================
@@ -119,13 +201,14 @@ classdef Regressor
     methods (Static, Access = private)
 
         function opts = defaultOpts(opts)
-            if ~isfield(opts, 'Algorithm'),          opts.Algorithm = 'rf';       end
-            if ~isfield(opts, 'KFold'),              opts.KFold = 5;              end
-            if ~isfield(opts, 'NHyper'),             opts.NHyper = 0;             end
-            if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
+            if ~isfield(opts, 'Algorithm'),           opts.Algorithm = 'rf';       end
+            if ~isfield(opts, 'KFold'),               opts.KFold = 5;              end
+            if ~isfield(opts, 'NHyper'),              opts.NHyper = 0;             end
+            if ~isfield(opts, 'Seed'),                opts.Seed = [];              end
             if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
-            if ~isfield(opts, 'CVGroups'),           opts.CVGroups = [];          end
-            if ~isfield(opts, 'StratificationVar'),  opts.StratificationVar = []; end
+            if ~isfield(opts, 'NormalizationVar'),    opts.NormalizationVar = '';  end
+            if ~isfield(opts, 'CVGroups'),            opts.CVGroups = [];          end
+            if ~isfield(opts, 'StratificationVar'),   opts.StratificationVar = []; end
         end
 
         function g = resolveGroups(groups_input, N)
@@ -133,37 +216,7 @@ classdef Regressor
         end
 
         function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)
-            mat        = X.Variables;
-            feat_names = string(X.Properties.VariableNames);
-
-            % Impute NaN using training-set median
-            for col = 1:size(mat, 2)
-                train_col = mat(train_idx, col);
-                med = median(train_col(~isnan(train_col)));
-                if isnan(med), med = 0; end
-                mat(isnan(mat(:, col)), col) = med;
-            end
-
-            if ~isempty(norm_groups)
-                np = NormalizationPipeline.groupThenGlobal();
-                g_train = norm_groups(train_idx);
-            else
-                np = NormalizationPipeline.globalOnly();
-                g_train = [];
-            end
-
-            [X_train, np] = np.fit_transform(mat(train_idx, :), g_train);
-
-            if ~isempty(norm_groups)
-                X_test = np.transform(mat(test_idx, :), norm_groups(test_idx));
-            else
-                X_test = np.transform(mat(test_idx, :), []);
-            end
-
-            bad = any(isnan(X_train)) | any(isnan(X_test));
-            X_train(:, bad) = [];
-            X_test(:, bad)  = [];
-            feat_names(bad) = [];
+            [X_train, X_test, feat_names] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups);
         end
 
     end

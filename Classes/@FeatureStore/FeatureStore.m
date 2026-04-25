@@ -308,7 +308,7 @@ classdef FeatureStore < handle
             rec_ids = fs.RecordingTable.RecordingID;
         end
 
-        function [X, culture_ids] = cultureMatrix(fs, identity_keys, grouping_var, grouping_values, normalization, feature_groups, options)
+        function [X, culture_ids] = cultureMatrix(fs, identity_keys, grouping_var, grouping_values, normalization, feature_groups, parent_features, options)
         % CULTUREMATRIX  Culture-level feature table (one row per culture).
         %
         % Groups recordings by identity_keys (e.g. ["ChipID","PlatingDate"]),
@@ -327,12 +327,13 @@ classdef FeatureStore < handle
                 grouping_values                      = [7, 14, 21, 28]
                 normalization   (1,1) string         = ""   % "baseline", "scaled", or ""
                 feature_groups  string               = "all"
+                parent_features string               = string.empty
                 options.FeatureSet        (1,1) string = "full"
                 options.NumericTolerance  (1,1) double = 1   % ±tolerance for numeric grouping_var matching (e.g. ±1 DIV)
             end
 
             % Get recording-level feature columns
-            [rec_feat, rec_ids] = fs.recordingMatrix(feature_groups, FeatureSet=options.FeatureSet);
+            [rec_feat, rec_ids] = fs.recordingMatrix(feature_groups, parent_features, FeatureSet=options.FeatureSet);
             meta = fs.MetadataTable;
 
             % Build culture ID string per recording

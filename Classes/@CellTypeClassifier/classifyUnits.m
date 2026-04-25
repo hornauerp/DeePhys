@@ -52,27 +52,8 @@ if isfield(np, 'feature_selection_mask') && ~all(np.feature_selection_mask)
     X_all = X_all(:, np.feature_selection_mask);
 end
 
-% -- Dimension-normalised feature group weighting ----------------------------
-% Scales ACG and Waveform groups so their total L2 contribution is
-% proportional to ACGWeight / WaveformWeight regardless of group size.
-if isfield(np, 'feat_names_trimmed') && ~isempty(np.feat_names_trimmed)
-    feat_names_final = np.feat_names_trimmed;
-    is_acg = startsWith(feat_names_final, "FullACG") | startsWith(feat_names_final, "ACG");
-    is_wf  = startsWith(feat_names_final, "Waveform") | startsWith(feat_names_final, "ReferenceWaveform");
-    n_acg  = sum(is_acg);
-    n_wf   = sum(is_wf);
-    if n_acg > 0
-        X_all(:, is_acg) = X_all(:, is_acg) * sqrt(p_umap.ACGWeight / n_acg);
-    end
-    if n_wf > 0
-        X_all(:, is_wf)  = X_all(:, is_wf)  * sqrt(p_umap.WaveformWeight / n_wf);
-    end
-end
-
 train_idx = logical(labels.umap_train_idx);
 test_idx  = ~train_idx;
-X_train   = X_all(train_idx, :);
-X_test    = X_all(test_idx, :);
 
 % -- Classification -----------------------------------------------------------
 classify_method = lower(string(p_conf.Method));
@@ -177,6 +158,24 @@ if classify_method == "graph"
 else
     % ── Feature-space kNN classification ────────────────────────────────
     % Connectivity: for kNN path, count training neighbors within ConfidenceK.
+    % Apply dimension-normalised feature group weighting before kNN search so
+    % ACG and Waveform groups contribute proportionally to their configured weights.
+    if isfield(np, 'feat_names_trimmed') && ~isempty(np.feat_names_trimmed)
+        feat_names_final = np.feat_names_trimmed;
+        is_acg = startsWith(feat_names_final, "FullACG") | startsWith(feat_names_final, "ACG");
+        is_wf  = startsWith(feat_names_final, "Waveform") | startsWith(feat_names_final, "ReferenceWaveform");
+        n_acg  = sum(is_acg);
+        n_wf   = sum(is_wf);
+        if n_acg > 0
+            X_all(:, is_acg) = X_all(:, is_acg) * sqrt(p_umap.ACGWeight / n_acg);
+        end
+        if n_wf > 0
+            X_all(:, is_wf)  = X_all(:, is_wf)  * sqrt(p_umap.WaveformWeight / n_wf);
+        end
+    end
+    X_train = X_all(train_idx, :);
+    X_test  = X_all(test_idx, :);
+
     graph_train_neighbors = zeros(1, n_unique);
     if p_umap.AutoConfidenceK
         conf_k = max(5, round(sqrt(size(X_train, 1))));

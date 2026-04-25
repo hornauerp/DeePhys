@@ -177,29 +177,7 @@ classdef DimReducer
         end
 
         function norm_data = normalizeFeatures(X, norm_groups)
-            mat = X.Variables;
-
-            % Impute NaN with column median
-            for col = 1:size(mat, 2)
-                nan_mask = isnan(mat(:, col));
-                if any(nan_mask)
-                    med = median(mat(~nan_mask, col));
-                    if isnan(med), med = 0; end
-                    mat(nan_mask, col) = med;
-                end
-            end
-
-            if ~isempty(norm_groups)
-                np = NormalizationPipeline.groupThenGlobal();
-                [norm_data, ~] = np.fit_transform(mat, norm_groups);
-            else
-                np = NormalizationPipeline.globalOnly();
-                [norm_data, ~] = np.fit_transform(mat, []);
-            end
-
-            % Remove all-NaN columns
-            bad = any(isnan(norm_data));
-            norm_data(:, bad) = [];
+            [norm_data, ~] = MLUtils.normalizeAll(X, norm_groups);
         end
 
     end

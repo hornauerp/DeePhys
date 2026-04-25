@@ -113,7 +113,7 @@ classdef Classifier
                     'Features',    feat_names, ...
                     'Parameters',  struct( ...
                         'algorithm',        opts.Algorithm, ...
-                        'normalization_var', opts.NormalizationGroups, ...
+                        'normalization_var', opts.NormalizationVar, ...
                         'K_fold',           K, ...
                         'N_hyper',          opts.NHyper, ...
                         'seed',             opts.Seed));
@@ -241,26 +241,14 @@ classdef Classifier
             if ~isfield(opts, 'CVGroups'),           opts.CVGroups = [];          end
             if ~isfield(opts, 'CVLevel'),            opts.CVLevel = 'recording';  end
             if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
+            if ~isfield(opts, 'NormalizationVar'),   opts.NormalizationVar = '';  end
             if ~isfield(opts, 'PoolingValues'),      opts.PoolingValues = {};     end
             if ~isfield(opts, 'Prior'),              opts.Prior = 'empirical';    end
             if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
         end
 
         function checkClassBalance(Y)
-        % Warn if the majority class is more than 3× larger than the minority.
-            classes = unique(Y);
-            if numel(classes) < 2, return, end
-            counts = arrayfun(@(c) sum(Y == c), classes);
-            ratio  = max(counts) / min(counts);
-            if ratio > 3
-                [~, maj_idx] = max(counts);
-                [~, min_idx] = min(counts);
-                warning('Classifier:imbalanced', ...
-                    'Class imbalance detected (%.1f:1 ratio). Majority "%s" (%d) vs minority "%s" (%d). ' ...
-                    'Consider opts.Prior = ''uniform'' to weight classes equally.', ...
-                    ratio, string(classes(maj_idx)), counts(maj_idx), ...
-                    string(classes(min_idx)), counts(min_idx));
-            end
+            MLUtils.checkClassBalance(Y);
         end
 
         function [Y_out, group_labels] = prepareLabels(Y, pooling_vals)
@@ -282,48 +270,7 @@ classdef Classifier
         end
 
         function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)
-        % Impute NaN, fit normalization on training set, apply to test set.
-        % Mirrors prepareInputMatrix but with no RecordingGroup dependency.
-            mat = X.Variables;
-            feat_names = string(X.Properties.VariableNames);
-
-            % Impute NaN per column using training-set median
-            for col = 1:size(mat, 2)
-                train_col = mat(train_idx, col);
-                med = median(train_col(~isnan(train_col)));
-                if isnan(med), med = 0; end
-                mat(isnan(mat(:, col)), col) = med;
-            end
-
-            % Normalization pipeline
-            if ~isempty(norm_groups)
-                np = NormalizationPipeline.groupThenGlobal();
-                g_train = norm_groups(train_idx);
-            else
-                np = NormalizationPipeline.globalOnly();
-                g_train = [];
-            end
-
-            [X_train, np] = np.fit_transform(mat(train_idx, :), g_train);
-
-            if any(test_idx)
-                g_test = [];
-                if ~isempty(norm_groups)
-                    g_test = norm_groups(test_idx);
-                end
-                X_test = np.transform(mat(test_idx, :), g_test);
-            else
-                X_test = [];
-            end
-
-            % Drop zero-variance / all-NaN columns
-            bad = any(isnan(X_train));
-            if ~isempty(X_test)
-                bad = bad | any(isnan(X_test));
-                X_test(:, bad) = [];
-            end
-            X_train(:, bad) = [];
-            feat_names(bad) = [];
+            [X_train, X_test, feat_names] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups);
         end
 
     end
