@@ -158,9 +158,7 @@ classdef RecordingProcessor < handle
         end
 
         function computeUnitFeatures(proc, feature_groups)
-        % COMPUTEUNITFEATURES  Compute per-unit features, populate proc.UnitFeatureTable.
-        %   Internally creates temporary Unit objects to reuse existing feature code,
-        %   then discards them. All results are stored in the flat table.
+        % COMPUTEUNITFEATURES  Compute per-unit features via standalone functions.
             arguments
                 proc
                 feature_groups string = "all"
@@ -177,30 +175,61 @@ classdef RecordingProcessor < handle
                 return
             end
 
-            % Build a minimal MEArecording-like context for Unit construction.
-            % We pass proc through a shim that exposes the required properties.
-            shim = RecordingProcessor.buildMEArecordingShim(proc);
-            norm_wf = [proc.Units.ReferenceWaveform];
-
-            % Waveform features (vectorised, from inferWaveformFeatures logic)
-            wf_feats = RecordingProcessor.computeWaveformFeatures(norm_wf, shim.RecordingInfo.SamplingRate);
-
-            % Create Unit objects temporarily
-            n_units  = numel(proc.Units);
-            unit_arr = Unit();
-            for u = 1:n_units
-                unit_arr(u) = Unit(shim, norm_wf(:, u), proc.Units(u).ReferenceElectrode, ...
-                                   proc.Units(u).SpikeTimes, wf_feats{u});
-                unit_arr(u).TemplateID = proc.Units(u).TemplateID;
-            end
-
-            % Extract feature table (FeatureAssembly handles waveform alignment + ACG etc.)
-            if feature_groups == "all"
+            if isscalar(feature_groups) && feature_groups == "all"
                 feat_groups = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22"];
             else
                 feat_groups = feature_groups;
             end
-            proc.UnitFeatureTable = FeatureAssembly.unitFeatures(unit_arr, feat_groups);
+
+            n_units = numel(proc.Units);
+            sr      = proc.SpikeData.SamplingRate;
+            norm_wf = [proc.Units.ReferenceWaveform];
+            feature_tables = {};
+
+            % Waveform features
+            if any(feat_groups == "WaveformFeatures")
+                wf_feats = computeWaveformFeatures(norm_wf, sr);
+                wf_tables = cellfun(@(s) struct2table(s), wf_feats, 'un', 0);
+                feature_tables{end+1} = vertcat(wf_tables{:});
+            end
+
+            % Activity features (+ optional regularity + catch22)
+            act_params.FanoBinWidth = 0.1;
+            if isfield(proc.Parameters, 'Activity') && isfield(proc.Parameters.Activity, 'FanoBinWidth')
+                act_params.FanoBinWidth = proc.Parameters.Activity.FanoBinWidth;
+            end
+            act_params.RefractoryPeriod = proc.Parameters.QC.RefractoryPeriod;
+            if proc.Parameters.Analyses.Regularity
+                act_params.Regularity = proc.Parameters.Regularity;
+            end
+            if proc.Parameters.Analyses.Catch22
+                act_params.Catch22 = proc.Parameters.Catch22;
+            end
+
+            act_tables = cell(n_units, 1);
+            reg_tables = cell(n_units, 1);
+            c22_tables = cell(n_units, 1);
+            for u = 1:n_units
+                [act_tables{u}, reg_tables{u}, c22_tables{u}] = ...
+                    computeActivityFeatures(proc.Units(u).SpikeTimes, ...
+                        proc.Units(u).RecordingDuration, act_params);
+            end
+            if any(feat_groups == "ActivityFeatures")
+                feature_tables{end+1} = vertcat(act_tables{:});
+            end
+            if any(feat_groups == "RegularityFeatures") && proc.Parameters.Analyses.Regularity
+                feature_tables{end+1} = vertcat(reg_tables{:});
+            end
+            if any(feat_groups == "Catch22") && proc.Parameters.Analyses.Catch22
+                feature_tables{end+1} = vertcat(c22_tables{:});
+            end
+
+            % Aligned waveforms
+            aligned_wf = alignWaveformsFromData(norm_wf, sr);
+            var_names = "Waveform" + (1:size(aligned_wf, 1));
+            feature_tables{end+1} = array2table(aligned_wf', "VariableNames", var_names);
+
+            proc.UnitFeatureTable = [feature_tables{:}];
             proc.Status.UnitFeatures = true;
         end
 
@@ -308,14 +337,22 @@ classdef RecordingProcessor < handle
             if proc.Status.NetworkFeatures
                 return
             end
-            shim = RecordingProcessor.buildMEArecordingShim(proc);
 
-            net_struct = struct();
+            spike_times = proc.SpikeData.SpikeTimes;
+            duration    = proc.SpikeData.Duration;
+            net_struct  = struct();
 
             if proc.Parameters.Analyses.Regularity
                 try
-                    shim.getRegularity();
-                    net_struct.Regularity = shim.NetworkFeatures.Regularity;
+                    binned   = histcounts(spike_times, 'BinLimits', [0 duration], ...
+                        'BinWidth', proc.Parameters.Regularity.Binning);
+                    norm_act = binned / max(max(binned), 1);
+                    [freq, mag, fit_coeff] = computeRegularity(norm_act, ...
+                        proc.Parameters.Regularity.Binning, proc.Parameters.Regularity.N_peaks);
+                    net_struct.Regularity = struct2table(struct( ...
+                        'NetworkRegularityFrequency', freq, ...
+                        'NetworkRegularityMagnitude', mag, ...
+                        'NetworkRegularityFit', fit_coeff));
                 catch ME
                     warning('RecordingProcessor:networkFeatures', 'Regularity failed: %s', ME.message);
                 end
@@ -323,8 +360,7 @@ classdef RecordingProcessor < handle
 
             if proc.Parameters.Analyses.Catch22
                 try
-                    c22 = shim.runCatch22();
-                    net_struct.Catch22 = c22;
+                    net_struct.Catch22 = computeCatch22(spike_times, duration, proc.Parameters.Catch22.BinSize);
                 catch ME
                     warning('RecordingProcessor:networkFeatures', 'Catch22 failed: %s', ME.message);
                 end
@@ -332,9 +368,26 @@ classdef RecordingProcessor < handle
 
             if proc.Parameters.Analyses.Bursts
                 try
-                    shim.getBurstStatistics();
-                    proc.Bursts = shim.Bursts;
-                    net_struct.BurstFeatures = shim.NetworkFeatures.BurstFeatures;
+                    if ~proc.Status.UnitFeatures
+                        proc.computeUnitFeatures("ActivityFeatures");
+                    end
+                    burst_params.Method = "ISIN";
+                    if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'Method')
+                        burst_params.Method = proc.Parameters.Bursts.Method;
+                    end
+                    if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'MergeFactor')
+                        burst_params.MergeFactor = proc.Parameters.Bursts.MergeFactor;
+                    end
+                    burst_params.Outlier = proc.Parameters.Outlier;
+                    burst_params.Binning = 0.01;
+
+                    fr  = proc.UnitFeatureTable.FiringRate;
+                    cv  = proc.UnitFeatureTable.CVInterSpikeInterval;
+                    [bursts, burst_features] = computeBursts(spike_times, ...
+                        proc.SpikeData.SpikeUnits, fr, cv, ...
+                        numel(proc.Units), duration, burst_params);
+                    proc.Bursts = bursts;
+                    net_struct.BurstFeatures = burst_features;
                 catch ME
                     warning('RecordingProcessor:networkFeatures', 'Bursts failed: %s', ME.message);
                 end
@@ -350,7 +403,7 @@ classdef RecordingProcessor < handle
         end
 
         function computeConnectivity(proc, methods)
-        % COMPUTECONNECTIVITY  Compute CCG / STTC / DDC connectivity.
+        % COMPUTECONNECTIVITY  Compute CCG / STTC / DDC connectivity via standalone functions.
             arguments
                 proc
                 methods string = proc.Parameters.Analyses.Connectivity
@@ -365,12 +418,54 @@ classdef RecordingProcessor < handle
             if ~proc.Status.QC
                 proc.runQC();
             end
-            shim = RecordingProcessor.buildMEArecordingShim(proc);
-            try
-                shim.inferConnectivity(methods);
-                proc.Connectivity = shim.Connectivity;
-            catch ME
-                warning('RecordingProcessor:connectivity', '%s', ME.message);
+
+            st  = proc.SpikeData.SpikeTimes;
+            su  = proc.SpikeData.SpikeUnits;
+            sr  = proc.SpikeData.SamplingRate;
+            n   = numel(proc.Units);
+            dur = proc.SpikeData.Duration;
+
+            for a = 1:numel(methods)
+                try
+                    switch methods(a)
+                        case "CCG"
+                            proc.Connectivity.CCG = computeConnectivityCCG(st, su, n, sr, proc.Parameters.CCG);
+                        case "FullCCG"
+                            proc.Connectivity.FullCCG = computeConnectivityCCG(st, su, n, sr, ...
+                                struct('BinSize', 0.0005, 'Duration', 0.1, ...
+                                       'Conv_w', proc.Parameters.CCG.Conv_w, ...
+                                       'Alpha', proc.Parameters.CCG.Alpha));
+                        case "STTC"
+                            unit_st = arrayfun(@(u) u.SpikeTimes, proc.Units, 'un', 0);
+                            proc.Connectivity.STTC = computeConnectivitySTTC( ...
+                                unit_st, st, su, n, dur, sr, proc.Parameters.STTC);
+                        case "DDC"
+                            proc.Connectivity.DDC = computeConnectivityDDC(st, su, n, dur, proc.Parameters.DDC);
+                    end
+                catch ME
+                    warning('RecordingProcessor:connectivity', '%s: %s', methods(a), ME.message);
+                end
+            end
+
+            % Graph features
+            if ~isempty(proc.Connectivity) && ~isempty(fieldnames(proc.Connectivity))
+                try
+                    gp = struct();
+                    if isfield(proc.Parameters, 'GraphFeatures') && isfield(proc.Parameters.GraphFeatures, 'SmallWorldnessIterations')
+                        gp.SmallWorldnessIterations = proc.Parameters.GraphFeatures.SmallWorldnessIterations;
+                    end
+                    [nw_graph, unit_graph] = computeGraphFeatures(proc.Connectivity, gp);
+                    if ~isempty(proc.NetworkFeatureTable)
+                        proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_graph];
+                    else
+                        proc.NetworkFeatureTable = nw_graph;
+                    end
+                    if ~isempty(unit_graph) && ~isempty(proc.UnitFeatureTable)
+                        proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_graph];
+                    end
+                catch ME
+                    warning('RecordingProcessor:graphFeatures', '%s', ME.message);
+                end
             end
             proc.Status.Connectivity = true;
         end
@@ -590,49 +685,6 @@ classdef RecordingProcessor < handle
             s.ParentFeatures  = false;
             s.NetworkFeatures = false;
             s.Connectivity    = false;
-        end
-
-        function shim = buildMEArecordingShim(proc)
-        % Create a minimal MEArecording-like object from a RecordingProcessor.
-        % Used to delegate feature computation to existing MEArecording methods.
-            shim = MEArecording();
-            shim.Metadata = proc.SpikeData.Metadata;
-            shim.RecordingInfo.SamplingRate = proc.SpikeData.SamplingRate;
-            shim.RecordingInfo.Duration     = proc.SpikeData.Duration;
-            shim.RecordingInfo.ElectrodeCoordinates = proc.SpikeData.ElectrodeCoordinates;
-            shim.Spikes.Times = proc.SpikeData.SpikeTimes;
-            shim.Spikes.Units = proc.SpikeData.SpikeUnits;
-            shim.Parameters = proc.Parameters;
-            shim.Parameters.Save.Flag = false;  % never auto-save
-
-            % Inject existing Units if QC has been run
-            if proc.Status.QC && ~isempty(proc.Units)
-                n = numel(proc.Units);
-                % Build Unit objects from UnitData for use in shim
-                norm_wf = [proc.Units.ReferenceWaveform];
-                wf_feats = RecordingProcessor.computeWaveformFeatures(norm_wf, proc.SpikeData.SamplingRate);
-                shim_units = Unit();
-                for u = 1:n
-                    shim_units(u) = Unit(shim, norm_wf(:, u), ...
-                        proc.Units(u).ReferenceElectrode, ...
-                        proc.Units(u).SpikeTimes, wf_feats{u});
-                    shim_units(u).TemplateID = proc.Units(u).TemplateID;
-                end
-                shim.Units = shim_units;
-                % Mark GoodUnits so generateUnits is skipped if shim.generateUnits is called
-                shim.Parameters.QC.GoodUnits = [proc.Units.TemplateID];
-            end
-        end
-
-        function wf_feats = computeWaveformFeatures(norm_wf, sampling_rate)
-        % Delegate to MEArecording.inferWaveformFeatures via a minimal shim.
-            n = size(norm_wf, 2);
-            amps = ones(1, n);  % dummy amplitudes for waveform feature computation
-            shim = MEArecording();
-            shim.RecordingInfo.SamplingRate = sampling_rate;
-            shim.Parameters = MEArecording.returnDefaultParams();
-            shim.Parameters.Save.Flag = false;
-            wf_feats = shim.inferWaveformFeatures(amps, norm_wf);
         end
 
         function uid = computeStableID(metadata, template_id, ref_electrode)
