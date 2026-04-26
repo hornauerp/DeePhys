@@ -85,7 +85,11 @@ classdef MLPipeline
                             'NumLearningCycles', params.RF.NumCycles, ...
                             'Learners', t, 'Options', statset("UseParallel", true));
                 end
-                train_acc = 1 - resubLoss(clf, 'LossFun', 'classerror');
+                if alg == "rf"
+                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classerror');
+                else
+                    train_acc = 1 - resubLoss(clf, 'LossFun', 'classerror');
+                end
             end
         end
 
@@ -151,9 +155,13 @@ classdef MLPipeline
                 end
             end
 
-            % Training R² (in-bag OOB estimate for RF; resubstitution for others)
-            Y_resub = predict(mdl, X_train);
-            ss_res = sum((Y_train - Y_resub).^2);
+            % Training R² (OOB estimate for RF; resubstitution for SVM/KNN)
+            if alg == "rf"
+                Y_train_pred = oobPredict(mdl);
+            else
+                Y_train_pred = predict(mdl, X_train);
+            end
+            ss_res = sum((Y_train - Y_train_pred).^2);
             ss_tot = sum((Y_train - mean(Y_train)).^2);
             if ss_tot == 0
                 train_r2 = NaN;

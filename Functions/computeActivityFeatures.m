@@ -117,7 +117,12 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
         binned_activity = histcounts(spike_times, ...
             'BinLimits', [0 duration], ...
             'BinWidth', params.Regularity.Binning);
-        norm_activity = binned_activity / max(binned_activity);
+        max_activity = max(binned_activity);
+        if max_activity == 0
+            norm_activity = zeros(size(binned_activity));
+        else
+            norm_activity = binned_activity / max_activity;
+        end
         [freq, mag, fit_coeff] = computeRegularity(norm_activity, params.Regularity.Binning, params.Regularity.N_peaks);
         reg_feat.RegularityFrequency = freq;
         reg_feat.RegularityMagnitude = mag;

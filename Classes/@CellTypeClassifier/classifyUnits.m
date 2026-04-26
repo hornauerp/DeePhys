@@ -63,6 +63,9 @@ unique_confidence(labels.sorted_train_ids) = 1.0;
 
 if classify_method == "graph"
     % ── Graph-based label propagation on UMAP's own NxN fuzzy simplicial set ──
+    % Note: ACGWeight and WaveformWeight are applied during UMAP embedding in
+    % generateTrainLabels, so the graph topology already reflects them. They
+    % are not re-applied here.
     % Reconstructed from ctc.UMAP.head/tail/weights (COO edge list set by
     % simplicial_set_embedding). Covers all N unique units. Symmetrise →
     % row-normalise → propagate, clamping training labels each iteration.
@@ -109,6 +112,7 @@ if classify_method == "graph"
     max_iter = p_conf.GraphMaxIter;
     tol      = p_conf.GraphConvergenceTol;
 
+    converged = false;
     for iter = 1:max_iter
         F_new = W * F_label;
 
@@ -131,11 +135,12 @@ if classify_method == "graph"
         if max(abs(F_new(:) - F_label(:))) < tol
             fprintf('Graph label propagation converged at iteration %d\n', iter);
             F_label = F_new;
+            converged = true;
             break
         end
         F_label = F_new;
     end
-    if iter == max_iter
+    if ~converged
         fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
     end
 

@@ -49,19 +49,30 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
         [peak_2_value, peak_2_rel_idx] = max(peak_2_cutout);
         peak_2_abs_idx = peak_2_rel_idx + unit_trough_idx(u) - 1;
 
-        asymmetry_u = (peak_2_value - peak_1_value) / (peak_2_value + peak_1_value);
+        denom_asym  = peak_2_value + peak_1_value;
+        asymmetry_u = (peak_2_value - peak_1_value) / denom_asym;
+        if denom_asym == 0, asymmetry_u = NaN; end
         t2pdelay_u  = (peak_2_abs_idx - unit_trough_idx(u)) / (sampling_rate * interpolation_factor / 1000);
-        t2pratio_u  = abs(unit_trough_value(u) / peak_2_value);
+        if peak_2_value == 0
+            t2pratio_u = NaN;
+        else
+            t2pratio_u = abs(unit_trough_value(u) / peak_2_value);
+        end
 
         zc = [1 unit_zero_crossings{u} length(xq)];
         [~,zc_pre_trough] = max(zc(zc<unit_trough_idx(u)));
         zc_pre_trough = max([zc_pre_trough 2]);
         unit_features.AUC_peak_1 = trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough), u));
-        unit_features.AUC_trough = abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1), u)));
-        if length(zc(zc_pre_trough:end)) > 3
-            unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2), u));
+        if zc_pre_trough + 1 > length(zc)
+            unit_features.AUC_trough = NaN;
+            unit_features.AUC_peak_2 = NaN;
         else
-            unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):size(interp_wf_matrix,1), u));
+            unit_features.AUC_trough = abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1), u)));
+            if length(zc(zc_pre_trough:end)) > 3
+                unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2), u));
+            else
+                unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):size(interp_wf_matrix,1), u));
+            end
         end
 
         rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_abs_idx, u);

@@ -49,18 +49,20 @@ classdef ClassificationResult < MLResult
                 metrics.Recall    = recall;
                 metrics.F1_score  = 2 * precision * recall / max(precision + recall, eps);
             else
-                prec_sum = 0; rec_sum = 0;
+                prec_sum = 0; rec_sum = 0; f1_sum = 0;
                 for c = 1:n_classes
-                    tp = sum(Y_pred == classes(c) & Y_test == classes(c));
-                    fp = sum(Y_pred == classes(c) & Y_test ~= classes(c));
-                    fn = sum(Y_pred ~= classes(c) & Y_test == classes(c));
-                    prec_sum = prec_sum + tp / max(tp + fp, 1);
-                    rec_sum  = rec_sum  + tp / max(tp + fn, 1);
+                    tp  = sum(Y_pred == classes(c) & Y_test == classes(c));
+                    fp  = sum(Y_pred == classes(c) & Y_test ~= classes(c));
+                    fn  = sum(Y_pred ~= classes(c) & Y_test == classes(c));
+                    P_c = tp / max(tp + fp, 1);
+                    R_c = tp / max(tp + fn, 1);
+                    prec_sum = prec_sum + P_c;
+                    rec_sum  = rec_sum  + R_c;
+                    f1_sum   = f1_sum   + 2 * P_c * R_c / max(P_c + R_c, eps);
                 end
                 metrics.Precision = prec_sum / n_classes;
                 metrics.Recall    = rec_sum  / n_classes;
-                metrics.F1_score  = 2 * metrics.Precision * metrics.Recall / ...
-                    max(metrics.Precision + metrics.Recall, eps);
+                metrics.F1_score  = f1_sum   / n_classes;
             end
             metrics.ConfusionMatrix = confusionmat(Y_test, Y_pred);
         end

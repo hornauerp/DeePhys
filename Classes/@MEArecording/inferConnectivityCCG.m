@@ -83,7 +83,7 @@
                    end
                    % Reverse: cell2 → ref (pre-synaptic peak = post-synaptic in flipped cch)
                    sigpre = max(cchud(postbins)) > poissinv(1 - alpha, max(cchud(prebins)));
-                   if any(sigud(prebins)) && sigpre
+                   if any(sigud(postbins)) && sigpre
                        n_exc = n_exc + 1;
                        sig_con(n_exc, :) = [cell2ID, refcellID];
                    end
@@ -96,7 +96,7 @@
                        sig_con_inh(n_inh, :) = [refcellID, cell2ID];
                    end
                    sigpre_inh = min(cchud(postbins)) < poissinv(alpha, max(cchud(prebins)));
-                   if any(sigud_inh(prebins)) && sigpre_inh
+                   if any(sigud_inh(postbins)) && sigpre_inh
                        n_inh = n_inh + 1;
                        sig_con_inh(n_inh, :) = [cell2ID, refcellID];
                    end

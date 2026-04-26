@@ -50,7 +50,9 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
     for iburst = 1:length(BDs)
         try
             burst_activity = spike_times(spike_times <= bursts.T_end(iburst) & spike_times >= bursts.T_start(iburst));
-            binned_activity = histcounts(burst_activity, 'BinWidth', params.Binning);
+            binned_activity = histcounts(burst_activity, ...
+                'BinLimits', [bursts.T_start(iburst), bursts.T_end(iburst)], ...
+                'BinWidth', params.Binning);
             [max_binned, imax_binned] = max(binned_activity);
             norm_activity = smoothdata(binned_activity / max_binned, 'lowess');
             RiseTime(iburst) = imax_binned * params.Binning;

@@ -37,5 +37,11 @@ function connectivity = computeConnectivityDDC(spike_times, spike_units, n_units
     dV = [mean(dV); dV; mean(dV)];
     tmp = cov([dV V_obs]);
     dCov = tmp(1:N, N+1:end);
-    connectivity.wu = dCov / B;
+    if rcond(B) < eps
+        warning('computeConnectivityDDC:singularB', ...
+            'B matrix is singular (rcond=%.2e). Setting connectivity to NaN.', rcond(B));
+        connectivity.wu = NaN(size(dCov));
+    else
+        connectivity.wu = dCov / B;
+    end
 end

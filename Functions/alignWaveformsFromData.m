@@ -41,7 +41,9 @@ function aligned_wf = alignWaveformsFromData(ref_wf_matrix, sampling_rate, targe
 
     interp_wf = interp1(x, ref_wf, xq, "makima");
     interp_wf = interp_wf((max_offset * interp_factor) + 1:((buffer_wf - max_offset - 1) * interp_factor), :);
-    interp_wf = interp_wf ./ max(abs(interp_wf));
+    col_max = max(abs(interp_wf));
+    col_max(col_max == 0) = 1;
+    interp_wf = interp_wf ./ col_max;
     rm_idx = find(ceil(abs(peak_idx - i)) >= max_offset);
     [~, minIndices] = min(interp_wf);
     shifts = round(peak_idx * interp_factor) - minIndices;
