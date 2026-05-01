@@ -13,7 +13,7 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
 %       .Catch22           struct with .BinSize (omit field to skip)
 %
 % OUTPUTS:
-%   activity_table   - (1 x 9) table
+%   activity_table   - (1 x 10) table
 %   regularity_table - (1 x 3) table, or empty table if regularity not requested
 %   catch22_table    - (1 x 22) table, or empty table if catch22 not requested
 
@@ -39,7 +39,8 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
     do_catch22    = isfield(params, 'Catch22') && ~isempty(params.Catch22);
 
     act_names = ["FiringRate","MeanInterSpikeInterval","VarianceInterSpikeInterval","CVInterSpikeInterval", ...
-        "CV2InterSpikeInterval","LocalVariation","RevisedLocalVariation","FanoFactor","PartialAutocorrelation"];
+        "CV2InterSpikeInterval","LocalVariation","RevisedLocalVariation","FanoFactor","PartialAutocorrelation", ...
+        "ISIBimodality"];
 
     if length(spike_times) <= 2
         activity_table = array2table(NaN(1, length(act_names)), 'VariableNames', act_names);
@@ -110,6 +111,19 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
         act_feat.PartialAutocorrelation = pacf(2);
     else
         act_feat.PartialAutocorrelation = NaN;
+    end
+
+    % Bimodality coefficient on log(ISI): BC = (skewness^2 + 1) / kurtosis
+    % BC > 5/9 (~0.556) suggests bimodality (e.g. burst vs tonic ISI modes)
+    if length(isi) >= 10
+        log_isi = log(isi(isi > 0));
+        if length(log_isi) >= 10
+            act_feat.ISIBimodality = (skewness(log_isi)^2 + 1) / kurtosis(log_isi);
+        else
+            act_feat.ISIBimodality = NaN;
+        end
+    else
+        act_feat.ISIBimodality = NaN;
     end
     activity_table = struct2table(act_feat);
 

@@ -42,6 +42,15 @@ classdef MEArecording < handle
             if isempty(fieldnames(metadata))
                 return % allow no-arg construction for array pre-allocation
             end
+
+            persistent warned_deprecated
+            if isempty(warned_deprecated)
+                warning('MEArecording:deprecated', ...
+                    ['MEArecording is deprecated. Use RecordingProcessor for new analyses. ' ...
+                     'See Tutorial 7 (LegacyMigration) for migration guidance.']);
+                warned_deprecated = true;
+            end
+
             addpath(genpath(obj.getParentPath()));
             obj.parseMetadata(metadata);
             obj.parseRecordingInfo();
@@ -782,7 +791,9 @@ classdef MEArecording < handle
             
             % Parameters for DDC calculation
             defaultParams.DDC.BinSize = .001; %in seconds //1ms
-            defaultParams.DDC.Threshold = 0; %ReLU treshold
+            defaultParams.DDC.Threshold = 0; %ReLU threshold
+            defaultParams.DDC.N_Surrogates = 100;
+            defaultParams.DDC.Percentile = 95;
             
             % Parameters for STTC calculation
             defaultParams.STTC.MaxLag = .05; %in seconds

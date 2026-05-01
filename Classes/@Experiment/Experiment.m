@@ -338,6 +338,12 @@ classdef Experiment < handle
             if ~isfield(opts, 'Normalization'),    opts.Normalization = "";             end
             if ~isfield(opts, 'ParentFeatures'),   opts.ParentFeatures = string.empty;  end
             if ~isfield(opts, 'MinFiringRate'),    opts.MinFiringRate = 0;              end
+            % ML algorithm parameters (forwarded to Classifier / Regressor)
+            if ~isfield(opts, 'Algorithm'),        opts.Algorithm = 'rf';              end
+            if ~isfield(opts, 'KFold'),            opts.KFold = 5;                     end
+            if ~isfield(opts, 'NHyper'),           opts.NHyper = 0;                    end
+            if ~isfield(opts, 'Prior'),            opts.Prior = 'empirical';           end
+            if ~isfield(opts, 'Seed'),             opts.Seed = [];                     end
         end
 
     end

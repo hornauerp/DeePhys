@@ -18,7 +18,15 @@ classdef RecordingGroup < handle
                 recording_array MEArecording
                 parameters struct = struct();
             end
-            
+
+            persistent warned_deprecated
+            if isempty(warned_deprecated)
+                warning('RecordingGroup:deprecated', ...
+                    ['RecordingGroup is deprecated. Use Experiment + FeatureStore instead. ' ...
+                     'See Tutorial 7 (LegacyMigration).']);
+                warned_deprecated = true;
+            end
+
             rg.parseParameters(parameters);
             rg.harmonizeMetadata(recording_array);
             keep_recordings = rg.filterRecordingArray([recording_array.Metadata]);

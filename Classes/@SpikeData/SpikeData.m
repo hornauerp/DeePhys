@@ -18,7 +18,7 @@ classdef SpikeData
         ElectrodeCoordinates double % (N_channels x 2) XY electrode positions
         SpikeTimes          double  % (N_spikes x 1) spike times in seconds
         SpikeUnits          double  % (N_spikes x 1) 1-indexed template assignment
-        TemplateWaveforms   double  % (N_samples x N_channels x N_templates)
+        TemplateWaveforms   double  % (N_templates x N_samples x N_channels)
     end
 
     methods (Static)
@@ -137,6 +137,9 @@ classdef SpikeData
         function sr = parseSamplingRate(input_path)
             params_path = fullfile(input_path, 'params.py');
             fid  = fopen(params_path, 'r');
+            if fid < 0
+                error('SpikeData:paramsNotFound', 'Cannot open %s', params_path);
+            end
             txt  = fscanf(fid, '%c');
             fclose(fid);
             lines   = strsplit(txt, newline);
@@ -149,6 +152,9 @@ classdef SpikeData
         % Parse n_samples (or n_samples_dat) from params.py. Returns NaN when absent.
             params_path = fullfile(input_path, 'params.py');
             fid = fopen(params_path, 'r');
+            if fid < 0
+                error('SpikeData:paramsNotFound', 'Cannot open %s', params_path);
+            end
             txt = fscanf(fid, '%c');
             fclose(fid);
             lines = strsplit(txt, newline);

@@ -557,6 +557,7 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
         try
             rhos(u) = corr(gv_valid(valid_pts), fr_matrix(u, valid_pts)', 'Type', 'Spearman');
         catch
+            % corr() fails when <2 unique values remain after NaN removal; rhos(u) stays NaN
         end
     end
 

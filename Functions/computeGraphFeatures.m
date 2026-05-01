@@ -55,6 +55,9 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
         global_efficiency = efficiency_bin(con_mat);
         local_efficiency = efficiency_bin(con_mat, 1);
 
+        % community_louvain (BCT) uses randperm internally, making each run
+        % non-deterministic. Running multiple iterations and taking max(Q)
+        % reduces variance. n_louvain=5 balances stability vs. compute cost.
         n_louvain = 5;
         Q_vals = nan(1, n_louvain);
         for lr = 1:n_louvain

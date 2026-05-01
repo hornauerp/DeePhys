@@ -62,6 +62,18 @@ classdef FeatureStore < handle
                 end
                 rec_id = p.SpikeData.RecordingID;
 
+                % Warn about analyses that failed (vs. "pending" = not run, "done" = ok)
+                status_fields = fieldnames(p.Status);
+                for sf = 1:numel(status_fields)
+                    if isfield(p.Status, status_fields{sf}) && ...
+                            isstring(p.Status.(status_fields{sf})) && ...
+                            p.Status.(status_fields{sf}) == "failed"
+                        warning('FeatureStore:failedAnalysis', ...
+                            'Recording %s: %s analysis failed — results may be incomplete.', ...
+                            rec_id, status_fields{sf});
+                    end
+                end
+
                 % Unit table: feature table + identity/metadata columns
                 if ~isempty(p.UnitFeatureTable) && ~isempty(p.Units)
                     uft = p.UnitFeatureTable;
@@ -267,6 +279,9 @@ classdef FeatureStore < handle
             tbl = fs.UnitTable;
 
             % Apply minimum firing rate filter when requested and column exists.
+            % Note: this filters UnitTable rows only. MetadataTable and RecordingTable
+            % remain at recording granularity and are unaffected. Recordings that lose
+            % all units here will still appear in MetadataTable.
             if options.MinFiringRate > 0
                 if ismember('FiringRate', tbl.Properties.VariableNames)
                     keep = tbl.FiringRate >= options.MinFiringRate;
@@ -383,10 +398,13 @@ classdef FeatureStore < handle
                 % Normalize
                 if normalization == "baseline" && ~isempty(row_data)
                     baseline = row_data{1}.Variables;
-                    % Zero-baseline features are undefined ratios — set to NaN
-                    % rather than ~10^16 (eps denominator would create extreme outliers).
                     safe_denom = baseline;
-                    safe_denom(abs(baseline) < 1e-9) = NaN;
+                    unsafe_base = abs(baseline) < 1e-6;
+                    safe_denom(unsafe_base) = NaN;
+                    if any(unsafe_base, 'all')
+                        warning('FeatureStore:nearZeroBaseline', ...
+                            '%d baseline value(s) near zero — ratio set to NaN.', sum(unsafe_base(:)));
+                    end
                     for v = 1:numel(row_data)
                         row_data{v}.Variables = row_data{v}.Variables ./ safe_denom;
                     end
@@ -394,7 +412,12 @@ classdef FeatureStore < handle
                     all_vals = vertcat(row_data{:}).Variables;
                     lo = min(all_vals); hi = max(all_vals);
                     denom = hi - lo;
-                    denom(abs(denom) < 1e-9) = NaN;  % constant features → NaN, not ~1/eps
+                    unsafe_range = abs(denom) < 1e-6;
+                    denom(unsafe_range) = NaN;
+                    if any(unsafe_range)
+                        warning('FeatureStore:nearConstantFeature', ...
+                            '%d feature(s) have near-constant range — set to NaN.', sum(unsafe_range));
+                    end
                     for v = 1:numel(row_data)
                         row_data{v}.Variables = (row_data{v}.Variables - lo) ./ denom;
                     end
@@ -659,6 +682,46 @@ classdef FeatureStore < handle
 
     methods (Static, Access = private)
 
+        function validateIntegrity(fs)
+        % Warn on referential integrity violations after table assembly.
+            if isempty(fs.MetadataTable) || isempty(fs.MetadataTable.Properties.VariableNames)
+                return
+            end
+            meta_ids = string(fs.MetadataTable.RecordingID);
+
+            % MetadataTable RecordingIDs must be unique
+            if numel(meta_ids) ~= numel(unique(meta_ids))
+                [~, ia] = unique(meta_ids);
+                dupes = meta_ids(setdiff(1:numel(meta_ids), ia));
+                warning('FeatureStore:duplicateRecordingID', ...
+                    'MetadataTable has %d duplicate RecordingID(s): %s', ...
+                    numel(dupes), strjoin(dupes, ', '));
+            end
+
+            % UnitTable RecordingIDs must all exist in MetadataTable
+            if ~isempty(fs.UnitTable) && ismember('RecordingID', fs.UnitTable.Properties.VariableNames)
+                unit_ids = string(fs.UnitTable.RecordingID);
+                missing  = ~ismember(unit_ids, meta_ids);
+                if any(missing)
+                    orphan_ids = unique(unit_ids(missing));
+                    warning('FeatureStore:orphanUnits', ...
+                        '%d unit row(s) reference RecordingIDs absent from MetadataTable: %s', ...
+                        sum(missing), strjoin(orphan_ids, ', '));
+                end
+            end
+
+            % Warn about recordings in MetadataTable with zero units
+            if ~isempty(fs.UnitTable) && ismember('RecordingID', fs.UnitTable.Properties.VariableNames)
+                unit_ids = string(fs.UnitTable.RecordingID);
+                empty_recs = meta_ids(~ismember(meta_ids, unit_ids));
+                if ~isempty(empty_recs)
+                    warning('FeatureStore:emptyRecordings', ...
+                        '%d recording(s) in MetadataTable have no units: %s', ...
+                        numel(empty_recs), strjoin(empty_recs, ', '));
+                end
+            end
+        end
+
         function fs = assembleFromCells(unit_cells, recording_cells, metadata_cells)
         % Vertically concatenate cell arrays of tables (handling missing rows).
             unit_cells      = unit_cells(~cellfun(@isempty, unit_cells));
@@ -689,6 +752,8 @@ classdef FeatureStore < handle
             else
                 fs.MetadataFields = string.empty;
             end
+
+            FeatureStore.validateIntegrity(fs);
         end
 
         function T = stackTables(tbl_cells)
@@ -718,18 +783,27 @@ classdef FeatureStore < handle
 
         function tf = isStringColumn(col_name, tables)
         % Return true if col_name holds string/char/categorical data in any ref table.
-            tf = false;
+        % Checks ALL tables to avoid type mismatch from first-table-wins heuristic.
+            n_string  = 0;
+            n_numeric = 0;
             for k = 1:numel(tables)
                 tbl = tables{k};
                 if ismember(col_name, string(tbl.Properties.VariableNames))
                     col = tbl.(col_name);
-                    tf  = isstring(col) || ischar(col) || iscell(col) || iscategorical(col);
-                    return
+                    if isstring(col) || ischar(col) || iscell(col) || iscategorical(col)
+                        n_string = n_string + 1;
+                    else
+                        n_numeric = n_numeric + 1;
+                    end
                 end
             end
-            % Fallback: guess from name — ID columns are strings
-            tf = endsWith(col_name, "ID") || ismember(col_name, ...
-                ["Mutation","Genotype","Label","Type","Name","Date","Group","Condition"]);
+            if n_string + n_numeric == 0
+                % Column not found in any table — fall back to name heuristic
+                tf = endsWith(col_name, "ID") || ismember(col_name, ...
+                    ["Mutation","Genotype","Label","Type","Name","Date","Group","Condition"]);
+            else
+                tf = n_string >= n_numeric;  % majority vote; ties favour string
+            end
         end
 
         function meta_row = metadataStructToRow(meta_struct)

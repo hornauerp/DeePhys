@@ -30,21 +30,17 @@ freq_domain = abs(TEMP(1:floor(NFFT/2)));
 frequency = F(freq_idx);
 
 norm_freq_domain = freq_domain / max(freq_domain);
-abs_locs = [];  % Absolute bin positions in the original freq_domain
-p = [];
-offset = 0;  % Track cumulative offset from truncation
-for i = 1:n_peaks
-    if length(norm_freq_domain) < 10
-        break
-    end
-    [pks, locs, ~, ~] = findpeaks(norm_freq_domain, 'NPeaks', 1, 'SortStr', 'descend');
-    if isempty(pks)
-        break
-    end
-    abs_locs = [abs_locs; offset + locs]; %#ok<AGROW>  % Convert to absolute position
-    p = [p; pks]; %#ok<AGROW>
-    offset = offset + locs - 1;  % Truncation removes indices 1..locs-1
-    norm_freq_domain = norm_freq_domain(locs:end);
+[all_pks, all_locs, ~, all_prom] = findpeaks(norm_freq_domain);
+if length(all_pks) >= n_peaks
+    [~, prom_order] = sort(all_prom, 'descend');
+    sel = prom_order(1:n_peaks);
+    [abs_locs, sort_idx] = sort(all_locs(sel));
+    p = all_pks(sel(sort_idx));
+    abs_locs = abs_locs(:);
+    p = p(:);
+else
+    abs_locs = all_locs(:);
+    p = all_pks(:);
 end
 
 if length(p) >= 2

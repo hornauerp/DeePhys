@@ -70,7 +70,7 @@ classdef RecordingProcessor < handle
         function runQC(proc)
         % RUNQC  Filter templates by quality criteria, populate proc.Units.
         %   After this step: proc.Units is a UnitData array of passing units.
-            if proc.Status.QC
+            if proc.Status.QC == "done"
                 return
             end
             sd = proc.SpikeData;
@@ -108,7 +108,7 @@ classdef RecordingProcessor < handle
                 bad_amp   = RecordingProcessor.checkAmplitude(max_amps, p.QC.Amplitude);
                 bad_fr    = RecordingProcessor.checkFiringRate(firing_rates, p.QC.FiringRate);
                 bad_rpv   = RecordingProcessor.checkRPV(unit_spike_times, p.QC.RPV, p.QC.RefractoryPeriod);
-                [is_axon, is_noisy] = RecordingProcessor.checkWaveform(norm_wf, p.QC.Axon, p.QC.Noise, p.QC.NoiseCutout);
+                [is_axon, is_noisy] = RecordingProcessor.checkWaveform(norm_wf, p.QC.Axon, p.QC.Noise, p.QC.NoiseCutout, sd.SamplingRate);
                 spike_counts = cellfun(@numel, unit_spike_times);
                 min_n = p.QC.MinSpikeCount;
                 bad_spike_count = spike_counts(:) < min_n;
@@ -154,7 +154,7 @@ classdef RecordingProcessor < handle
                 end
             end
             proc.Units  = ud;
-            proc.Status.QC = true;
+            proc.Status.QC = "done";
         end
 
         function computeUnitFeatures(proc, feature_groups)
@@ -163,15 +163,15 @@ classdef RecordingProcessor < handle
                 proc
                 feature_groups string = "all"
             end
-            if proc.Status.UnitFeatures
+            if proc.Status.UnitFeatures == "done"
                 return
             end
-            if ~proc.Status.QC
+            if proc.Status.QC ~= "done"
                 proc.runQC();
             end
             if isempty(proc.Units)
                 proc.UnitFeatureTable = table();
-                proc.Status.UnitFeatures = true;
+                proc.Status.UnitFeatures = "done";
                 return
             end
 
@@ -230,7 +230,7 @@ classdef RecordingProcessor < handle
             feature_tables{end+1} = array2table(aligned_wf', "VariableNames", var_names);
 
             proc.UnitFeatureTable = [feature_tables{:}];
-            proc.Status.UnitFeatures = true;
+            proc.Status.UnitFeatures = "done";
         end
 
         function computeParentFeatures(proc, acg_params)
@@ -252,10 +252,10 @@ classdef RecordingProcessor < handle
                 proc
                 acg_params struct = struct()
             end
-            if proc.Status.ParentFeatures
+            if proc.Status.ParentFeatures == "done"
                 return
             end
-            if ~proc.Status.QC
+            if proc.Status.QC ~= "done"
                 proc.runQC();
             end
 
@@ -270,12 +270,12 @@ classdef RecordingProcessor < handle
                     ['No valid parent path for recording %s — ' ...
                      'parent features unavailable, child features used as fallback.'], ...
                     proc.SpikeData.InputPath);
-                proc.Status.ParentFeatures = true;
+                proc.Status.ParentFeatures = "done";
                 return
             end
 
             if isempty(proc.Units)
-                proc.Status.ParentFeatures = true;
+                proc.Status.ParentFeatures = "done";
                 return
             end
 
@@ -286,7 +286,7 @@ classdef RecordingProcessor < handle
             catch ME
                 warning('RecordingProcessor:parentACGFailed', ...
                     'Parent ACG computation failed for %s: %s', parent_path, ME.message);
-                proc.Status.ParentFeatures = true;
+                proc.Status.ParentFeatures = "failed";
                 return
             end
 
@@ -295,7 +295,7 @@ classdef RecordingProcessor < handle
             % Determine n_bins from any entry in the map (all should be same)
             map_keys = keys(acg_map);
             if isempty(map_keys)
-                proc.Status.ParentFeatures = true;
+                proc.Status.ParentFeatures = "done";
                 return
             end
             n_bins = numel(acg_map(map_keys{1}));
@@ -329,12 +329,12 @@ classdef RecordingProcessor < handle
             else
                 proc.UnitFeatureTable = parent_tbl;
             end
-            proc.Status.ParentFeatures = true;
+            proc.Status.ParentFeatures = "done";
         end
 
         function computeNetworkFeatures(proc)
         % COMPUTENETWORKFEATURES  Compute burst stats, regularity, Catch22 at network level.
-            if proc.Status.NetworkFeatures
+            if proc.Status.NetworkFeatures == "done"
                 return
             end
 
@@ -368,8 +368,8 @@ classdef RecordingProcessor < handle
 
             if proc.Parameters.Analyses.Bursts
                 try
-                    if ~proc.Status.UnitFeatures
-                        proc.computeUnitFeatures("ActivityFeatures");
+                    if proc.Status.UnitFeatures ~= "done"
+                        proc.computeUnitFeatures();
                     end
                     burst_params.Method = "ISIN";
                     if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'Method')
@@ -388,6 +388,23 @@ classdef RecordingProcessor < handle
                         numel(proc.Units), duration, burst_params);
                     proc.Bursts = bursts;
                     net_struct.BurstFeatures = burst_features;
+
+                    if ~isempty(bursts.T_start)
+                        n_units = numel(proc.Units);
+                        burst_frac = NaN(n_units, 1);
+                        in_burst = false(size(spike_times));
+                        for b = 1:length(bursts.T_start)
+                            in_burst = in_burst | (spike_times >= bursts.T_start(b) & spike_times <= bursts.T_end(b));
+                        end
+                        for u = 1:n_units
+                            mask = proc.SpikeData.SpikeUnits == proc.Units(u).TemplateID;
+                            n_spikes = sum(mask);
+                            if n_spikes > 0
+                                burst_frac(u) = sum(mask & in_burst) / n_spikes;
+                            end
+                        end
+                        proc.UnitFeatureTable.BurstFractionSpikes = burst_frac;
+                    end
                 catch ME
                     warning('RecordingProcessor:networkFeatures', 'Bursts failed: %s', ME.message);
                 end
@@ -399,7 +416,7 @@ classdef RecordingProcessor < handle
             else
                 proc.NetworkFeatureTable = table();
             end
-            proc.Status.NetworkFeatures = true;
+            proc.Status.NetworkFeatures = "done";
         end
 
         function computeConnectivity(proc, methods)
@@ -408,14 +425,14 @@ classdef RecordingProcessor < handle
                 proc
                 methods string = proc.Parameters.Analyses.Connectivity
             end
-            if proc.Status.Connectivity
+            if proc.Status.Connectivity == "done"
                 return
             end
             if isempty(methods)
-                proc.Status.Connectivity = true;
+                proc.Status.Connectivity = "done";
                 return
             end
-            if ~proc.Status.QC
+            if proc.Status.QC ~= "done"
                 proc.runQC();
             end
 
@@ -467,7 +484,7 @@ classdef RecordingProcessor < handle
                     warning('RecordingProcessor:graphFeatures', '%s', ME.message);
                 end
             end
-            proc.Status.Connectivity = true;
+            proc.Status.Connectivity = "done";
         end
 
         function runAll(proc)
@@ -559,14 +576,16 @@ classdef RecordingProcessor < handle
                 proc.Status = s.Status;
                 % Back-fill ParentFeatures flag if loaded from older save (field didn't exist)
                 if ~isfield(proc.Status, 'ParentFeatures')
-                    % Mark as done if Parent_* columns already present in UnitFeatureTable
+                    % Back-fill missing field for files saved before tri-state Status.
                     if ~isempty(proc.UnitFeatureTable) && ...
                             any(startsWith(string(proc.UnitFeatureTable.Properties.VariableNames), "Parent_"))
-                        proc.Status.ParentFeatures = true;
+                        proc.Status.ParentFeatures = "done";
                     else
-                        proc.Status.ParentFeatures = false;
+                        proc.Status.ParentFeatures = "pending";
                     end
                 end
+                % Upgrade legacy boolean Status fields to tri-state strings.
+                proc.Status = RecordingProcessor.upgradeLegacyStatus(proc.Status);
             else
                 proc.Status = RecordingProcessor.emptyStatus();
             end
@@ -631,14 +650,14 @@ classdef RecordingProcessor < handle
             % Extract UnitData from old Unit objects
             if ~isempty(obj.Units)
                 proc.Units = UnitData.fromLegacyUnitArray(obj.Units, sd.RecordingID);
-                proc.Status.QC = true;
+                proc.Status.QC = "done";
             end
 
             % Extract unit feature table
             if ~isempty(obj.Units)
                 try
                     proc.UnitFeatureTable = FeatureAssembly.unitFeatures(obj, "all");
-                    proc.Status.UnitFeatures = true;
+                    proc.Status.UnitFeatures = "done";
                 catch ME
                     warning('RecordingProcessor:fromLegacyMat', 'Unit features: %s', ME.message);
                 end
@@ -648,7 +667,7 @@ classdef RecordingProcessor < handle
             if ~isempty(obj.NetworkFeatures)
                 try
                     proc.NetworkFeatureTable = RecordingProcessor.structToOneRowTable(obj.NetworkFeatures);
-                    proc.Status.NetworkFeatures = true;
+                    proc.Status.NetworkFeatures = "done";
                 catch ME
                     warning('RecordingProcessor:fromLegacyMat', 'Network features: %s', ME.message);
                 end
@@ -657,7 +676,7 @@ classdef RecordingProcessor < handle
             % Connectivity
             if ~isempty(obj.Connectivity) && ~isempty(fieldnames(obj.Connectivity))
                 proc.Connectivity = obj.Connectivity;
-                proc.Status.Connectivity = true;
+                proc.Status.Connectivity = "done";
             end
 
             % Bursts
@@ -680,11 +699,25 @@ classdef RecordingProcessor < handle
     methods (Static, Access = private)
 
         function s = emptyStatus()
-            s.QC              = false;
-            s.UnitFeatures    = false;
-            s.ParentFeatures  = false;
-            s.NetworkFeatures = false;
-            s.Connectivity    = false;
+            s.QC              = "pending";
+            s.UnitFeatures    = "pending";
+            s.ParentFeatures  = "pending";
+            s.NetworkFeatures = "pending";
+            s.Connectivity    = "pending";
+        end
+
+        function s = upgradeLegacyStatus(s)
+        % Convert boolean Status fields saved before tri-state to string form.
+            fields = fieldnames(s);
+            for fi = 1:numel(fields)
+                v = s.(fields{fi});
+                if islogical(v) || isnumeric(v)
+                    s.(fields{fi}) = "pending";
+                    if v
+                        s.(fields{fi}) = "done";
+                    end
+                end
+            end
         end
 
         function uid = computeStableID(metadata, template_id, ref_electrode)
@@ -753,8 +786,11 @@ classdef RecordingProcessor < handle
             fprintf('QC RPV: %d bad\n', sum(bad));
         end
 
-        function [is_axon, is_noisy] = checkWaveform(norm_wf, axon_thresh, noise_thresh, noise_cutout)
-            SAMPLES_PER_MS = 10;
+        function [is_axon, is_noisy] = checkWaveform(norm_wf, axon_thresh, noise_thresh, noise_cutout, sampling_rate)
+            if nargin < 5 || isempty(sampling_rate)
+                sampling_rate = 10000;  % Maxwell default; pass sd.SamplingRate for other systems
+            end
+            SAMPLES_PER_MS = sampling_rate / 1000;
             if isempty(axon_thresh) || isnan(axon_thresh)
                 is_axon = false(size(norm_wf, 2), 1);
             else
@@ -771,8 +807,13 @@ classdef RecordingProcessor < handle
                 if isnan(avg_peak)
                     is_noisy = false(size(norm_wf, 2), 1);
                 else
-                    cutout = round(avg_peak) + noise_cutout(1)*SAMPLES_PER_MS : ...
-                             round(avg_peak) + noise_cutout(2)*SAMPLES_PER_MS;
+                    cutout = max(1, round(avg_peak) + noise_cutout(1)*SAMPLES_PER_MS) : ...
+                             min(size(norm_wf, 1), round(avg_peak) + noise_cutout(2)*SAMPLES_PER_MS);
+                    if length(cutout) < 3
+                        is_noisy = false(size(norm_wf, 2), 1);
+                        fprintf('QC noisy: %d\n', sum(is_noisy));
+                        return
+                    end
                     bad_peak = peak_idx < cutout(1) | peak_idx > cutout(end);
                     n_changes = sum(abs(diff(diff(norm_wf(cutout, :)) > 0)))';
                     is_noisy  = n_changes > noise_thresh | bad_peak';

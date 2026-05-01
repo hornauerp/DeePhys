@@ -62,6 +62,11 @@ classdef NormalizationPipeline < handle
                         np.FitParams(1).global_zscore.mean = gmu;
                         np.FitParams(1).global_zscore.sd = gsd;
 
+                    case 'clip'
+                        clip_range = step.params.range;
+                        X_out = max(min(X_out, clip_range), -clip_range);
+                        np.FitParams(1).clip.range = clip_range;
+
                     case 'max_abs_scale'
                         sf = max(abs(X_out));
                         sf(sf == 0) = 1;
@@ -97,6 +102,10 @@ classdef NormalizationPipeline < handle
                         gfit = np.FitParams.global_zscore;
                         X_out = normalize(X_out, 'center', gfit.mean, 'scale', gfit.sd);
 
+                    case 'clip'
+                        clip_range = np.FitParams.clip.range;
+                        X_out = max(min(X_out, clip_range), -clip_range);
+
                     case 'max_abs_scale'
                         sf = np.FitParams.max_abs_scale.scale_factor;
                         X_out = X_out ./ sf;
@@ -109,20 +118,20 @@ classdef NormalizationPipeline < handle
     methods (Static)
 
         function np = groupThenGlobal()
-        % GROUPTTHENGLOBAL  Per-group z-score → global z-score → max-abs scale.
-        %   Replicates the current normalizeByGroup + prepareInputMatrix behavior.
+        % GROUPTTHENGLOBAL  Per-group z-score → global z-score → clip → max-abs scale.
             np = NormalizationPipeline({
                 struct('type', 'group_zscore',  'params', struct())
                 struct('type', 'global_zscore', 'params', struct())
+                struct('type', 'clip',          'params', struct('range', 5))
                 struct('type', 'max_abs_scale', 'params', struct())
             });
         end
 
         function np = globalOnly()
-        % GLOBALONLY  Global z-score → max-abs scale (no per-group step).
-        %   Replicates the current prepareInputMatrix behavior when normalization_var is empty.
+        % GLOBALONLY  Global z-score → clip → max-abs scale (no per-group step).
             np = NormalizationPipeline({
                 struct('type', 'global_zscore', 'params', struct())
+                struct('type', 'clip',          'params', struct('range', 5))
                 struct('type', 'max_abs_scale', 'params', struct())
             });
         end
