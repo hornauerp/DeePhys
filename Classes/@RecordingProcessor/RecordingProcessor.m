@@ -38,6 +38,7 @@ classdef RecordingProcessor < handle
         NetworkFeatureTable table       % (1 x F) network-level feature table
         Connectivity        struct      % CCG / STTC / DDC connectivity results
         Bursts              struct      % Burst detection results
+        CellTypeLabels      double      % (1 x N_units) 1=exc, 2=inh, NaN=unclassified
         Status              struct      % Tracks which analyses have been run
     end
 
@@ -487,6 +488,149 @@ classdef RecordingProcessor < handle
             proc.Status.Connectivity = "done";
         end
 
+        function computeCellTypeFeatures(proc)
+        % COMPUTECELLTYPEFEATURES  Compute E/I-stratified graph and balance features.
+        %   Requires CellTypeLabels to be set and Connectivity to be computed.
+        %   Produces columns with _EE, _II, _EI, _IE suffixes in feature tables.
+            if proc.Status.CellTypeFeatures == "done"
+                return
+            end
+            if isempty(proc.CellTypeLabels) || all(isnan(proc.CellTypeLabels))
+                proc.Status.CellTypeFeatures = "done";
+                return
+            end
+            if isempty(proc.Connectivity) || isempty(fieldnames(proc.Connectivity))
+                warning('RecordingProcessor:cellTypeFeatures', ...
+                    'No connectivity data — run computeConnectivity() first.');
+                proc.Status.CellTypeFeatures = "done";
+                return
+            end
+
+            labels   = proc.CellTypeLabels;
+            exc_mask = labels == 1;
+            inh_mask = labels == 2;
+
+            % Remove any stale cell-type columns before appending
+            proc.NetworkFeatureTable = removeCellTypeCols(proc.NetworkFeatureTable);
+            proc.UnitFeatureTable    = removeCellTypeCols(proc.UnitFeatureTable);
+
+            % Cell-type-stratified graph features
+            try
+                gp = struct();
+                if isfield(proc.Parameters, 'GraphFeatures') && ...
+                        isfield(proc.Parameters.GraphFeatures, 'SmallWorldnessIterations')
+                    gp.SmallWorldnessIterations = proc.Parameters.GraphFeatures.SmallWorldnessIterations;
+                end
+                [nw_ct, unit_ct] = computeCellTypeGraphFeatures(proc.Connectivity, labels, gp);
+                if ~isempty(nw_ct) && ~isempty(proc.NetworkFeatureTable)
+                    proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_ct];
+                elseif ~isempty(nw_ct)
+                    proc.NetworkFeatureTable = nw_ct;
+                end
+                if ~isempty(unit_ct) && ~isempty(proc.UnitFeatureTable)
+                    proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_ct];
+                end
+            catch ME
+                warning('RecordingProcessor:cellTypeFeatures', ...
+                    'Cell-type graph features failed: %s', ME.message);
+            end
+
+            % E/I balance features (network level)
+            try
+                n_exc = sum(exc_mask);
+                n_inh = sum(inh_mask);
+                balance = struct();
+                balance.ExcitatoryFraction = n_exc / max(n_exc + n_inh, 1);
+                if ~isempty(proc.UnitFeatureTable) && ...
+                        ismember('FiringRate', proc.UnitFeatureTable.Properties.VariableNames)
+                    fr = proc.UnitFeatureTable.FiringRate;
+                    balance.MeanFiringRate_E   = mean(fr(exc_mask), 'omitnan');
+                    balance.MeanFiringRate_I   = mean(fr(inh_mask), 'omitnan');
+                    balance.FiringRateRatio_EI = balance.MeanFiringRate_E / ...
+                        max(balance.MeanFiringRate_I, eps);
+                else
+                    balance.MeanFiringRate_E   = NaN;
+                    balance.MeanFiringRate_I   = NaN;
+                    balance.FiringRateRatio_EI = NaN;
+                end
+                bal_tbl = RecordingProcessor.structToOneRowTable(balance);
+                if ~isempty(proc.NetworkFeatureTable)
+                    proc.NetworkFeatureTable = [proc.NetworkFeatureTable, bal_tbl];
+                else
+                    proc.NetworkFeatureTable = bal_tbl;
+                end
+            catch ME
+                warning('RecordingProcessor:cellTypeFeatures', ...
+                    'E/I balance features failed: %s', ME.message);
+            end
+
+            % Cell-type activity summaries (network-level means split by type)
+            try
+                feature_map = struct( ...
+                    'CV2',           'CV2InterSpikeInterval', ...
+                    'FanoFactor',    'FanoFactor', ...
+                    'LvR',           'RevisedLocalVariation', ...
+                    'ISIBimodality', 'ISIBimodality');
+                summary_fields = fieldnames(feature_map);
+                summary_struct = struct();
+                if ~isempty(proc.UnitFeatureTable)
+                    for k = 1:numel(summary_fields)
+                        disp_name = summary_fields{k};
+                        col_name  = feature_map.(disp_name);
+                        if ismember(col_name, proc.UnitFeatureTable.Properties.VariableNames)
+                            vals = proc.UnitFeatureTable.(col_name);
+                        else
+                            vals = NaN(numel(labels), 1);
+                        end
+                        summary_struct.(char("Mean" + disp_name + "_E")) = mean(vals(exc_mask), 'omitnan');
+                        summary_struct.(char("Mean" + disp_name + "_I")) = mean(vals(inh_mask), 'omitnan');
+                    end
+                    act_tbl = RecordingProcessor.structToOneRowTable(summary_struct);
+                    proc.NetworkFeatureTable = [proc.NetworkFeatureTable, act_tbl];
+                end
+            catch ME
+                warning('RecordingProcessor:cellTypeFeatures', ...
+                    'Cell-type activity summaries failed: %s', ME.message);
+            end
+
+            % Cell-type burst dynamics
+            try
+                if ~isempty(proc.Bursts) && isfield(proc.Bursts, 'T_start')
+                    [nw_burst, unit_burst] = computeCellTypeBurstFeatures( ...
+                        proc.Bursts, proc.SpikeData.SpikeTimes, proc.SpikeData.SpikeUnits, ...
+                        proc.Units, labels, proc.UnitFeatureTable);
+                    if ~isempty(nw_burst)
+                        proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_burst];
+                    end
+                    if ~isempty(unit_burst) && ~isempty(proc.UnitFeatureTable)
+                        proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_burst];
+                    end
+                end
+            catch ME
+                warning('RecordingProcessor:cellTypeFeatures', ...
+                    'Cell-type burst features failed: %s', ME.message);
+            end
+
+            % E/I correlation structure from STTC
+            try
+                if isfield(proc.Connectivity, 'STTC') && isfield(proc.Connectivity.STTC, 'wu')
+                    [nw_corr, unit_corr] = computeCellTypeCorrelationFeatures( ...
+                        proc.Connectivity.STTC.wu, labels);
+                    if ~isempty(nw_corr)
+                        proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_corr];
+                    end
+                    if ~isempty(unit_corr) && ~isempty(proc.UnitFeatureTable)
+                        proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_corr];
+                    end
+                end
+            catch ME
+                warning('RecordingProcessor:cellTypeFeatures', ...
+                    'E/I correlation features failed: %s', ME.message);
+            end
+
+            proc.Status.CellTypeFeatures = "done";
+        end
+
         function runAll(proc)
         % RUNALL  Convenience: run all enabled analyses in sequence.
             proc.runQC();
@@ -495,6 +639,7 @@ classdef RecordingProcessor < handle
                 proc.computeParentFeatures();
                 proc.computeNetworkFeatures();
                 proc.computeConnectivity();
+                proc.computeCellTypeFeatures();
             end
         end
 
@@ -519,11 +664,12 @@ classdef RecordingProcessor < handle
             NetworkFeatureTable   = proc.NetworkFeatureTable; %#ok<PROP>
             Connectivity          = proc.Connectivity;        %#ok<PROP>
             Bursts                = proc.Bursts;              %#ok<PROP>
+            CellTypeLabels        = proc.CellTypeLabels;      %#ok<PROP>
             Parameters            = proc.Parameters;          %#ok<PROP>
             Status                = proc.Status;              %#ok<PROP>
             builtin('save', file_path, 'SpikeDataStruct', 'UnitsStructArray', ...
                 'UnitFeatureTable', 'NetworkFeatureTable', ...
-                'Connectivity', 'Bursts', 'Parameters', 'Status');
+                'Connectivity', 'Bursts', 'CellTypeLabels', 'Parameters', 'Status');
         end
 
     end
@@ -567,6 +713,9 @@ classdef RecordingProcessor < handle
             if isfield(s, 'Bursts')
                 proc.Bursts = s.Bursts;
             end
+            if isfield(s, 'CellTypeLabels')
+                proc.CellTypeLabels = s.CellTypeLabels;
+            end
             if isfield(s, 'Parameters')
                 proc.Parameters = s.Parameters;
             else
@@ -583,6 +732,9 @@ classdef RecordingProcessor < handle
                     else
                         proc.Status.ParentFeatures = "pending";
                     end
+                end
+                if ~isfield(proc.Status, 'CellTypeFeatures')
+                    proc.Status.CellTypeFeatures = "pending";
                 end
                 % Upgrade legacy boolean Status fields to tri-state strings.
                 proc.Status = RecordingProcessor.upgradeLegacyStatus(proc.Status);
@@ -691,6 +843,27 @@ classdef RecordingProcessor < handle
             params = MEArecording.returnDefaultParams();
         end
 
+        function applyLabelsFromClassifier(proc_array, ctc)
+        % APPLYLABELSFROMCLASSIFIER  Copy UnitLabels from a CellTypeClassifier to processors.
+        %   Maps labels by UnitID matching. Resets CellTypeFeatures status to "pending".
+            arguments
+                proc_array RecordingProcessor
+                ctc        CellTypeClassifier
+            end
+            ctc_unit_ids = string(ctc.FeatureStore.UnitTable.UnitID);
+            ctc_labels   = ctc.UnitLabels;
+            for i = 1:numel(proc_array)
+                p = proc_array(i);
+                if isempty(p.Units), continue; end
+                proc_ids = string({p.Units.UnitID});
+                labels   = NaN(1, numel(p.Units));
+                [found, loc] = ismember(proc_ids, ctc_unit_ids);
+                labels(found) = ctc_labels(loc(found));
+                p.CellTypeLabels = labels;
+                p.Status.CellTypeFeatures = "pending";
+            end
+        end
+
     end
 
     % =====================================================================
@@ -699,11 +872,12 @@ classdef RecordingProcessor < handle
     methods (Static, Access = private)
 
         function s = emptyStatus()
-            s.QC              = "pending";
-            s.UnitFeatures    = "pending";
-            s.ParentFeatures  = "pending";
-            s.NetworkFeatures = "pending";
-            s.Connectivity    = "pending";
+            s.QC               = "pending";
+            s.UnitFeatures     = "pending";
+            s.ParentFeatures   = "pending";
+            s.NetworkFeatures  = "pending";
+            s.Connectivity     = "pending";
+            s.CellTypeFeatures = "pending";
         end
 
         function s = upgradeLegacyStatus(s)
@@ -853,4 +1027,30 @@ classdef RecordingProcessor < handle
         end
 
     end
+end
+
+function tbl = removeCellTypeCols(tbl)
+% Remove previously computed cell-type columns so they can be recomputed.
+    if isempty(tbl), return; end
+    cols = string(tbl.Properties.VariableNames);
+    ct_patterns = ["_EE", "_II", "_EI", "_IE"];
+    ct_prefixes = [ ...
+        "CrossTypeDensity", "WithinTypeConnections", "CrossTypeConnections", ...
+        "ExcitatoryFraction", "MeanFiringRate_E", "MeanFiringRate_I", "FiringRateRatio_EI", ...
+        "MeanCV2_E", "MeanCV2_I", "MeanFanoFactor_E", "MeanFanoFactor_I", ...
+        "MeanLvR_E", "MeanLvR_I", "MeanISIBimodality_E", "MeanISIBimodality_I", ...
+        "BurstLeadTime_E", "BurstLeadTime_I", "BurstLeadFraction", ...
+        "MeanBurstFraction_E", "MeanBurstFraction_I", ...
+        "IntraBurstRate_E", "IntraBurstRate_I", ...
+        "BurstParticipation_E", "BurstParticipation_I", "BurstParticipationRate", ...
+        "MeanSTTC_EE", "MeanSTTC_II", "MeanSTTC_EI", "STTCSynchronyIndex", ...
+        "MeanSTTC_WithinType", "MeanSTTC_CrossType"];
+    remove = false(1, numel(cols));
+    for p = ct_patterns
+        remove = remove | endsWith(cols, p);
+    end
+    for p = ct_prefixes
+        remove = remove | startsWith(cols, p);
+    end
+    tbl(:, remove) = [];
 end
