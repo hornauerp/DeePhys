@@ -107,13 +107,82 @@ disp(proc.NetworkFeatureTable);
 
 proc.computeConnectivity();
 
-%% 10  Shortcut: run all steps in sequence
+%% 10  Compute cell-type features (E/I-stratified)
+%
+% Produces E/I-stratified graph, balance, activity, burst, and correlation
+% features — columns with suffixes like _EE, _II, _EI, or prefixes like
+% ExcitatoryFraction, MeanFiringRate_E/I.
+%
+% Requires CellTypeLabels to be set (populated by Tutorial 4 after running
+% CellTypeClassifier.classifyUnits and RecordingProcessor.applyLabelsFromClassifier).
+% If CellTypeLabels is empty or all-NaN, this step returns immediately with no
+% new columns added.
+%
+% Feature groups produced (accessible via fs.recordingMatrix("CellTypeBalance") etc.):
+%   CellTypeGraph       — graph metrics on E-only and I-only sub-networks
+%   CellTypeBalance     — ExcitatoryFraction, MeanFiringRate_E/I, FiringRateRatio_EI
+%   CellTypeActivity    — MeanCV2_E/I, MeanFanoFactor_E/I, MeanLvR_E/I
+%   CellTypeBurst       — burst lead/participation per cell type
+%   CellTypeCorrelation — MeanSTTC_EE/II/EI, STTCSynchronyIndex
+
+proc.computeCellTypeFeatures();
+fprintf('CellTypeFeatures status: %s\n', proc.Status.CellTypeFeatures);
+
+%% 11  Compute spatial analysis
+%
+% Computes spatial distribution features from electrode coordinates stored in
+% proc.SpikeData.ElectrodeCoordinates. Skipped with a warning if coordinates
+% are absent. Enriched by CellTypeLabels when available.
+%
+% Sub-analyses run automatically:
+%   A. Spatial spread    — ConvexHullArea, ChipCoverage, MeanPairwiseDistance, CentroidSpread
+%   B. E/I mixing        — SpatialMixingIndex, MeanFractionExcNN_E/I (requires labels)
+%   D. FC decay          — SpatialDecayTau, DistanceFCCorrelation (requires Connectivity)
+%   E. FR gradient       — SpatialFRMoransI, CenterPeripheryFR_ratio
+%   F. E/I balance map   — SpatialEIVariability, SpatialEIMoransI (requires labels)
+%   G. Ripley's K/L      — RipleysL_max, ClusterScale (optional)
+%   H. Burst propagation — BurstOriginDispersion, MeanBurstPropagationSpeed (requires Bursts)
+%
+% All spatial columns are accessible via fs.recordingMatrix("SpatialFeatures")
+% or fs.unitMatrix("SpatialFeatures") after FeatureStore assembly.
+
+proc.computeSpatialAnalysis();
+fprintf('SpatialFeatures status: %s\n', proc.Status.SpatialFeatures);
+
+% Inspect spatial columns added to the network feature table
+if ~isempty(proc.NetworkFeatureTable)
+    sp_names = string(proc.NetworkFeatureTable.Properties.VariableNames);
+    sp_prefixes = ["ConvexHull","ChipCoverage","MeanPairwise","CentroidSpread", ...
+                   "SpatialMixing","MeanFractionExc","SpatialFR","CenterPeriphery", ...
+                   "SpatialDecay","DistanceFC","SpatialEI","BurstOrigin", ...
+                   "MeanBurstProp","Ripley","ClusterScale"];
+    sp_mask = false(size(sp_names));
+    for p = sp_prefixes, sp_mask = sp_mask | startsWith(sp_names, p); end
+    fprintf('Spatial network features added: %d columns\n', sum(sp_mask));
+end
+
+% --- Visualization ---
+%
+% Two standalone functions are available for spatial inspection:
+%
+%   plotSpatialUnitMap(proc.SpikeData.ElectrodeCoordinates, proc.Units, ...
+%       proc.CellTypeLabels);
+%   % → Scatter map of units at reference electrode positions, colored by cell type.
+%   %   Pass [] as third argument to skip cell-type coloring.
+%
+%   [~, viz_data] = computeSpatialEIBalance( ...
+%       proc.SpikeData.ElectrodeCoordinates, proc.Units, proc.CellTypeLabels);
+%   plotSpatialEIBalance(viz_data, proc.SpikeData.ElectrodeCoordinates);
+%   % → Kernel-smoothed heatmap of local excitatory fraction across the MEA chip.
+
+%% 12  Shortcut: run all steps in sequence
 
 proc2 = RecordingProcessor(sd);
 proc2.runAll();   % runQC + computeUnitFeatures + computeParentFeatures
                   %       + computeNetworkFeatures + computeConnectivity
+                  %       + computeCellTypeFeatures + computeSpatialAnalysis
 
-%% 11  Save and load
+%% 13  Save and load
 
 proc_file = fullfile(save_dir, 'RecordingProcessor.mat');
 proc.save(proc_file);
@@ -124,14 +193,14 @@ fprintf('Loaded %d units from disk.\n', numel(proc_loaded.Units));
 % Inspect status flags
 disp(proc_loaded.Status);
 
-%% 12  Batch loading with parallel workers
+%% 14  Batch loading with parallel workers
 
 % Supply a cell array or string array of saved RecordingProcessor .mat paths
 proc_paths = {proc_file};   % replace with your full list
 procs = RecordingProcessor.loadMany(proc_paths);
 fprintf('Batch-loaded %d processors.\n', numel(procs));
 
-%% 13  Assemble FeatureStore from multiple processors
+%% 15  Assemble FeatureStore from multiple processors
 
 fs = FeatureStore.fromProcessors(procs);
 
@@ -140,7 +209,7 @@ fprintf('UnitTable     : %d rows × %d cols\n', height(fs.UnitTable),      width
 fprintf('RecordingTable: %d rows × %d cols\n', height(fs.RecordingTable), width(fs.RecordingTable));
 fprintf('MetadataTable : %d rows × %d cols\n', height(fs.MetadataTable),  width(fs.MetadataTable));
 
-%% 14  Inspect table structure
+%% 16  Inspect table structure
 
 % Column names in UnitTable
 disp(string(fs.UnitTable.Properties.VariableNames)');
@@ -148,7 +217,7 @@ disp(string(fs.UnitTable.Properties.VariableNames)');
 % First few rows
 disp(fs.UnitTable(1:min(5, height(fs.UnitTable)), 1:8));
 
-%% 15  Save and load FeatureStore
+%% 17  Save and load FeatureStore
 
 fs_file = fullfile(save_dir, 'FeatureStore.mat');
 fs.save(fs_file);

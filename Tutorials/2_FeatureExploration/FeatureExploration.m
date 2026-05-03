@@ -72,7 +72,29 @@ fprintf('unitMatrix with parent ACG: %d × %d\n', height(X_parent_acg), width(X_
 [X_rec, rec_ids] = fs.recordingMatrix('all');
 fprintf('recordingMatrix("all"): %d recordings × %d features\n', height(X_rec), width(X_rec));
 
-%% 7  Culture-level feature matrix
+%% 7  Named feature groups — spatial and cell-type features
+%
+% After running computeSpatialAnalysis() and computeCellTypeFeatures(),
+% results are accessible via named group strings in unitMatrix / recordingMatrix.
+
+% Spatial features (recording-level): extent, FR gradient, FC decay, etc.
+[X_spatial, ~] = fs.recordingMatrix("SpatialFeatures");
+fprintf('SpatialFeatures (recording): %d cols\n', width(X_spatial));
+
+% Cell-type balance features (recording-level): ExcitatoryFraction, MeanFiringRate_E/I, etc.
+[X_ctbal, ~] = fs.recordingMatrix("CellTypeBalance");
+fprintf('CellTypeBalance            : %d cols\n', width(X_ctbal));
+
+% Cell-type correlation features: MeanSTTC_EE/II/EI, STTCSynchronyIndex
+[X_ctcorr, ~] = fs.recordingMatrix("CellTypeCorrelation");
+fprintf('CellTypeCorrelation        : %d cols\n', width(X_ctcorr));
+
+% All cell-type feature groups combined
+[X_ct_all, ~] = fs.recordingMatrix(["CellTypeBalance", "CellTypeActivity", ...
+                                    "CellTypeBurst", "CellTypeCorrelation"]);
+fprintf('CellType combined          : %d cols\n', width(X_ct_all));
+
+%% 8  Culture-level feature matrix
 %
 % Groups recordings by culture identity (ChipID + PlatingDate), selects
 % recordings at each specified DIV, and returns a wide table with
@@ -89,7 +111,7 @@ disp(culture_ids);
 % With normalization: divide each time point by the DIV 7 baseline
 [X_norm, ~] = fs.cultureMatrix(identity_keys, grouping_var, grouping_values, 'baseline');
 
-%% 8  Subset by metadata
+%% 9  Subset by metadata
 
 % Keep only WT recordings
 fs_wt = fs.subsetByMetadata('Mutation', 'WT');
@@ -101,7 +123,7 @@ fs_d21 = fs.subsetByMetadata('DIV', 21);
 % Keep multiple values
 fs_ko_wt = fs.subsetByMetadata('Mutation', {'WT', 'KO'});
 
-%% 9  Plot waveform overlays
+%% 10  Plot waveform overlays
 
 wf_cols = startsWith(string(X_wf.Properties.VariableNames), 'Waveform');
 if any(wf_cols)
@@ -112,7 +134,7 @@ if any(wf_cols)
     title('Reference waveforms (first 50 units)');
 end
 
-%% 10  Plot ACG distributions
+%% 11  Plot ACG distributions
 
 if width(X_acg) > 0
     acg_mat = X_acg.Variables;
@@ -125,12 +147,12 @@ if width(X_acg) > 0
     colorbar;
 end
 
-%% 11  Feature distributions by metadata group
+%% 12  Feature distributions by metadata group
 
 if ismember('Mutation', string(fs.UnitTable.Properties.VariableNames))
     mutations = unique(string(fs.UnitTable.Mutation));
     if width(X_act) > 0
-        fr_col = 'MeanFiringRate';
+        fr_col = 'FiringRate';
         if ismember(fr_col, X_act.Properties.VariableNames)
             figure; hold on;
             for m = 1:numel(mutations)
@@ -144,7 +166,7 @@ if ismember('Mutation', string(fs.UnitTable.Properties.VariableNames))
     end
 end
 
-%% 12  Missing values
+%% 13  Missing values
 
 X_mat = table2array(fs.unitMatrix('all'));
 nan_frac_col = mean(isnan(X_mat), 1);

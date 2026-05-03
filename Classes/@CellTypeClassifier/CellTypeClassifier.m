@@ -1,8 +1,9 @@
 classdef CellTypeClassifier < handle
-% CELLTYPECLASSIFIER  Supervised cell-type classification pipeline for MEA experiments.
+% CELLTYPECLASSIFIER  Transductive graph-based cell-type classification pipeline for MEA experiments.
 %
-% Identifies inhibitory (interneuron) vs excitatory neurons using supervised
-% UMAP classification. Two ground truth strategies are supported:
+% Identifies inhibitory (interneuron) vs excitatory neurons using unsupervised
+% UMAP embedding with Louvain community detection and graph label propagation.
+% Two ground truth strategies are supported:
 %
 %   Drug response (GroundTruthMethod = "two_window" or "full_curve"):
 %     Units that increase firing rate in response to a stimulus serve as
@@ -18,7 +19,7 @@ classdef CellTypeClassifier < handle
 %   ctc = CellTypeClassifier(featureStore, unitDataArray, params);
 %   ctc.identifyResponsiveUnits();    % assign ground truth (FR test or metadata)
 %   ctc.generateTrainLabels();        % UMAP embedding + training label assembly
-%   ctc.classifyUnits();              % supervised UMAP projection and classification
+%   ctc.classifyUnits();              % graph label propagation on UMAP graph (transductive)
 %   labels = ctc.UnitLabels;          % 1 = excitatory, 2 = inhibitory, NaN = unclassified
 %
 % MIGRATION from old API:

@@ -347,7 +347,7 @@ fprintf('Waveform : %d x %d at %.0f Hz\n', size(wf,1), size(wf,2), sr);
 fprintf('ACG      : %d x %d\n', size(acg,1), size(acg,2));
 
 plotCellTypeFeatures(ctc);
-sortACGsByPeak(ctc);
+sortACGsByPeak(ctc.HarmonizedACGs');
 
 %% 8  Bayesian optimization of UMAP + community parameters (Phase 1)
 %

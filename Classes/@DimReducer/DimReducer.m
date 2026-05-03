@@ -142,6 +142,7 @@ classdef DimReducer
             if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
             if ~isfield(opts, 'ColorFilePath'),      opts.ColorFilePath = '';      end
             if ~isfield(opts, 'Seed'),               opts.Seed = [];               end
+            if ~isfield(opts, 'NormalizationVar'),   opts.NormalizationVar = '';   end
         end
 
         function n = resolveNNeighbors(val, N)

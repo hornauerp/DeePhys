@@ -25,7 +25,7 @@ save_dir = '/path/to/new';
 proc = RecordingProcessor.fromLegacyMat(old_mat);
 
 fprintf('Migrated %d units from %s\n', numel(proc.Units), old_mat);
-fprintf('Status: QC=%d UnitFeatures=%d NetworkFeatures=%d\n', ...
+fprintf('Status: QC=%s UnitFeatures=%s NetworkFeatures=%s\n', ...
     proc.Status.QC, proc.Status.UnitFeatures, proc.Status.NetworkFeatures);
 
 %% A2  Inspect migrated features
@@ -80,7 +80,8 @@ fprintf('FeatureStore: %d units, %d recordings\n', ...
 %% B3  Run analyses on migrated Experiment (same as Tutorial 3)
 
 result = exp.classify('Unit', 'Mutation', struct('Algorithm', 'rf', 'KFold', 5));
-fprintf('Accuracy: %.2f\n', mean(result.Accuracy));
+summary = ClassificationResult.summarizeFolds(result);
+fprintf('Accuracy: %.2f +/- %.2f\n', summary.mean_accuracy, summary.std_accuracy);
 
 %% ============================================================
 %% C  Direct FeatureStore migration from MEArecording array
