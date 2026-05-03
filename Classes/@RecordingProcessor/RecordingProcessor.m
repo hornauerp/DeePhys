@@ -631,6 +631,91 @@ classdef RecordingProcessor < handle
             proc.Status.CellTypeFeatures = "done";
         end
 
+        function computeSpatialAnalysis(proc)
+        % COMPUTESPATIALANALYSIS  Spatial distribution features for units and cell types.
+        %   Requires runQC() and computeUnitFeatures() to have run.
+        %   Cell-type stratified features are computed when CellTypeLabels are available.
+        %   Connectivity-based features (SpatialDecayTau) require Connectivity.STTC.
+        %   Burst propagation features require Bursts to be populated.
+            if proc.Status.SpatialFeatures == "done"
+                return
+            end
+            if isempty(proc.Units)
+                proc.Status.SpatialFeatures = "done";
+                return
+            end
+            if isempty(proc.SpikeData) || isempty(proc.SpikeData.ElectrodeCoordinates)
+                warning('RecordingProcessor:spatialAnalysis', ...
+                    'No electrode coordinates available — skipping spatial analysis.');
+                proc.Status.SpatialFeatures = "done";
+                return
+            end
+
+            ec     = proc.SpikeData.ElectrodeCoordinates;
+            labels = proc.CellTypeLabels;
+            sp     = proc.Parameters;
+
+            % Remove stale spatial columns before recomputing
+            proc.NetworkFeatureTable = removeSpatialCols(proc.NetworkFeatureTable);
+            proc.UnitFeatureTable    = removeSpatialCols(proc.UnitFeatureTable);
+
+            sp_params = struct();
+            if isfield(sp, 'SpatialFeatures')
+                sp_params = sp.SpatialFeatures;
+            end
+
+            % --- Core spatial features (A + B + E + optional G) ---
+            try
+                [nw_sp, unit_sp] = computeSpatialFeatures( ...
+                    ec, proc.Units, labels, proc.UnitFeatureTable, sp_params);
+                RecordingProcessor.appendFeatures(proc, nw_sp, unit_sp);
+            catch ME
+                warning('RecordingProcessor:spatialAnalysis', ...
+                    'Core spatial features failed: %s', ME.message);
+            end
+
+            % --- Distance-dependent FC decay (D) ---
+            try
+                if ~isempty(proc.Connectivity) && ~isempty(fieldnames(proc.Connectivity))
+                    [nw_conn, unit_conn] = computeSpatialConnectivityFeatures( ...
+                        ec, proc.Units, proc.Connectivity, labels, sp_params);
+                    RecordingProcessor.appendFeatures(proc, nw_conn, unit_conn);
+                end
+            catch ME
+                warning('RecordingProcessor:spatialAnalysis', ...
+                    'Spatial connectivity features failed: %s', ME.message);
+            end
+
+            % --- Spatial E/I balance map (F) ---
+            try
+                if ~isempty(labels) && any(~isnan(labels))
+                    [nw_ei, ~] = computeSpatialEIBalance( ...
+                        ec, proc.Units, labels, sp_params);
+                    RecordingProcessor.appendFeatures(proc, nw_ei, table());
+                end
+            catch ME
+                warning('RecordingProcessor:spatialAnalysis', ...
+                    'Spatial E/I balance failed: %s', ME.message);
+            end
+
+            % --- Burst propagation (H) ---
+            try
+                if ~isempty(proc.Bursts) && isfield(proc.Bursts, 'T_start') ...
+                        && ~isempty(proc.Bursts.T_start)
+                    [nw_burst, ~] = computeSpatialBurstFeatures( ...
+                        ec, proc.Units, proc.Bursts, ...
+                        proc.SpikeData.SpikeTimes, proc.SpikeData.SpikeUnits, ...
+                        labels, sp_params);
+                    RecordingProcessor.appendFeatures(proc, nw_burst, table());
+                end
+            catch ME
+                warning('RecordingProcessor:spatialAnalysis', ...
+                    'Spatial burst features failed: %s', ME.message);
+            end
+
+            proc.Status.SpatialFeatures = "done";
+        end
+
         function runAll(proc)
         % RUNALL  Convenience: run all enabled analyses in sequence.
             proc.runQC();
@@ -640,6 +725,7 @@ classdef RecordingProcessor < handle
                 proc.computeNetworkFeatures();
                 proc.computeConnectivity();
                 proc.computeCellTypeFeatures();
+                proc.computeSpatialAnalysis();
             end
         end
 
@@ -735,6 +821,9 @@ classdef RecordingProcessor < handle
                 end
                 if ~isfield(proc.Status, 'CellTypeFeatures')
                     proc.Status.CellTypeFeatures = "pending";
+                end
+                if ~isfield(proc.Status, 'SpatialFeatures')
+                    proc.Status.SpatialFeatures = "pending";
                 end
                 % Upgrade legacy boolean Status fields to tri-state strings.
                 proc.Status = RecordingProcessor.upgradeLegacyStatus(proc.Status);
@@ -878,6 +967,21 @@ classdef RecordingProcessor < handle
             s.NetworkFeatures  = "pending";
             s.Connectivity     = "pending";
             s.CellTypeFeatures = "pending";
+            s.SpatialFeatures  = "pending";
+        end
+
+        function proc = appendFeatures(proc, nw_tbl, unit_tbl)
+        % Append non-empty feature tables to existing tables.
+            if ~isempty(nw_tbl)
+                if ~isempty(proc.NetworkFeatureTable)
+                    proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_tbl];
+                else
+                    proc.NetworkFeatureTable = nw_tbl;
+                end
+            end
+            if ~isempty(unit_tbl) && ~isempty(proc.UnitFeatureTable)
+                proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_tbl];
+            end
         end
 
         function s = upgradeLegacyStatus(s)
@@ -1027,6 +1131,27 @@ classdef RecordingProcessor < handle
         end
 
     end
+end
+
+function tbl = removeSpatialCols(tbl)
+% Remove previously computed spatial columns so they can be recomputed.
+    if isempty(tbl), return; end
+    cols = string(tbl.Properties.VariableNames);
+    sp_prefixes = [ ...
+        "ConvexHullArea", "ChipCoverage", ...
+        "MeanPairwiseDistance", "CentroidSpread", ...
+        "SpatialMixingIndex", "MeanFractionExcNN_E", "MeanFractionExcNN_I", ...
+        "FractionExcNN", "FractionInhNN", "DistFromCentroid", ...
+        "SpatialFRMoransI", "CenterPeripheryFR_ratio", ...
+        "RipleysL_max", "ClusterScale", ...
+        "SpatialDecayTau", "DistanceFCCorrelation", "MeanFC_NearNeighbors", ...
+        "SpatialEIVariability", "SpatialEIMoransI", ...
+        "BurstOriginDispersion", "MeanBurstPropagationSpeed", "BurstOriginExcFraction"];
+    remove = false(1, numel(cols));
+    for nm = sp_prefixes
+        remove = remove | startsWith(cols, nm);
+    end
+    tbl(:, remove) = [];
 end
 
 function tbl = removeCellTypeCols(tbl)

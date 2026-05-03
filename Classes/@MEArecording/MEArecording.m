@@ -807,6 +807,15 @@ classdef MEArecording < handle
             % Parameters for catch 22 calculation
             defaultParams.Catch22.BinSize = .1;%in seconds //100ms
             
+            % Parameters for spatial distribution analysis
+            defaultParams.SpatialFeatures.NNk                    = 5;     % k for nearest-neighbour cell type composition
+            defaultParams.SpatialFeatures.RipleyEnable           = false; % Ripley's K/L — expensive, off by default
+            defaultParams.SpatialFeatures.RipleyMaxRadius        = 500;   % um
+            defaultParams.SpatialFeatures.RipleyNBins            = 50;
+            defaultParams.SpatialFeatures.RipleyNSurrogates      = 100;
+            defaultParams.SpatialFeatures.KernelBandwidth        = 100;   % um, for E/I balance heatmap
+            defaultParams.SpatialFeatures.BurstMinUnitsForWavefront = 5;
+
             % Parameters for saving
             defaultParams.Save.Flag = false; %Flag if file should be save after analyses
             defaultParams.Save.Path = []; %Save path, if empty it uses the sorting path
