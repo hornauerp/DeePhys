@@ -145,35 +145,49 @@ end
 
 function [X_out, fit] = fitGroupZscore(X, group_labels)
 % Fit per-group z-score on training data. Returns transformed X and fit struct.
+% Groups with < 2 samples cannot be z-scored; their means/sds are set to NaN
+% so that transform() routes them to the pooled-statistics fallback.
     groups = unique(group_labels);
     fit.groups = groups;
-    fit.means = zeros(length(groups), size(X, 2));
-    fit.sds   = zeros(length(groups), size(X, 2));
+    fit.means = nan(length(groups), size(X, 2));
+    fit.sds   = nan(length(groups), size(X, 2));
     X_out = X;
     for g = 1:length(groups)
         mask = (group_labels == groups(g));
-        [X_out(mask,:), fit.means(g,:), fit.sds(g,:)] = normalize(X(mask,:));
+        if sum(mask) < 2
+            warning('NormalizationPipeline:singletonGroup', ...
+                'Group has only %d sample(s) — group z-score skipped; pooled statistics used instead.', sum(mask));
+        else
+            [X_out(mask,:), fit.means(g,:), fit.sds(g,:)] = normalize(X(mask,:));
+        end
     end
 end
 
 function X_out = applyGroupZscore(X, group_labels, fit)
 % Apply previously fitted per-group z-score to new data.
-% Unseen groups fall back to pooled training statistics.
+% Unseen groups and singleton groups (NaN means) fall back to pooled training statistics.
     X_out = X;
     known_mask = false(size(X, 1), 1);
     for g = 1:length(fit.groups)
         mask = (group_labels == fit.groups(g));
-        if any(mask)
+        if any(mask) && ~any(isnan(fit.means(g,:)))
             X_out(mask,:) = normalize(X(mask,:), 'center', fit.means(g,:), 'scale', fit.sds(g,:));
             known_mask = known_mask | mask(:);
         end
+        % Groups with NaN means (singletons during fit) remain in ~known_mask → pooled fallback
     end
-    % Handle unseen groups: use mean of fitted group statistics as fallback
+    % Handle unseen groups and singleton groups: use mean of valid fitted group statistics
     if any(~known_mask)
         warning('NormalizationPipeline:unseenGroup', ...
-            '%d samples belong to groups not seen during fit — using pooled training statistics.', sum(~known_mask));
-        fallback_mean = mean(fit.means, 1);
-        fallback_sd   = mean(fit.sds, 1);
+            '%d samples belong to unseen or singleton groups — using pooled training statistics.', sum(~known_mask));
+        valid_g = ~any(isnan(fit.means), 2);
+        if any(valid_g)
+            fallback_mean = mean(fit.means(valid_g, :), 1);
+            fallback_sd   = mean(fit.sds(valid_g, :), 1);
+        else
+            fallback_mean = zeros(1, size(X, 2));
+            fallback_sd   = ones(1, size(X, 2));
+        end
         fallback_sd(fallback_sd == 0) = 1;
         X_out(~known_mask,:) = normalize(X(~known_mask,:), 'center', fallback_mean, 'scale', fallback_sd);
     end

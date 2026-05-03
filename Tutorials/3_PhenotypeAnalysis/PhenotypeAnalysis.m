@@ -151,6 +151,13 @@ disp(dim_result);
 %
 % Normalize features per recording (or per ChipID) before ML to remove
 % batch effects. Specify the metadata field to group by.
+%
+% Singleton groups (recordings with only one unit) cannot be z-scored and
+% automatically fall back to pooled statistics across all units with a
+% 'NormalizationPipeline:singletonGroup' warning. The resulting features are
+% still valid; the warning is informational. If many groups are singletons,
+% consider setting NormalizationVar = '' (no group normalization) or merging
+% small recordings before assembling the FeatureStore.
 
 opts_norm = struct();
 opts_norm.NormalizationVar = 'ChipID';

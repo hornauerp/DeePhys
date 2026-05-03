@@ -22,7 +22,7 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
     x = 1:size(norm_wf_matrix,1);
     xq = 1:(1/interpolation_factor):size(norm_wf_matrix,1);
     interp_wf_matrix = double(interp1(x, norm_wf_matrix, xq, 'pchip'));
-    zci = @(v) find(v(:).*circshift(v(:), [-1 0]) <= 0);
+    zci = @(v) find(v(1:end-1) .* v(2:end) <= 0);
     n_units = size(interp_wf_matrix, 2);
 
     unit_zero_crossings = cell(1, n_units);
@@ -49,9 +49,13 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
         [peak_2_value, peak_2_rel_idx] = max(peak_2_cutout);
         peak_2_abs_idx = peak_2_rel_idx + unit_trough_idx(u) - 1;
 
-        denom_asym  = peak_2_value + peak_1_value;
-        asymmetry_u = (peak_2_value - peak_1_value) / denom_asym;
-        if denom_asym == 0, asymmetry_u = NaN; end
+        denom_asym   = peak_2_value + peak_1_value;
+        max_peak_abs = max(abs([peak_1_value, peak_2_value]));
+        if max_peak_abs < 1e-9 || abs(denom_asym) < 1e-6 * max_peak_abs
+            asymmetry_u = NaN;
+        else
+            asymmetry_u = (peak_2_value - peak_1_value) / denom_asym;
+        end
         t2pdelay_u  = (peak_2_abs_idx - unit_trough_idx(u)) / (sampling_rate * interpolation_factor / 1000);
         if peak_2_value == 0
             t2pratio_u = NaN;
@@ -76,12 +80,18 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
         end
 
         rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_abs_idx, u);
-        padded_rise = [ones(100,1)*rise_cutout(1); rise_cutout; ones(100,1)*rise_cutout(end)];
-        unit_features.Rise = mean(slewrate(padded_rise, interpolation_factor));
+        if numel(rise_cutout) > 1
+            unit_features.Rise = mean(slewrate(rise_cutout, interpolation_factor));
+        else
+            unit_features.Rise = NaN;
+        end
         decay_cutout = interp_wf_matrix(peak_2_abs_idx:end, u);
         decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout), 1, 'first'));
-        padded_decay = [ones(100,1)*decay_cutout(1); decay_cutout; ones(100,1)*decay_cutout(end)];
-        unit_features.Decay = mean(slewrate(padded_decay, interpolation_factor));
+        if numel(decay_cutout) > 1
+            unit_features.Decay = mean(slewrate(decay_cutout, interpolation_factor));
+        else
+            unit_features.Decay = NaN;
+        end
 
         half_amp = unit_trough_value(u) / 2;
         wf = interp_wf_matrix(:, u);

@@ -13,7 +13,7 @@ classdef test_computeActivityFeatures < matlab.unittest.TestCase
             [act, ~, ~] = computeActivityFeatures(spike_times, 100, params);
             expected = ["FiringRate","MeanInterSpikeInterval","VarianceInterSpikeInterval", ...
                 "CVInterSpikeInterval","CV2InterSpikeInterval","LocalVariation", ...
-                "RevisedLocalVariation","FanoFactor","PartialAutocorrelation"];
+                "RevisedLocalVariation","FanoFactor","PartialAutocorrelation","ISIBimodality"];
             tc.verifyEqual(string(act.Properties.VariableNames), expected);
         end
 

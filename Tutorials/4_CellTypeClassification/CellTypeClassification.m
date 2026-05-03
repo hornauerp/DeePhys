@@ -80,6 +80,17 @@ params.Bootstrap.GroundTruthMethod = 'two_window';
 %   with noise units and degrades enrichment-based detection. If you get fewer
 %   than ~10 responsive units per culture, consider relaxing to 1e-6 first.
 %
+%   Empirical fallback: when more than 20% of units have a non-Normal bootstrap
+%   null (Jarque-Bera test) AND Alpha < 1e-3, the test automatically switches
+%   from the fitted Normal CDF to empirical quantiles of the bootstrap null.
+%   This avoids inflated Type I error from parametric extrapolation at extreme
+%   alpha. The switch is logged but does not change the output format.
+%
+%   Resolution floor: at NIter = 1000, the finest empirically-resolvable alpha
+%   is 1/NIter = 1e-3. For Alpha < 1e-3, increase NIter (e.g. 10 000) or rely
+%   on the Normal fit. For very strict thresholds with few units, the empirical
+%   fallback improves reliability but requires more iterations for stability.
+%
 % FullCurveAlpha: equivalent threshold for 'full_curve' (Spearman p-value).
 %   0.05 is appropriate since the Spearman test is already conservative for
 %   monotonic dose-response and the small N (usually 4-6 recordings).

@@ -57,13 +57,15 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
 
         % community_louvain (BCT) uses randperm internally, making each run
         % non-deterministic. Running multiple iterations and taking max(Q)
-        % reduces variance. n_louvain=5 balances stability vs. compute cost.
-        n_louvain = 5;
+        % reduces variance. n_louvain=20 gives stable estimates with modest cost.
+        n_louvain = 20;
         Q_vals = nan(1, n_louvain);
         for lr = 1:n_louvain
             try
                 [~, Q_vals(lr)] = community_louvain(con_mat);
-            catch
+            catch ME
+                warning('computeGraphFeatures:louvainFailed', ...
+                    'community_louvain failed on replicate %d: %s', lr, ME.message);
             end
         end
         Q_modularity = max(Q_vals, [], 'omitnan');
@@ -73,7 +75,9 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
 
         n_rand = graph_params.SmallWorldnessIterations;
         n_nodes = size(con_mat, 1);
-        if density > 0 && n_nodes >= 4
+        % Skip small-worldness for sparse or disconnected networks where
+        % characteristic path length is ill-defined (many node pairs unreachable).
+        if density > 0 && density >= 0.05 && n_nodes >= 4
             C_real = mean(clustering_coef);
             L_real = charpath(distance_bin(con_mat));
             C_rand_vals = zeros(1, n_rand);

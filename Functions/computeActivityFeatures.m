@@ -71,23 +71,32 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
     end
 
     if length(isi) > 1
-        cv2_vals = 2 * abs(isi(2:end) - isi(1:end-1)) ./ (isi(2:end) + isi(1:end-1));
-        act_feat.CV2InterSpikeInterval = mean(cv2_vals);
+        denom_cv2 = isi(2:end) + isi(1:end-1);
+        cv2_vals = 2 * abs(isi(2:end) - isi(1:end-1)) ./ denom_cv2;
+        cv2_vals(denom_cv2 == 0) = NaN;
+        act_feat.CV2InterSpikeInterval = mean(cv2_vals, 'omitnan');
     else
         act_feat.CV2InterSpikeInterval = NaN;
     end
 
     if length(isi) > 1
-        lv_vals = 3 * (isi(2:end) - isi(1:end-1)).^2 ./ (isi(2:end) + isi(1:end-1)).^2;
-        act_feat.LocalVariation = mean(lv_vals);
+        denom_lv = (isi(2:end) + isi(1:end-1)).^2;
+        lv_vals = 3 * (isi(2:end) - isi(1:end-1)).^2 ./ denom_lv;
+        lv_vals(denom_lv == 0) = NaN;
+        act_feat.LocalVariation = mean(lv_vals, 'omitnan');
     else
         act_feat.LocalVariation = NaN;
     end
 
     if length(isi) > 1
-        lvr_vals = (1 - 4*isi(1:end-1).*isi(2:end) ./ (isi(1:end-1)+isi(2:end)).^2) ...
-                   .* (1 + 4*refract ./ (isi(1:end-1)+isi(2:end)));
-        act_feat.RevisedLocalVariation = 3 * mean(lvr_vals);
+        isi_a = isi(1:end-1);
+        isi_b = isi(2:end);
+        denom_lvr = isi_a + isi_b;
+        valid_lvr = denom_lvr > 0;
+        lvr_vals = nan(size(denom_lvr));
+        lvr_vals(valid_lvr) = (1 - 4*isi_a(valid_lvr).*isi_b(valid_lvr) ./ denom_lvr(valid_lvr).^2) ...
+                               .* (1 + 4*refract ./ denom_lvr(valid_lvr));
+        act_feat.RevisedLocalVariation = 3 * mean(lvr_vals, 'omitnan');
     else
         act_feat.RevisedLocalVariation = NaN;
     end
@@ -118,7 +127,12 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
     if length(isi) >= 10
         log_isi = log(isi(isi > 0));
         if length(log_isi) >= 10
-            act_feat.ISIBimodality = (skewness(log_isi)^2 + 1) / kurtosis(log_isi);
+            k = kurtosis(log_isi);
+            if isnan(k) || k < 0.1
+                act_feat.ISIBimodality = NaN;
+            else
+                act_feat.ISIBimodality = (skewness(log_isi)^2 + 1) / k;
+            end
         else
             act_feat.ISIBimodality = NaN;
         end

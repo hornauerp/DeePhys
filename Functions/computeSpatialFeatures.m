@@ -283,19 +283,19 @@ function nw = computeFRGradient(fr, xy, dist_centroid, exc_idx, inh_idx)
 
     center_fr = mean(fr(center_mask), 'omitnan');
     periph_fr = mean(fr(periph_mask), 'omitnan');
-    nw.CenterPeripheryFR_ratio = center_fr / max(periph_fr, eps);
+    nw.CenterPeripheryFR_ratio = safeFRRatio(center_fr, periph_fr);
 
     nw.CenterPeripheryFR_ratio_E = NaN;
     nw.CenterPeripheryFR_ratio_I = NaN;
     if ~isempty(exc_idx)
         c_e = mean(fr(intersect(exc_idx, find(center_mask))), 'omitnan');
         p_e = mean(fr(intersect(exc_idx, find(periph_mask))), 'omitnan');
-        nw.CenterPeripheryFR_ratio_E = c_e / max(p_e, eps);
+        nw.CenterPeripheryFR_ratio_E = safeFRRatio(c_e, p_e);
     end
     if ~isempty(inh_idx)
         c_i = mean(fr(intersect(inh_idx, find(center_mask))), 'omitnan');
         p_i = mean(fr(intersect(inh_idx, find(periph_mask))), 'omitnan');
-        nw.CenterPeripheryFR_ratio_I = c_i / max(p_i, eps);
+        nw.CenterPeripheryFR_ratio_I = safeFRRatio(c_i, p_i);
     end
 
     % DistFromCentroid added by caller
@@ -339,4 +339,13 @@ function tbl = makeNaNUnitTable(n)
     tbl = table( ...
         NaN(n,1), NaN(n,1), NaN(n,1), ...
         'VariableNames', {'FractionExcNN', 'FractionInhNN', 'DistFromCentroid'});
+end
+
+function r = safeFRRatio(numer, denom)
+% Return NaN when denominator is zero or NaN to avoid eps-inflated ratios.
+    if isnan(denom) || denom == 0
+        r = NaN;
+    else
+        r = numer / denom;
+    end
 end

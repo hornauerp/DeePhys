@@ -9,6 +9,11 @@ function connectivity = computeConnectivityCCG(spike_times, spike_units, n_units
 %   n_units       - (1 x 1) double, number of units
 %   sampling_rate - (1 x 1) double, sampling rate in Hz
 %   ccg_params    - struct: .BinSize, .Duration, .Conv_w, .Alpha
+%                   Optional monosynaptic detection windows (in seconds):
+%                     .BonfWindow  (default 0.005) — window for Bonferroni correction
+%                     .PreStart    (default 0.0032) — baseline window start (pre-spike)
+%                     .PostStart   (default 0.0008) — post-spike detection window start
+%                     .PostEnd     (default 0.004)  — post-spike detection window end
 %
 % OUTPUTS:
 %   connectivity - struct with fields:
@@ -45,10 +50,14 @@ function connectivity = computeConnectivityCCG(spike_times, spike_units, n_units
     nBins   = size(ccgR, 1);
     halfBin = round(nBins / 2);
 
-    bonf_window = 0.005;
-    pre_start   = 0.0032;
-    post_start  = 0.0008;
-    post_end    = 0.004;
+    if ~isfield(ccg_params, 'BonfWindow'),  ccg_params.BonfWindow  = 0.005;  end
+    if ~isfield(ccg_params, 'PreStart'),    ccg_params.PreStart    = 0.0032; end
+    if ~isfield(ccg_params, 'PostStart'),   ccg_params.PostStart   = 0.0008; end
+    if ~isfield(ccg_params, 'PostEnd'),     ccg_params.PostEnd     = 0.004;  end
+    bonf_window = ccg_params.BonfWindow;
+    pre_start   = ccg_params.PreStart;
+    post_start  = ccg_params.PostStart;
+    post_end    = ccg_params.PostEnd;
 
     nBonf    = round(bonf_window / binSize) * 2;
     prebins  = round(halfBin - pre_start / binSize):halfBin;

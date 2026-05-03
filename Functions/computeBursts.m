@@ -99,7 +99,9 @@ function Burst = detectBurstsLogISI_local(spike_times, min_spikes)
     try
         gm = fitgmdist(log_isi(:), 2, 'RegularizationValue', 1e-5, ...
             'Options', statset('MaxIter', 500, 'TolFun', 1e-6), 'Replicates', 3);
-    catch
+    catch ME
+        warning('computeBursts:gmmFailed', ...
+            'GMM fit failed: %s — returning no bursts.', ME.message);
         return
     end
 
@@ -126,8 +128,10 @@ function Burst = detectBurstsLogISI_local(spike_times, min_spikes)
 
     is_intra = isi <= threshold;
 
-    burst_starts = [];
-    burst_ends = [];
+    max_bursts = floor(length(is_intra) / max(min_spikes, 1));
+    burst_starts = nan(max_bursts, 1);
+    burst_ends   = nan(max_bursts, 1);
+    n_bursts = 0;
     in_burst = false;
     b_start = 0;
 
@@ -138,8 +142,9 @@ function Burst = detectBurstsLogISI_local(spike_times, min_spikes)
         elseif ~is_intra(i) && in_burst
             n_spikes_in_burst = i - b_start + 1;
             if n_spikes_in_burst >= min_spikes
-                burst_starts = [burst_starts; spike_times(b_start)]; %#ok<AGROW>
-                burst_ends = [burst_ends; spike_times(i)]; %#ok<AGROW>
+                n_bursts = n_bursts + 1;
+                burst_starts(n_bursts) = spike_times(b_start);
+                burst_ends(n_bursts)   = spike_times(i);
             end
             in_burst = false;
         end
@@ -148,13 +153,14 @@ function Burst = detectBurstsLogISI_local(spike_times, min_spikes)
     if in_burst
         n_spikes_in_burst = length(is_intra) - b_start + 2;
         if n_spikes_in_burst >= min_spikes
-            burst_starts = [burst_starts; spike_times(b_start)];
-            burst_ends = [burst_ends; spike_times(end)];
+            n_bursts = n_bursts + 1;
+            burst_starts(n_bursts) = spike_times(b_start);
+            burst_ends(n_bursts)   = spike_times(end);
         end
     end
 
-    Burst.T_start = burst_starts;
-    Burst.T_end = burst_ends;
+    Burst.T_start = burst_starts(1:n_bursts);
+    Burst.T_end   = burst_ends(1:n_bursts);
     Burst.LogISI_Threshold = threshold;
     Burst.GMModel = gm;
 end
@@ -257,8 +263,18 @@ function [best_N, best_ISI_N, N_array, ISI_N_array, dunns_coeffs] = ...
         else
             idx = ones(size(ISI_N_local));
             idx(ISI_N_local > ISI_N_ms) = 2;
-            distM = squareform(pdist(ISI_N_local(:)));
-            dunns_coeffs(ni) = dunns(2, distM, idx);
+            % Cap at 5000 points to keep distance matrix memory manageable (~200MB)
+            max_pts = 5000;
+            if numel(ISI_N_local) > max_pts
+                sub_idx = round(linspace(1, numel(ISI_N_local), max_pts));
+                ISI_sub = ISI_N_local(sub_idx);
+                idx_sub = idx(sub_idx);
+            else
+                ISI_sub = ISI_N_local;
+                idx_sub = idx;
+            end
+            distM = squareform(pdist(ISI_sub(:)));
+            dunns_coeffs(ni) = dunns(2, distM, idx_sub);
         end
     end
 

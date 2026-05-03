@@ -104,6 +104,16 @@ proc.computeNetworkFeatures();
 disp(proc.NetworkFeatureTable);
 
 %% 9  Compute connectivity (CCG / STTC)
+%
+% Monosynaptic connection windows are now configurable via the CCG sub-struct
+% of proc.Parameters.Connectivity. The defaults match the values used in
+% previous DeePhys releases; override only when needed for a different
+% preparation (e.g. iPSC cultures vs. acute slices):
+%
+%   proc.Parameters.Connectivity.CCG.PostStart  = 0.0008;  % post-spike excit. window start (s) — default 0.8 ms
+%   proc.Parameters.Connectivity.CCG.PostEnd    = 0.004;   % post-spike excit. window end   (s) — default 4.0 ms
+%   proc.Parameters.Connectivity.CCG.PreStart   = 0.0032;  % pre-spike baseline window start (s) — default 3.2 ms
+%   proc.Parameters.Connectivity.CCG.BonfWindow = 0.005;   % Bonferroni-correction window    (s) — default 5.0 ms
 
 proc.computeConnectivity();
 

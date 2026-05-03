@@ -135,16 +135,16 @@ while total_iter < max_iter && ~converged
     total_iter    = total_iter + this_batch;
 
     if conv_tol > 0 && total_iter >= 1000
-        % Convergence check: compare full history vs first half
-        half     = floor(size(bootstrp_diff, 2) / 2);
-        mu_all   = mean(bootstrp_diff, 2);
-        sd_all   = std(bootstrp_diff, 0, 2);
-        mu_half  = mean(bootstrp_diff(:, 1:half), 2);
-        sd_half  = std(bootstrp_diff(:, 1:half), 0, 2);
-        ref_mu   = max(abs(mu_all), 1e-10);
-        ref_sd   = max(abs(sd_all), 1e-10);
-        converged = max(abs(mu_all - mu_half) ./ ref_mu) < conv_tol && ...
-                    max(abs(sd_all - sd_half) ./ ref_sd) < conv_tol;
+        % Convergence check: compare two consecutive non-overlapping halves
+        half   = floor(size(bootstrp_diff, 2) / 2);
+        mu_h1  = mean(bootstrp_diff(:, 1:half), 2);
+        sd_h1  = std(bootstrp_diff(:, 1:half), 0, 2);
+        mu_h2  = mean(bootstrp_diff(:, half+1:end), 2);
+        sd_h2  = std(bootstrp_diff(:, half+1:end), 0, 2);
+        ref_mu = max(max(abs([mu_h1, mu_h2]), [], 2), 1e-10);
+        ref_sd = max(max(abs([sd_h1, sd_h2]), [], 2), 1e-10);
+        converged = max(abs(mu_h1 - mu_h2) ./ ref_mu) < conv_tol && ...
+                    max(abs(sd_h1 - sd_h2) ./ ref_sd) < conv_tol;
     end
 end
 
@@ -157,20 +157,40 @@ if max_iter > init_iter
 end
 
 % -- Gaussianity diagnostic --------------------------------------------------
-% The Normal parametric fit (below) extrapolates into the tail at extreme
-% alpha values (e.g. 1e-10 ≈ 6.5 sigma). Validate the Gaussian assumption
-% with a Jarque-Bera test on each unit's null distribution.
+% The Normal parametric fit extrapolates into the tail at extreme alpha values
+% (e.g. 1e-10 ≈ 6.5 sigma). Validate the Gaussian assumption with a
+% Jarque-Bera test on each unit's null distribution. When > 20% of units are
+% non-Normal AND alpha < 1e-3, fall back to empirical quantiles per unit.
+non_normal_mask = false(n_units, 1);
 n_non_normal = 0;
 for u = 1:n_units
     try
         h = jbtest(bootstrp_diff(u, :)', 0.05);
-        if h; n_non_normal = n_non_normal + 1; end
+        if h
+            non_normal_mask(u) = true;
+            n_non_normal = n_non_normal + 1;
+        end
     catch
         % jbtest requires >= 4 samples; skip if not available
     end
 end
 frac_non_normal = n_non_normal / max(n_units, 1);
-if frac_non_normal > 0.2 && alpha < 1e-3
+
+use_empirical = non_normal_mask & (frac_non_normal > 0.2) & (alpha < 1e-3);
+if any(use_empirical)
+    alpha_min_empirical = 1 / total_iter;
+    warning('bootstrapFiringRateResponse:nonNormalNull', ...
+        ['%.0f%% of units have non-Normal bootstrap null distributions ' ...
+         '(Jarque-Bera, alpha=0.05). Using empirical quantiles for those units. ' ...
+         'Minimum achievable alpha with %d iterations: %.0e.'], ...
+        100 * frac_non_normal, total_iter, alpha_min_empirical);
+    if alpha < alpha_min_empirical
+        warning('bootstrapFiringRateResponse:empiricalResolution', ...
+            ['alpha (%.0e) is below the empirical resolution floor (1/n_iter = %.0e). ' ...
+             'Increase n_iter for reliable inference at this significance level.'], ...
+            alpha, alpha_min_empirical);
+    end
+elseif frac_non_normal > 0.2 && alpha < 1e-3
     warning('bootstrapFiringRateResponse:nonNormalNull', ...
         ['%.0f%% of units have non-Normal bootstrap null distributions ' ...
          '(Jarque-Bera, alpha=0.05). Parametric p-values at extreme alpha ' ...
@@ -178,19 +198,31 @@ if frac_non_normal > 0.2 && alpha < 1e-3
          'increasing n_iter.'], 100 * frac_non_normal, alpha);
 end
 
-% -- Fit Normal null distribution and threshold ------------------------------
+% -- Fit null distribution and threshold per unit ----------------------------
 increase  = [];
 decrease  = [];
 unchanged = [];
 p_values  = nan(1, n_units);
 
 for u = 1:n_units
-    pd    = fitdist(bootstrp_diff(u, :)', 'Normal');
-    upper = icdf(pd, 1 - alpha / 2);
-    lower = icdf(pd, alpha / 2);
-
-    % Two-tailed p-value for FDR correction support
-    p_values(u) = 2 * min(cdf(pd, emp_diff(u)), 1 - cdf(pd, emp_diff(u)));
+    if use_empirical(u)
+        % Empirical quantiles — resolution limited to 1/total_iter
+        sorted_null = sort(bootstrp_diff(u, :));
+        upper_idx = max(1, round((1 - alpha/2) * total_iter));
+        lower_idx = max(1, round(alpha/2 * total_iter));
+        upper = sorted_null(min(upper_idx, total_iter));
+        lower = sorted_null(lower_idx);
+        % Two-tailed empirical p-value
+        p_values(u) = 2 * min( ...
+            mean(bootstrp_diff(u,:) >= emp_diff(u)), ...
+            mean(bootstrp_diff(u,:) <= emp_diff(u)));
+    else
+        pd    = fitdist(bootstrp_diff(u, :)', 'Normal');
+        upper = icdf(pd, 1 - alpha / 2);
+        lower = icdf(pd, alpha / 2);
+        % Two-tailed p-value for FDR correction support
+        p_values(u) = 2 * min(cdf(pd, emp_diff(u)), 1 - cdf(pd, emp_diff(u)));
+    end
 
     if emp_diff(u) > upper
         increase  = [increase,  u]; %#ok<AGROW>
