@@ -929,7 +929,82 @@ classdef RecordingProcessor < handle
         end
 
         function params = returnDefaultParams()
-            params = MEArecording.returnDefaultParams();
+            params.Analyses.SingleCell   = true;
+            params.Analyses.Regularity   = true;
+            params.Analyses.Bursts       = true;
+            params.Analyses.Connectivity = ["CCG","STTC"];
+            params.Analyses.Catch22      = true;
+
+            params.Outlier.Method          = "median";
+            params.Outlier.ThresholdFactor = 5;
+
+            params.QC.LSB              = 6.2;
+            params.QC.Amplitude        = [20 1000];
+            params.QC.FiringRate       = [0.01 10];
+            params.QC.RPV              = 0.02;
+            params.QC.RefractoryPeriod = 0.002;
+            params.QC.Axon             = 0.8;
+            params.QC.Noise            = 14;
+            params.QC.NoiseCutout      = [-1 1];
+            params.QC.PowerCutoff      = 1.3;
+            params.QC.N_Units          = 10;
+            params.QC.MinSpikeCount    = 10;
+            params.QC.GoodUnits        = [];
+            params.QC.KSLabel.Enable         = false;
+            params.QC.KSLabel.AcceptedLabels = "good";
+            params.QC.Bombcell.Enable        = false;
+            params.QC.Bombcell.Path          = '';
+            params.QC.Bombcell.FilterUnits   = true;
+            params.QC.Bombcell.AcceptedTypes = [1, 2];
+            params.QC.Bombcell.Overrides     = struct();
+
+            params.Activity.FanoBinWidth = 0.1;
+
+            params.Bursts.MergeFactor = 0.5;
+            params.Bursts.Binning     = 0.1;
+
+            params.Regularity.Binning = 0.1;
+            params.Regularity.N_peaks = 20;
+
+            params.CCG.BinSize  = 0.001;
+            params.CCG.Duration = 0.1;
+            params.CCG.Conv_w   = 0.010 / params.CCG.BinSize;
+            params.CCG.Alpha    = 0.001;
+
+            params.GLM.binsize      = 1;
+            params.GLM.interval     = 100;
+            params.GLM.tau0         = 0.8;
+            params.GLM.eta_w        = 5;
+            params.GLM.eta_tau      = 20;
+            params.GLM.eta_dt_coeff = 2;
+            params.GLM.min_spikes   = 100;
+            params.GLM.threshold    = 5.09;
+
+            params.DDC.BinSize     = 0.001;
+            params.DDC.Threshold   = 0;
+            params.DDC.N_Surrogates = 100;
+            params.DDC.Percentile  = 95;
+
+            params.STTC.MaxLag          = 0.05;
+            params.STTC.SurrogateMethod = 'jitter';
+            params.STTC.N_Surrogates    = 100;
+            params.STTC.Percentile      = 95;
+
+            params.GraphFeatures.SmallWorldnessIterations = 100;
+
+            params.Catch22.BinSize = 0.1;
+
+            params.SpatialFeatures.NNk                       = 5;
+            params.SpatialFeatures.RipleyEnable              = false;
+            params.SpatialFeatures.RipleyMaxRadius           = 500;
+            params.SpatialFeatures.RipleyNBins               = 50;
+            params.SpatialFeatures.RipleyNSurrogates         = 100;
+            params.SpatialFeatures.KernelBandwidth           = 100;
+            params.SpatialFeatures.BurstMinUnitsForWavefront = 5;
+
+            params.Save.Flag      = false;
+            params.Save.Path      = [];
+            params.Save.Overwrite = false;
         end
 
         function applyLabelsFromClassifier(proc_array, ctc)

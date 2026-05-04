@@ -91,5 +91,78 @@ classdef test_NormalizationPipeline < matlab.unittest.TestCase
             tc.verifyError(@() np.transform(X, []), 'MATLAB:nonExistentField');
         end
 
+        % ------------------------------------------------------------------
+        % ComBat batch correction
+        % ------------------------------------------------------------------
+
+        function testComBatRemovesBatchShift(tc)
+            % Two batches with a known mean offset; same within-batch noise.
+            % After ComBat, per-batch feature means should be approximately equal.
+            rng(42);
+            n = 30; F = 4;
+            X1 = randn(n, F);              % batch 1: mean ≈ 0
+            X2 = randn(n, F) + 5;          % batch 2: mean ≈ 5
+            X  = [X1; X2];
+            batch = [ones(n,1); 2*ones(n,1)];
+
+            np = NormalizationPipeline({struct('type','combat','params',struct())});
+            [X_out, ~] = np.fit_transform(X, batch);
+
+            mean1 = mean(X_out(1:n,:), 1);
+            mean2 = mean(X_out(n+1:end,:), 1);
+            tc.verifyLessThan(max(abs(mean1 - mean2)), 0.5, ...
+                'Batch means should converge after ComBat');
+        end
+
+        function testComBatPreservesBiologicalSignal(tc)
+            % Two classes separated along feature 1; perfectly confounded with batch
+            % (class A only in batch 1, class B only in batch 2).
+            % ComBat with covariate protection should preserve the class separation.
+            rng(7);
+            n = 20; F = 3;
+            X1 = [randn(n,1) + 3, randn(n, F-1)];   % class 1, batch 1, feature 1 mean = 3
+            X2 = [randn(n,1) - 3, randn(n, F-1)];   % class 2, batch 2, feature 1 mean = -3
+            X  = [X1; X2];
+            batch = [ones(n,1); 2*ones(n,1)];
+            covar = [ones(n,1); 2*ones(n,1)];         % class labels
+
+            np = NormalizationPipeline({struct('type','combat','params',struct())});
+            [X_out, ~] = np.fit_transform(X, batch, CovariateLabels=covar);
+
+            % Class separation on feature 1 should still be substantial
+            sep = abs(mean(X_out(1:n,1)) - mean(X_out(n+1:end,1)));
+            tc.verifyGreaterThan(sep, 1.0, ...
+                'Biological signal should be preserved with covariate protection');
+        end
+
+        function testComBatUnseenBatchWarns(tc)
+            % Fit on batches 1 and 2, transform on batch 3 — should warn and not crash.
+            rng(3);
+            X_train = randn(20, 3);
+            b_train = [ones(10,1); 2*ones(10,1)];
+            X_test  = randn(5, 3);
+            b_test  = 3 * ones(5, 1);
+
+            np = NormalizationPipeline({struct('type','combat','params',struct())});
+            [~, np_fit] = np.fit_transform(X_train, b_train);
+
+            tc.verifyWarning( ...
+                @() np_fit.transform(X_test, b_test), ...
+                'NormalizationPipeline:unseenBatch');
+        end
+
+        function testComBatSingleBatchIsApproxIdentity(tc)
+            % With only one batch the correction should leave data approximately unchanged.
+            rng(11);
+            X = randn(30, 4);
+            batch = ones(30, 1);
+
+            np = NormalizationPipeline({struct('type','combat','params',struct())});
+            [X_out, ~] = np.fit_transform(X, batch);
+
+            tc.verifyLessThan(max(abs(X_out(:) - X(:))), 1e-4, ...
+                'Single-batch ComBat should be an approximate identity');
+        end
+
     end
 end

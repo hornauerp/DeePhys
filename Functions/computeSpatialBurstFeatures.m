@@ -34,7 +34,14 @@ function [network_table, unit_table] = computeSpatialBurstFeatures( ...
         params                struct = struct()
     end
 
-    p = mergeDefaults(params, struct('BurstMinUnitsForWavefront', 5));
+    p = parseStructParameters(struct( ...
+        'NNk',                       [], ...
+        'RipleyEnable',              [], ...
+        'RipleyMaxRadius',           [], ...
+        'RipleyNBins',               [], ...
+        'RipleyNSurrogates',         [], ...
+        'KernelBandwidth',           [], ...
+        'BurstMinUnitsForWavefront', 5), params);
 
     nw.BurstOriginDispersion      = NaN;
     nw.MeanBurstPropagationSpeed  = NaN;
@@ -123,14 +130,4 @@ function [network_table, unit_table] = computeSpatialBurstFeatures( ...
     end
 
     network_table = struct2table(nw);
-end
-
-
-function p = mergeDefaults(p, defaults)
-    fields = fieldnames(defaults);
-    for i = 1:numel(fields)
-        if ~isfield(p, fields{i})
-            p.(fields{i}) = defaults.(fields{i});
-        end
-    end
 end

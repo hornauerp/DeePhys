@@ -165,6 +165,36 @@ opts_norm.Algorithm        = 'rf';
 
 result_norm = exp.classify('Unit', 'Mutation', opts_norm);
 
+%% 12b  ComBat batch correction
+%
+% For multi-chip experiments with systematic technical offsets that go beyond
+% mean/variance shifts, ComBat (Johnson et al. 2007) fits per-batch additive
+% and multiplicative effects via empirical Bayes shrinkage, then removes them
+% while preserving biological signal.
+%
+% Set NormalizationPipeline = 'combat' and NormalizationVar to the batch
+% metadata field (e.g., ChipID). The classification target is automatically
+% used as the biological covariate in ComBat's design matrix so that class
+% separation is protected during batch correction.
+%
+% When to prefer ComBat over per-group z-score:
+%   - Many chips/batches with different recording conditions (media lots,
+%     electrode coating, temperature drift across days)
+%   - The feature distributions look batch-stratified in PCA/UMAP before ML
+%
+% Note: ComBat already centers residuals per batch, so group_zscore before
+% ComBat is unnecessary. The pipeline adds global z-score, clipping, and
+% max-abs scaling after correction.
+
+opts_combat = struct();
+opts_combat.NormalizationVar      = 'ChipID';    % batch variable
+opts_combat.NormalizationPipeline = 'combat';    % use combatThenGlobal pipeline
+opts_combat.Algorithm             = 'rf';
+
+result_combat = exp.classify('Unit', 'Mutation', opts_combat);
+summary_combat = ClassificationResult.summarizeFolds(result_combat);
+fprintf('ComBat-corrected accuracy: %.2f\n', summary_combat.mean_accuracy);
+
 %% 13  Feature group selection for classification
 
 opts_fg = struct();

@@ -24,8 +24,9 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
         params      struct = struct()
     end
 
-    if ~isfield(params, 'Binning'), params.Binning = 0.01; end
-    if ~isfield(params, 'Outlier'), params.Outlier = struct('Method', '', 'ThresholdFactor', 3); end
+    params = parseStructParameters(struct( ...
+        'Binning', 0.01, ...
+        'Outlier', struct('Method', '', 'ThresholdFactor', 3)), params);
 
     if length(bursts.T_start) < 3
         Burst.MeanInterBurstInterval = NaN;

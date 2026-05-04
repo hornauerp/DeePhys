@@ -23,20 +23,16 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
         params      struct = struct()
     end
 
-    if isfield(params, 'FanoBinWidth')
-        fano_bin_width = params.FanoBinWidth;
-    else
-        fano_bin_width = 0.1;
-    end
+    p = parseStructParameters(struct( ...
+        'FanoBinWidth',    0.1, ...
+        'RefractoryPeriod', 0.002, ...
+        'Regularity',      [], ...
+        'Catch22',         []), params);
 
-    if isfield(params, 'RefractoryPeriod')
-        refract = params.RefractoryPeriod;
-    else
-        refract = 0.002;
-    end
-
-    do_regularity = isfield(params, 'Regularity') && ~isempty(params.Regularity);
-    do_catch22    = isfield(params, 'Catch22') && ~isempty(params.Catch22);
+    fano_bin_width = p.FanoBinWidth;
+    refract        = p.RefractoryPeriod;
+    do_regularity  = ~isempty(p.Regularity);
+    do_catch22     = ~isempty(p.Catch22);
 
     act_names = ["FiringRate","MeanInterSpikeInterval","VarianceInterSpikeInterval","CVInterSpikeInterval", ...
         "CV2InterSpikeInterval","LocalVariation","RevisedLocalVariation","FanoFactor","PartialAutocorrelation", ...

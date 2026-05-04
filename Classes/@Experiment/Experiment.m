@@ -109,8 +109,19 @@ classdef Experiment < handle
 
             [X, Y, cv_groups, norm_groups] = exp.prepareML(level, classification_var, opts);
 
-            opts.CVGroups          = cv_groups;
+            opts.CVGroups            = cv_groups;
             opts.NormalizationGroups = norm_groups;
+
+            % Resolve ComBat covariate: use classification target Y when CovariateVar matches,
+            % or any other metadata column that has already been extracted into Y.
+            if ~isfield(opts, 'CovariateLabels') || isempty(opts.CovariateLabels)
+                if string(opts.NormalizationPipeline) == "combat"
+                    % Default: protect the classification variable (Y)
+                    opts.CovariateLabels = Y;
+                else
+                    opts.CovariateLabels = [];
+                end
+            end
 
             result = Classifier.classify(X, Y, opts);
             if isfield(exp.Results.Classification, classification_var) && ...
@@ -329,7 +340,8 @@ classdef Experiment < handle
         function opts = fillOpts(opts)
             if ~isfield(opts, 'FeatureGroups'),   opts.FeatureGroups = "all";          end
             if ~isfield(opts, 'FeatureSet'),      opts.FeatureSet = "full";            end
-            if ~isfield(opts, 'NormalizationVar'), opts.NormalizationVar = "";          end
+            if ~isfield(opts, 'NormalizationVar'),      opts.NormalizationVar = "";      end
+            if ~isfield(opts, 'NormalizationPipeline'), opts.NormalizationPipeline = ""; end
             if ~isfield(opts, 'CVLevel'),          opts.CVLevel = "recording";         end
             if ~isfield(opts, 'Method'),           opts.Method = "UMAP";               end
             if ~isfield(opts, 'IdentityKeys'),     opts.IdentityKeys = ["ChipID","PlatingDate"]; end

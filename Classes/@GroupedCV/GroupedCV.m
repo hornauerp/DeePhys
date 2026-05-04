@@ -40,7 +40,13 @@ classdef GroupedCV
         %   K            - number of folds (-1 for leave-one-group-out)
         %   class_labels - (optional) (N x 1) class labels for stratified splitting
         %                  at the group level. If provided, the dominant class per group
-        %                  is used for stratification.
+        %                  is used for stratification via MATLAB's mode():
+        %                    - Ties go to the smallest numeric label (mode() tiebreaking).
+        %                    - Intra-group class imbalance is flattened to one label per
+        %                      group, so minority-class units within a group do not
+        %                      influence fold stratification. This is an inherent
+        %                      limitation of group-level CV: per-fold class balance is
+        %                      not guaranteed when groups contain mixed classes.
             arguments
                 group_ids
                 K (1,1) double = 5

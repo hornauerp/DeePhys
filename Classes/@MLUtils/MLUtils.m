@@ -33,22 +33,31 @@ classdef MLUtils
             end
         end
 
-        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)
+        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
         % NORMALIZEFEATURES  Impute NaN, normalise, drop bad columns — for train/test splits.
         %
         % Fits the normalization pipeline on training rows, applies to test rows.
         % Used by Classifier and Regressor.
         %
         % INPUTS:
-        %   X           - (N x F) feature table (table or numeric matrix)
-        %   train_idx   - logical or numeric training index into X
-        %   test_idx    - logical or numeric test index into X ([] → X_test returned as [])
-        %   norm_groups - (N x 1) numeric group vector for per-group z-score, or []
+        %   X                - (N x F) feature table (table or numeric matrix)
+        %   train_idx        - logical or numeric training index into X
+        %   test_idx         - logical or numeric test index into X ([] → X_test returned as [])
+        %   norm_groups      - (N x 1) numeric group vector for per-group z-score / ComBat, or []
+        %   pipeline_type    - string: 'combat' → combatThenGlobal; else groupThenGlobal/globalOnly
+        %   covariate_labels - (N x 1) biological labels for ComBat covariate protection, or []
         %
         % OUTPUTS:
         %   X_train    - (N_train x F') normalised training matrix (numeric)
         %   X_test     - (N_test  x F') normalised test matrix, or [] if test_idx is empty
         %   feat_names - (1 x F') string feature names, bad columns removed
+            if nargin < 5 || isempty(pipeline_type)
+                pipeline_type = "";
+            end
+            if nargin < 6
+                covariate_labels = [];
+            end
+
             if istable(X)
                 mat        = X.Variables;
                 feat_names = string(X.Properties.VariableNames);
@@ -65,27 +74,39 @@ classdef MLUtils
                 mat(isnan(mat(:, col)), col) = med;
             end
 
-            % Normalization pipeline fitted on training set
-            if ~isempty(norm_groups)
-                np      = NormalizationPipeline.groupThenGlobal();
-                g_train = norm_groups(train_idx);
+            % Select normalization pipeline
+            use_combat = string(pipeline_type) == "combat";
+            if use_combat
+                np        = NormalizationPipeline.combatThenGlobal();
+                g_train   = norm_groups(train_idx);
+                cov_train = covariate_labels(train_idx);
+            elseif ~isempty(norm_groups)
+                np        = NormalizationPipeline.groupThenGlobal();
+                g_train   = norm_groups(train_idx);
+                cov_train = [];
             else
-                np      = NormalizationPipeline.globalOnly();
-                g_train = [];
+                np        = NormalizationPipeline.globalOnly();
+                g_train   = [];
+                cov_train = [];
             end
-            [X_train, np] = np.fit_transform(mat(train_idx, :), g_train);
+            [X_train, np] = np.fit_transform(mat(train_idx, :), g_train, CovariateLabels=cov_train);
 
             % Transform test set
             if isempty(test_idx) || (~islogical(test_idx) && isempty(test_idx)) || ...
                     (islogical(test_idx) && ~any(test_idx))
                 X_test = [];
             else
-                if ~isempty(norm_groups)
-                    g_test = norm_groups(test_idx);
+                if use_combat
+                    g_test   = norm_groups(test_idx);
+                    cov_test = covariate_labels(test_idx);
+                elseif ~isempty(norm_groups)
+                    g_test   = norm_groups(test_idx);
+                    cov_test = [];
                 else
-                    g_test = [];
+                    g_test   = [];
+                    cov_test = [];
                 end
-                X_test = np.transform(mat(test_idx, :), g_test);
+                X_test = np.transform(mat(test_idx, :), g_test, CovariateLabels=cov_test);
             end
 
             % Drop zero-variance / all-NaN columns (fitted on training; applied to both)

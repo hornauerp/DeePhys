@@ -80,7 +80,7 @@ classdef Regressor
                 Y_train = Y(train_idx);
                 Y_test  = Y(test_idx);
 
-                [X_train, X_test, feat_names] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups);
+                [X_train, X_test, feat_names] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups, opts.NormalizationPipeline, opts.CovariateLabels);
 
                 [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, opts.NHyper);
                 Y_pred = predict(mdl, X_test);
@@ -210,8 +210,10 @@ classdef Regressor
             if ~isfield(opts, 'KFold'),               opts.KFold = 5;              end
             if ~isfield(opts, 'NHyper'),              opts.NHyper = 0;             end
             if ~isfield(opts, 'Seed'),                opts.Seed = [];              end
-            if ~isfield(opts, 'NormalizationGroups'), opts.NormalizationGroups = []; end
-            if ~isfield(opts, 'NormalizationVar'),    opts.NormalizationVar = '';  end
+            if ~isfield(opts, 'NormalizationGroups'),  opts.NormalizationGroups = [];  end
+            if ~isfield(opts, 'NormalizationVar'),    opts.NormalizationVar = '';     end
+            if ~isfield(opts, 'NormalizationPipeline'), opts.NormalizationPipeline = ''; end
+            if ~isfield(opts, 'CovariateLabels'),     opts.CovariateLabels = [];     end
             if ~isfield(opts, 'CVGroups'),            opts.CVGroups = [];          end
             if ~isfield(opts, 'StratificationVar'),   opts.StratificationVar = []; end
         end
@@ -220,8 +222,10 @@ classdef Regressor
             g = MLUtils.resolveGroups(groups_input, N);
         end
 
-        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups)
-            [X_train, X_test, feat_names] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups);
+        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
+            if nargin < 5, pipeline_type = ""; end
+            if nargin < 6, covariate_labels = []; end
+            [X_train, X_test, feat_names] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels);
         end
 
     end

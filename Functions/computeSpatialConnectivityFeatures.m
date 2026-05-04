@@ -28,7 +28,14 @@ function [network_table, unit_table] = computeSpatialConnectivityFeatures( ...
         params                struct = struct()
     end
 
-    p = mergeDefaults(params, struct('NNk', 5));
+    p = parseStructParameters(struct( ...
+        'NNk',                       5, ...
+        'RipleyEnable',              [], ...
+        'RipleyMaxRadius',           [], ...
+        'RipleyNBins',               [], ...
+        'RipleyNSurrogates',         [], ...
+        'KernelBandwidth',           [], ...
+        'BurstMinUnitsForWavefront', []), params);
 
     n_units = numel(units);
     nw = makeNaNStruct();
@@ -135,13 +142,4 @@ function nw = makeNaNStruct()
     nw.SpatialDecayTau_II    = NaN;
     nw.SpatialDecayTau_EI    = NaN;
     nw.DistanceFCCorrelation = NaN;
-end
-
-function p = mergeDefaults(p, defaults)
-    fields = fieldnames(defaults);
-    for i = 1:numel(fields)
-        if ~isfield(p, fields{i})
-            p.(fields{i}) = defaults.(fields{i});
-        end
-    end
 end
