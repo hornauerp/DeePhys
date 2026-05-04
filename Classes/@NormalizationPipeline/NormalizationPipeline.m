@@ -252,7 +252,7 @@ function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
 
     % Pooled per-feature variance across all samples
     var_pooled = var(R, 0, 1);            % (1 x F)
-    var_pooled(var_pooled == 0) = 1;      % prevent division by zero
+    var_pooled(var_pooled == 0 | isnan(var_pooled)) = 1;
 
     % Standardize residuals
     X_std = R ./ sqrt(var_pooled);        % (N x F)
@@ -271,7 +271,7 @@ function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
             delta_hat(b,:) = var(X_std(mask,:), 0, 1);
         end
     end
-    delta_hat(delta_hat == 0) = 1;
+    delta_hat(delta_hat == 0 | isnan(delta_hat)) = 1;
 
     % Empirical Bayes hyperparameters (moment-matching across batches)
     gamma_bar = mean(gamma_hat, 1);       % grand mean per feature
@@ -364,7 +364,7 @@ function Z = buildDesignMatrix(covariate_labels, N, cats)
     % Dummy coding: drop first category (reference level)
     Z = ones(N, n_cats);           % col 1 = intercept
     for k = 2:n_cats
-        Z(:, k) = double(covariate_labels == cats(k));
+        Z(:, k) = double(covariate_labels == cats{k});
     end
 end
 
