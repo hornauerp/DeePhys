@@ -67,6 +67,7 @@ classdef Regressor
             end
 
             t_start = tic;
+            valid_folds = true(1, K);
             result(K) = RegressionResult();
 
             for k = 1:K
@@ -82,6 +83,13 @@ classdef Regressor
 
                 [X_train, X_test, feat_names] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups, opts.NormalizationPipeline, opts.CovariateLabels);
 
+                if isempty(X_test)
+                    warning('Regressor:emptyTestFold', ...
+                        'Fold %d has an empty test set — skipped.', k);
+                    valid_folds(k) = false;
+                    continue
+                end
+
                 [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, opts.NHyper);
                 Y_pred = predict(mdl, X_test);
 
@@ -92,9 +100,9 @@ classdef Regressor
                 end
 
                 if opts.Algorithm == "rf"
-                    mse_train_val = oobLoss(mdl);
+                    mse_train_val = oobLoss(mdl);       % OOB ≈ held-out performance, not true training MSE
                 else
-                    mse_train_val = resubLoss(mdl);
+                    mse_train_val = resubLoss(mdl);     % resubstitution; optimistic (~0 for SVM/KNN)
                 end
                 result(k) = RegressionResult( ...
                     'Mdl',       mdl, ...
@@ -112,6 +120,7 @@ classdef Regressor
                         'N_hyper',          opts.NHyper, ...
                         'seed',             opts.Seed));
             end
+            result = result(valid_folds);
 
             elapsed = toc(t_start);
             summary = RegressionResult.summarizeFolds(result);
@@ -153,6 +162,7 @@ classdef Regressor
             for p = 1:n_permutations
                 if ~isempty(base_seed)
                     perm_opts.Seed = base_seed + p;
+                    rng(base_seed + p);  % seed the Y-shuffle too, not just the CV partition inside regress()
                 end
                 Y_perm = Y(randperm(numel(Y)));
                 perm_result  = Regressor.regress(X, Y_perm, perm_opts);

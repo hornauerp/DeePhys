@@ -147,7 +147,7 @@ if edge_mode == "trim"
 end
 
 t_out = (-n_out_pre : n_out_post)' * dt_out;               % (n_out × 1) output time grid in ms
-aligned_wf = zeros(n_out, N_units);
+aligned_wf = nan(n_out, N_units);   % NaN for skipped/short units; downstream imputation handles them
 n_truncated = 0;
 
 for u = 1:N_units
@@ -173,9 +173,9 @@ for u = 1:N_units
 
     if sum(in_range) < 3
         warning('buildFeatureMatrix:shortWaveform', ...
-            'Unit %d: input waveform too short (%.2f ms available, [%.1f, %.1f] ms requested) — zeroed.', ...
+            'Unit %d: input waveform too short (%.2f ms available, [%.1f, %.1f] ms requested) — set to NaN.', ...
             u, t_max_avail - t_min_avail, -pre_trough_ms, post_trough_ms);
-        continue
+        continue  % aligned_wf column stays NaN (initialized above)
     end
 
     % Interpolate within available range
@@ -197,13 +197,12 @@ for u = 1:N_units
         n_truncated = n_truncated + 1;
     end
 
-    % Normalise by max(abs)
+    % Normalise by max(abs); skip degenerate flat waveforms (leave column as NaN)
     amp = max(abs(wf_interp));
     if amp > 0
         wf_interp = wf_interp / amp;
+        aligned_wf(:, u) = wf_interp;
     end
-
-    aligned_wf(:, u) = wf_interp;
 end
 
 if n_truncated > 0

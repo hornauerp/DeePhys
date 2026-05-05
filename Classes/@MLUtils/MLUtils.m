@@ -67,11 +67,20 @@ classdef MLUtils
             end
 
             % Impute NaN per column using training-set median
+            all_nan_cols = false(1, size(mat, 2));
             for col = 1:size(mat, 2)
                 train_col = mat(train_idx, col);
                 med = median(train_col(~isnan(train_col)));
-                if isnan(med), med = 0; end
+                if isnan(med)
+                    med = 0;
+                    all_nan_cols(col) = true;
+                end
                 mat(isnan(mat(:, col)), col) = med;
+            end
+            if any(all_nan_cols)
+                warning('MLUtils:allNaNColumn', ...
+                    '%d feature column(s) are entirely NaN in training set — imputed with 0. Consider dropping these features.', ...
+                    sum(all_nan_cols));
             end
 
             % Select normalization pipeline
@@ -140,13 +149,22 @@ classdef MLUtils
             end
 
             % Impute NaN with column median
+            all_nan_cols = false(1, size(mat, 2));
             for col = 1:size(mat, 2)
                 nan_mask = isnan(mat(:, col));
                 if any(nan_mask)
                     med = median(mat(~nan_mask, col));
-                    if isnan(med), med = 0; end
+                    if isnan(med)
+                        med = 0;
+                        all_nan_cols(col) = true;
+                    end
                     mat(nan_mask, col) = med;
                 end
+            end
+            if any(all_nan_cols)
+                warning('MLUtils:allNaNColumn', ...
+                    '%d feature column(s) are entirely NaN — imputed with 0. Consider dropping these features.', ...
+                    sum(all_nan_cols));
             end
 
             if ~isempty(norm_groups)

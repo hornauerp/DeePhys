@@ -44,6 +44,7 @@ else
 end
 
 if length(p) >= 2
+    p(p == 0) = eps;  % guard against log10(0) = -Inf from zero-power bins
     log_p = log10(p) - min(log10(p)); % shift to positive for fitting
     try
         f = fit(abs_locs, log_p, 'exp1');

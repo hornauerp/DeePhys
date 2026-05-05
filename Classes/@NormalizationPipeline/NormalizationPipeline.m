@@ -247,6 +247,12 @@ function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
     Z = buildDesignMatrix(covariate_labels, N);
 
     % OLS: estimate biological effects, then get residuals
+    if rank(Z) < size(Z, 2)
+        warning('NormalizationPipeline:combatRankDeficient', ...
+            'ComBat design matrix is rank-deficient (%d/%d independent columns). ' ...
+            'Check for collinear covariates or a single-level covariate.', ...
+            rank(Z), size(Z, 2));
+    end
     beta_hat = Z \ X;                     % (P x F)
     R = X - Z * beta_hat;                 % (N x F) batch-free residuals
 
@@ -340,7 +346,13 @@ function X_out = applyComBat(X, batch_labels, covariate_labels, fit)
     end
 
     unseen = ~seen;
-    if any(unseen)
+    if all(unseen)
+        error('NormalizationPipeline:allBatchesUnseen', ...
+            'No test samples match any batch seen during ComBat fit. ' ...
+            'Test batches: %s. Known batches: %s.', ...
+            strjoin(string(unique(batch_labels)), ', '), ...
+            strjoin(string(fit.batches), ', '));
+    elseif any(unseen)
         warning('NormalizationPipeline:unseenBatch', ...
             '%d samples belong to batches unseen during fit — no batch correction applied.', sum(unseen));
     end

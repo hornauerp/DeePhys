@@ -135,13 +135,13 @@ classdef test_NormalizationPipeline < matlab.unittest.TestCase
                 'Biological signal should be preserved with covariate protection');
         end
 
-        function testComBatUnseenBatchWarns(tc)
-            % Fit on batches 1 and 2, transform on batch 3 — should warn and not crash.
+        function testComBatPartialUnseenBatchWarns(tc)
+            % Some test samples belong to known batches, some to an unseen batch — should warn.
             rng(3);
             X_train = randn(20, 3);
             b_train = [ones(10,1); 2*ones(10,1)];
-            X_test  = randn(5, 3);
-            b_test  = 3 * ones(5, 1);
+            X_test  = randn(8, 3);
+            b_test  = [ones(4,1); 3*ones(4,1)];  % batch 1 (known) + batch 3 (unseen)
 
             np = NormalizationPipeline({struct('type','combat','params',struct())});
             [~, np_fit] = np.fit_transform(X_train, b_train);
@@ -149,6 +149,22 @@ classdef test_NormalizationPipeline < matlab.unittest.TestCase
             tc.verifyWarning( ...
                 @() np_fit.transform(X_test, b_test), ...
                 'NormalizationPipeline:unseenBatch');
+        end
+
+        function testComBatAllUnseenBatchErrors(tc)
+            % All test samples belong to batches unseen during fit — should error.
+            rng(3);
+            X_train = randn(20, 3);
+            b_train = [ones(10,1); 2*ones(10,1)];
+            X_test  = randn(5, 3);
+            b_test  = 3 * ones(5, 1);  % entirely unseen batch
+
+            np = NormalizationPipeline({struct('type','combat','params',struct())});
+            [~, np_fit] = np.fit_transform(X_train, b_train);
+
+            tc.verifyError( ...
+                @() np_fit.transform(X_test, b_test), ...
+                'NormalizationPipeline:allBatchesUnseen');
         end
 
         function testComBatSingleBatchIsApproxIdentity(tc)

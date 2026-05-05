@@ -243,6 +243,67 @@ classdef FeatureStore < handle
     end
 
     % =====================================================================
+    % Diagnostic
+    % =====================================================================
+    methods
+
+        function report = summarizeFeatureGroups(fs)
+        % SUMMARIZEFEATUREGROUPS  Report which feature groups are present in UnitTable and RecordingTable.
+        %
+        %   report = fs.summarizeFeatureGroups()
+        %   Prints a summary and returns a struct with unit-level and recording-level coverage.
+        %
+        % Useful after FeatureStore.fromProcessors() to confirm all expected analyses
+        % have been run. Groups with zero features likely correspond to analyses not yet
+        % executed (e.g., no connectivity columns if computeConnectivity() was not called).
+            unit_cols = string(fs.UnitTable.Properties.VariableNames);
+            rec_cols  = string(fs.RecordingTable.Properties.VariableNames);
+
+            unit_groups = struct( ...
+                'ActivityFeatures',  sum(startsWith(unit_cols, ["FiringRate","MeanISI","Variance","CV","Local","Revised","Fano","Partial","ISIBim"])), ...
+                'WaveformFeatures',  sum(startsWith(unit_cols, ["AUC","Rise","Decay","Half","Asym","T2P"])), ...
+                'ReferenceWaveform', sum(startsWith(unit_cols, "Waveform")), ...
+                'ACG',               sum(startsWith(unit_cols, "ACG") & ~startsWith(unit_cols, "FullACG")), ...
+                'FullACG',           sum(startsWith(unit_cols, "FullACG")), ...
+                'RegularityFeatures', sum(startsWith(unit_cols, "Regularity")), ...
+                'Catch22',           sum(startsWith(unit_cols, "SC_")));
+
+            rec_groups = struct( ...
+                'BurstFeatures',     sum(startsWith(rec_cols, ["BurstRate","IBI","BurstDuration","SpikesPerBurst","NetworkBurst"])), ...
+                'NetworkActivity',   sum(startsWith(rec_cols, ["Network","PopulationFR","MeanFR","MeanCV"])), ...
+                'Connectivity',      sum(startsWith(rec_cols, ["MeanSTTC","ExcFraction","InhFraction","GraphDensity","Clustering","PathLength","SmallWorld","Modularity","ExcDensity","InhDensity","NetExc","NetInh"])), ...
+                'CellTypeFeatures',  sum(startsWith(rec_cols, ["ExcitatoryFraction","MeanFiringRate_","FiringRateRatio","MeanCV2_","MeanFano","MeanLvR","MeanISIBim","BurstLead","MeanBurstFrac","IntraBurst","BurstPart","MeanSTTC_E","MeanSTTC_I","STTCS"])), ...
+                'SpatialFeatures',   sum(startsWith(rec_cols, ["ConvexHull","ChipCoverage","MeanPairwise","Centroid","Spatial","DistFromCentroid","FractionExcNN","RipleysL","ClusterScale","DistanceFCCorr","MeanFC_Near","BurstOrigin","MeanBurst"])));
+
+            fprintf('\n--- FeatureStore: %d units, %d recordings ---\n', ...
+                height(fs.UnitTable), height(fs.MetadataTable));
+            fprintf('Unit-level feature groups:\n');
+            fns = fieldnames(unit_groups);
+            for i = 1:numel(fns)
+                n = unit_groups.(fns{i});
+                status = '✓';
+                if n == 0; status = '✗ (not computed)'; end
+                fprintf('  %-22s %3d columns  %s\n', fns{i}, n, status);
+            end
+            fprintf('Recording-level feature groups:\n');
+            fns = fieldnames(rec_groups);
+            for i = 1:numel(fns)
+                n = rec_groups.(fns{i});
+                status = '✓';
+                if n == 0; status = '✗ (not computed)'; end
+                fprintf('  %-22s %3d columns  %s\n', fns{i}, n, status);
+            end
+            fprintf('\n');
+
+            report.unit     = unit_groups;
+            report.recording = rec_groups;
+            report.n_units      = height(fs.UnitTable);
+            report.n_recordings = height(fs.MetadataTable);
+        end
+
+    end
+
+    % =====================================================================
     % Feature matrix extraction
     % =====================================================================
     methods

@@ -109,5 +109,36 @@ classdef test_oversampleMinorityClass < matlab.unittest.TestCase
             tc.verifyEqual(res_table.Properties.VariableNames, {'alpha','beta'});
         end
 
+        function testSeedProducesReproducibleSampling(tc)
+            % Same seed must produce identical oversampled rows even after advancing RNG.
+            rng(0);
+            feat      = array2table((1:8)', 'VariableNames', {'val'});
+            grp       = 1:8;
+            y_train   = [1 1 1 1 2 2];
+            train_idx = logical([1 1 1 1 1 1 0 0]);
+
+            [res1, y1] = oversampleMinorityClass(feat, grp, y_train, train_idx, 42);
+            rand(100, 1);  % advance RNG to a different state
+            [res2, y2] = oversampleMinorityClass(feat, grp, y_train, train_idx, 42);
+
+            tc.verifyEqual(res1.val, res2.val, 'Same seed must produce identical table');
+            tc.verifyEqual(y1, y2, 'Same seed must produce identical labels');
+        end
+
+        function testDifferentSeedProducesDifferentSampling(tc)
+            % Two different seeds on the same imbalanced set should (almost certainly)
+            % produce different oversampled rows.
+            feat      = array2table((1:20)', 'VariableNames', {'val'});
+            grp       = 1:20;
+            y_train   = [ones(1,10), 2*ones(1,5)];
+            train_idx = logical([ones(1,15), zeros(1,5)]);
+
+            [res1, ~] = oversampleMinorityClass(feat, grp, y_train, train_idx, 1);
+            [res2, ~] = oversampleMinorityClass(feat, grp, y_train, train_idx, 2);
+
+            tc.verifyNotEqual(res1.val, res2.val, ...
+                'Different seeds should produce different oversampling');
+        end
+
     end
 end

@@ -75,6 +75,7 @@ classdef Classifier
             end
 
             t_start = tic;
+            valid_folds = true(1, K);
             result(K) = ClassificationResult();
             for k = 1:K
                 if use_gcv
@@ -89,6 +90,13 @@ classdef Classifier
 
                 [X_train, X_test, feat_names] = Classifier.normalizeFeatures( ...
                     X, train_idx, test_idx, norm_groups, opts.NormalizationPipeline, opts.CovariateLabels);
+
+                if isempty(X_test)
+                    warning('Classifier:emptyTestFold', ...
+                        'Fold %d has an empty test set — skipped.', k);
+                    valid_folds(k) = false;
+                    continue
+                end
 
                 clf_params = MLPipeline.returnDefaultParams();
                 clf_params.RF.Prior = opts.Prior;
@@ -118,6 +126,7 @@ classdef Classifier
                         'N_hyper',          opts.NHyper, ...
                         'seed',             opts.Seed));
             end
+            result = result(valid_folds);
 
             elapsed = toc(t_start);
             summary = ClassificationResult.summarizeFolds(result);
@@ -160,8 +169,10 @@ classdef Classifier
             obs_acc = obs_summary.mean_accuracy;
 
             % Permutation null distribution — suppress imbalance warning during shuffles.
-            % Each permutation uses a unique derived seed so both Y-shuffle and CV
-            % partition vary across runs (avoids conditioning the null on one partition).
+            % Each permutation uses a unique derived seed so both the Y-shuffle and the CV
+            % partition vary across runs in a reproducible way. Shuffling is done at the
+            % observation level; when CVGroups are set, group structure is preserved in the
+            % CV partition but not in the label assignment (valid for testing Y→X information).
             null_accs = zeros(n_permutations, 1);
             perm_opts = opts;
             base_seed = opts.Seed;
@@ -170,6 +181,7 @@ classdef Classifier
                 for p = 1:n_permutations
                     if ~isempty(base_seed)
                         perm_opts.Seed = base_seed + p;
+                        rng(base_seed + p);  % seed the Y-shuffle too, not just the CV partition inside classify()
                     end
                     Y_perm = Y(randperm(numel(Y)));
                     perm_result = Classifier.classify(X, Y_perm, perm_opts);

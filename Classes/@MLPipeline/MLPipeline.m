@@ -86,9 +86,9 @@ classdef MLPipeline
                             'Learners', t, 'Options', statset("UseParallel", true));
                 end
                 if alg == "rf"
-                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classerror');
+                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classerror');  % OOB ≈ held-out performance, not true training accuracy
                 else
-                    train_acc = 1 - resubLoss(clf, 'LossFun', 'classerror');
+                    train_acc = 1 - resubLoss(clf, 'LossFun', 'classerror');  % resubstitution; optimistic (~1.0 for SVM/KNN)
                 end
             end
         end

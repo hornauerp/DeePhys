@@ -68,8 +68,10 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
 
     if length(isi) > 1
         denom_cv2 = isi(2:end) + isi(1:end-1);
-        cv2_vals = 2 * abs(isi(2:end) - isi(1:end-1)) ./ denom_cv2;
-        cv2_vals(denom_cv2 == 0) = NaN;
+        valid_cv2 = denom_cv2 > 0;
+        cv2_vals  = nan(size(denom_cv2));
+        num_cv2   = 2 * abs(isi(2:end) - isi(1:end-1));
+        cv2_vals(valid_cv2) = num_cv2(valid_cv2) ./ denom_cv2(valid_cv2);
         act_feat.CV2InterSpikeInterval = mean(cv2_vals, 'omitnan');
     else
         act_feat.CV2InterSpikeInterval = NaN;
@@ -77,8 +79,10 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
 
     if length(isi) > 1
         denom_lv = (isi(2:end) + isi(1:end-1)).^2;
-        lv_vals = 3 * (isi(2:end) - isi(1:end-1)).^2 ./ denom_lv;
-        lv_vals(denom_lv == 0) = NaN;
+        valid_lv = denom_lv > 0;
+        lv_vals  = nan(size(denom_lv));
+        num_lv   = 3 * (isi(2:end) - isi(1:end-1)).^2;
+        lv_vals(valid_lv) = num_lv(valid_lv) ./ denom_lv(valid_lv);
         act_feat.LocalVariation = mean(lv_vals, 'omitnan');
     else
         act_feat.LocalVariation = NaN;

@@ -1,5 +1,5 @@
 function [resampled_table, y_resampled, resampled_group, train_idx, test_idx] = ...
-        oversampleMinorityClass(input_table, object_group, y_train, train_idx)
+        oversampleMinorityClass(input_table, object_group, y_train, train_idx, seed)
 % OVERSAMPLEMINORITYCLASS  Balance class sizes by oversampling the minority class.
 %
 % Duplicates rows from the smaller class(es) in the training set until all classes
@@ -11,6 +11,7 @@ function [resampled_table, y_resampled, resampled_group, train_idx, test_idx] = 
 %   object_group - (1 x N) object array (e.g. Unit array) corresponding to table rows
 %   y_train      - (1 x N_train) integer class labels for training samples
 %   train_idx    - (1 x N) logical index identifying training rows in input_table
+%   seed         - (optional) RNG seed for reproducible sampling (default: [])
 %
 % OUTPUTS:
 %   resampled_table  - Feature table after resampling + test rows appended
@@ -18,6 +19,13 @@ function [resampled_table, y_resampled, resampled_group, train_idx, test_idx] = 
 %   resampled_group  - Object group after resampling + test rows appended
 %   train_idx        - Logical index for training rows in resampled output
 %   test_idx         - Logical index for test rows in resampled output
+
+if nargin < 5 || isempty(seed)
+    seed = [];
+end
+if ~isempty(seed)
+    rng(seed);
+end
 
 train_rows = input_table(train_idx,:);
 test_rows  = input_table(~train_idx,:);
