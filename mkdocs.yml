@@ -1,0 +1,58 @@
+site_name: DeePhys
+site_url: https://deephys.readthedocs.io
+repo_url: https://github.com/hornauerp/DeePhys
+repo_name: hornauerp/DeePhys
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - search.suggest
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - tables
+
+nav:
+  - Home: index.md
+  - Getting Started: getting_started.md
+  - Tutorials:
+      - Overview: tutorials/index.md
+      - 1. Data Processing: tutorials/01_data_processing.md
+      - 2. Feature Exploration: tutorials/02_feature_exploration.md
+      - 3. Phenotype Analysis: tutorials/03_phenotype_analysis.md
+      - 4. Cell Type Classification: tutorials/04_cell_type_classification.md
+      - 5. E/I Analysis: tutorials/05_ei_analysis.md
+      - 6. Transfer Learning: tutorials/06_transfer_learning.md
+      - 7. Legacy Migration: tutorials/07_legacy_migration.md
+  - API Reference:
+      - Overview: api/index.md
+      - Data containers:
+          - SpikeData: api/SpikeData.md
+          - UnitData: api/UnitData.md
+          - RecordingProcessor: api/RecordingProcessor.md
+          - FeatureStore: api/FeatureStore.md
+          - Experiment: api/Experiment.md
+      - Analysis:
+          - Classifier: api/Classifier.md
+          - Regressor: api/Regressor.md
+          - DimReducer: api/DimReducer.md
+      - Results:
+          - ClassificationResult: api/ClassificationResult.md
+          - RegressionResult: api/RegressionResult.md
+      - Utilities:
+          - MLPipeline: api/MLPipeline.md
+          - GroupedCV: api/GroupedCV.md
+          - NormalizationPipeline: api/NormalizationPipeline.md
+          - FeatureCatalog: api/FeatureCatalog.md
+  - Contributing: contributing.md
+
+plugins:
+  - search
