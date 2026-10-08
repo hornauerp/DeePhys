@@ -86,5 +86,32 @@ classdef test_parseStructParameters < matlab.unittest.TestCase
             tc.verifyTrue(merged.Analyses.ComputeBursts);
         end
 
+        function testDeepMergeKeepsSiblingDefaults(tc)
+            % Overriding one third-level field must not drop its siblings
+            % (QC.KSLabel.Enable used to wipe QC.KSLabel.AcceptedLabels).
+            defaults.QC.KSLabel.Enable = false;
+            defaults.QC.KSLabel.AcceptedLabels = "good";
+            overrides.QC.KSLabel.Enable = true;
+            merged = parseStructParameters(defaults, overrides);
+            tc.verifyTrue(merged.QC.KSLabel.Enable);
+            tc.verifyEqual(merged.QC.KSLabel.AcceptedLabels, "good");
+        end
+
+        function testUnknownDeepFieldWarnsWithPath(tc)
+            defaults.QC.KSLabel.Enable = false;
+            overrides.QC.KSLabel.Typo = true;
+            tc.verifyWarning(@() parseStructParameters(defaults, overrides), ...
+                'parseStructParameters:unknownField');
+        end
+
+        function testEmptyStructDefaultAcceptsAnyFields(tc)
+            defaults.Bombcell.Overrides = struct();
+            overrides.Bombcell.Overrides = struct('maxRPVviolations', 0.05);
+            lastwarn('', '');
+            merged = parseStructParameters(defaults, overrides);
+            tc.verifyEqual(merged.Bombcell.Overrides.maxRPVviolations, 0.05);
+            tc.verifyEmpty(lastwarn());
+        end
+
     end
 end

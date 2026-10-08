@@ -39,7 +39,7 @@ classdef test_CellTypeClassifier_helpers < matlab.unittest.TestCase
         function testEvaluateMismatchedLengthErrors(tc)
             tc.verifyError( ...
                 @() CellTypeClassifier.evaluateLabels([1 2], [1 2 1]), ...
-                'MATLAB:assert:failed');
+                'CellTypeClassifier:lengthMismatch');
         end
 
         function testEvaluateAllNaNReturnsZero(tc)
@@ -62,8 +62,11 @@ classdef test_CellTypeClassifier_helpers < matlab.unittest.TestCase
         end
 
         function testACGCenterBinIsZero(tc)
+            % Self-pairs must not be counted. Random spikes have genuine near-coincidences,
+            % so use a train with a 2 ms refractory period: no distinct pair falls in the
+            % centre bin, and any count there would come from a spike paired with itself.
             rng(2);
-            spike_times = sort(rand(500, 1) * 60);
+            spike_times = cumsum(0.002 + exprnd(0.1, 500, 1));
             bin_size = 0.0005;  lag = 0.1;
             acg = CellTypeClassifier.computeACG(spike_times, bin_size, lag);
             center = (numel(acg) + 1) / 2;
@@ -115,6 +118,42 @@ classdef test_CellTypeClassifier_helpers < matlab.unittest.TestCase
             tc.verifyEqual(binned, zeros(1, 5));
         end
 
+
+        function testSelectConfident(tc)
+            p = [0.95 0.1 0.6 0.85 0.15 NaN];
+            n = [500 500 500 50 500 500];
+            [lab, kept, err] = CellTypeClassifier.selectConfident(p, n, 0.8, 100);
+            tc.verifyEqual(lab, [2 1 NaN NaN 1 NaN]);
+            tc.verifyEqual(kept, logical([1 1 0 0 1 0]));
+            tc.verifyEqual(err, mean([0.05 0.1 0.15]), 'AbsTol', 1e-12);
+            lab_all = CellTypeClassifier.selectConfident(p, n, 0.5, 0);   % every scored unit
+            tc.verifyEqual(lab_all, [2 1 2 2 1 NaN]);
+        end
+
+        function testThinSpikeTrain(tc)
+            rs = RandStream('twister', 'Seed', 4);
+            st = sort(rand(1000, 1) * 100);
+            th = CellTypeClassifier.thinSpikeTrain(st, 100, rs);
+            tc.verifyNumElements(th, 100);
+            tc.verifyTrue(issorted(th) && all(ismember(th, st)));
+            tc.verifyEqual(CellTypeClassifier.thinSpikeTrain(st(1:50), 100, rs), st(1:50));
+        end
+
+        function testParseResponseRules(tc)
+            r = CellTypeClassifier.parseResponseRules({'Construct', 1, "increase"; 'Construct', 2, 'Decrease'});
+            tc.verifyEqual(numel(r), 2);
+            tc.verifyEqual(r(2).Filter, {'Construct', 2});
+            tc.verifyEqual(r(2).Direction, "decrease");
+            s = struct('Field', {'Construct'}, 'Value', {1}, 'Direction', {"increase"});
+            r2 = CellTypeClassifier.parseResponseRules(s);
+            tc.verifyEqual(r2(1).Filter, {'Construct', 1});
+            tc.verifyError(@() CellTypeClassifier.parseResponseRules({'Construct', 1, "up"}), ...
+                'CellTypeClassifier:badResponseRules');
+            % the rules survive parameter merging
+            prm = parseStructParameters(CellTypeClassifier.returnDefaultParams(), ...
+                struct('Bootstrap', struct('ResponseRules', {{'Construct', 1, "increase"; 'Construct', 2, "decrease"}})));
+            tc.verifySize(prm.Bootstrap.ResponseRules, [2 3]);
+        end
     end
 
     methods (Static, Access = private)

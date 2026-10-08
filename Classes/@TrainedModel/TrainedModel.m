@@ -25,6 +25,8 @@ classdef TrainedModel
         GroupLabels             % Class labels (classification) or regression variable name
         TrainDate    datetime   % When the model was trained
         Parameters   struct     % All training parameters for provenance
+        Preprocessing           % Fold preprocessing from MLResult (medians, pipeline, column mask);
+                                % when set, predict() replays it instead of Normalization
     end
 
     methods
@@ -52,7 +54,9 @@ classdef TrainedModel
         % PREDICT  Apply the full pipeline to new objects and return predictions.
         %
         % INPUTS:
-        %   new_objects             - MEArecording array or Unit array
+        %   new_objects             - FeatureStore, RecordingProcessor array, feature table
+        %                             (columns named as in training), or the legacy
+        %                             MEArecording / Unit arrays
         %   normalization_var       - (optional) metadata field for group labels in normalization.
         %                             Only needed if the pipeline uses group normalization.
         %   group_labels_for_norm   - (optional) explicit group labels for new_objects.
@@ -70,7 +74,19 @@ classdef TrainedModel
 
             % Step 1: Extract features using the same specification
             fs = tm.FeatureSpec;
-            if isa(new_objects, 'Unit')
+            if istable(new_objects)
+                input_table = new_objects;
+            elseif isa(new_objects, 'FeatureStore') || isa(new_objects, 'RecordingProcessor')
+                fstore = new_objects;
+                if isa(fstore, 'RecordingProcessor')
+                    fstore = FeatureStore.fromProcessors(fstore);
+                end
+                if isfield(fs, 'level') && fs.level == "Unit"
+                    input_table = fstore.unitMatrix(TrainedModel.specGroups(fs, 'unit_features'));
+                else
+                    input_table = fstore.recordingMatrix(TrainedModel.specGroups(fs, 'network_features'));
+                end
+            elseif isa(new_objects, 'Unit')
                 input_table = FeatureAssembly.unitFeatures(new_objects, fs.unit_features);
             elseif isa(new_objects, 'MEArecording')
                 if fs.level == "Unit"
@@ -79,30 +95,40 @@ classdef TrainedModel
                     input_table = FeatureAssembly.recordingFeatures(new_objects, fs.network_features, fs.unit_features, fs.useClustered);
                 end
             else
-                error('TrainedModel:predict', 'Input must be Unit or MEArecording array.');
+                error('TrainedModel:predict', ['Input must be a FeatureStore, RecordingProcessor ' ...
+                    'array, feature table, or a legacy MEArecording / Unit array.']);
             end
 
-            % Select features by name if specified
-            if ~isempty(fs.feature_names)
-                vars = string(input_table.Properties.VariableNames);
-                sel_vars = ismember(vars, fs.feature_names);
-                input_table = input_table(:, sel_vars);
-            end
-
-            % Step 2: Normalize using the fitted pipeline
-            X = input_table.Variables;
-            X(isnan(X)) = 0;
-
-            if ~isempty(tm.Normalization) && ~isempty(fieldnames(tm.Normalization.FitParams))
-                if isempty(group_labels_for_norm)
-                    group_labels_for_norm = [];
+            if ~isempty(tm.Preprocessing)
+                % Step 2: replay the training fold's imputation, normalisation and column mask
+                % (columns are matched by name, so input column order does not matter)
+                X = MLUtils.applyPreprocessing(tm.Preprocessing, input_table, group_labels_for_norm);
+            else
+                % Select features by name, in training order
+                if ~isempty(fs.feature_names)
+                    vars = string(input_table.Properties.VariableNames);
+                    [found, loc] = ismember(string(fs.feature_names), vars);
+                    if ~all(found)
+                        error('TrainedModel:predict', 'New data lacks %d training feature(s).', sum(~found));
+                    end
+                    input_table = input_table(:, loc);
                 end
-                X = tm.Normalization.transform(X, group_labels_for_norm);
+
+                % Step 2: Normalize using the fitted pipeline
+                X = input_table.Variables;
+                X(isnan(X)) = 0;
+
+                if ~isempty(tm.Normalization) && ~isempty(fieldnames(tm.Normalization.FitParams))
+                    X = tm.Normalization.transform(X, group_labels_for_norm);
+                end
             end
 
             % Step 3: Predict
             if tm.TaskType == "classification"
                 [Y_pred, scores] = tm.Mdl.predict(X);
+                if ~isempty(tm.Preprocessing) && ~isempty(tm.GroupLabels) && isnumeric(Y_pred)
+                    Y_pred = tm.GroupLabels(Y_pred);   % Classifier.classify trains on class indices
+                end
             else
                 Y_pred = tm.Mdl.predict(X);
                 scores = [];
@@ -147,6 +173,7 @@ classdef TrainedModel
 
             tm = TrainedModel(clf_result.Mdl, normalization_pipeline, feature_spec, ...
                 "classification", clf_result.GroupLabels, clf_result.Parameters);
+            tm = TrainedModel.attachPreprocessing(tm, clf_result);
         end
 
         function tm = fromRegressionResult(reg_result, normalization_pipeline, parameters)
@@ -169,6 +196,28 @@ classdef TrainedModel
 
             tm = TrainedModel(reg_result.Mdl, normalization_pipeline, feature_spec, ...
                 "regression", [], reg_result.Parameters);
+            tm = TrainedModel.attachPreprocessing(tm, reg_result);
+        end
+
+    end
+
+    methods (Static, Access = private)
+
+        function g = specGroups(spec, field)
+        % Feature groups stored in the FeatureSpec ("all" when not recorded).
+            g = "all";
+            if isfield(spec, field) && ~isempty(spec.(field))
+                g = string(spec.(field));
+            end
+        end
+
+        function tm = attachPreprocessing(tm, ml_result)
+        % Use the fold's own fitted preprocessing when the result carries it. The feature
+        % list then becomes the pre-mask input names, which applyPreprocessing expects.
+            if ~isempty(ml_result.Preprocessing)
+                tm.Preprocessing = ml_result.Preprocessing;
+                tm.FeatureSpec.feature_names = ml_result.Preprocessing.InputFeatures;
+            end
         end
 
     end

@@ -28,8 +28,8 @@ Network-level E/I analysis using labels from a trained `CellTypeClassifier`:
 Rather than a single ratio, DeePhys quantifies the temporal dynamics of excitatory and inhibitory population activity separately:
 
 - **Population firing rate traces** — smoothed spike density for E and I subpopulations
-- **Burst detection** — ISIN algorithm applied to population traces
-- **Burst-aligned cutouts** — E and I activity in ±window around each burst onset
+- **Burst detection** — burst state where the I/E ratio is low and E activity is above its noise floor; burst peaks from the total population trace
+- **Burst-aligned cutouts** — E and I activity in a ±window around each burst peak (cross-correlation aligned, outliers rejected)
 - **Unit–population correlations** — how strongly each unit's firing tracks its population
 
 ## Example
@@ -45,6 +45,20 @@ ei.extractBurstCutouts();
 ei.PlotBurstCutouts();
 ```
 
+
+Which units form the E and I populations is set by `Labels.Source`: `"graph"` (default,
+`UnitLabels`), `"composition"` (`estimateComposition` labels) or `"confident"` (only units
+passing `confidentLabels`; the others are left out of both populations):
+
+```matlab
+ctc.estimateComposition();
+ei = EIAnalyzer(ctc, struct('Labels', struct('Source', "confident", 'MinProbability', 0.9)));
+```
+
+Labels that come from the classifier carry its features: the drug-free ACG encodes how a unit
+fires around network bursts. Burst-locked E / I dynamics computed with those labels are partly
+built into the labels; responder-defined populations (as in the published analysis) or
+waveform-only labels avoid this.
 ## Next step
 
 [Tutorial 6 — Transfer Learning](06_transfer_learning.md)

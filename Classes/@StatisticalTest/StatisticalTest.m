@@ -29,7 +29,11 @@ classdef StatisticalTest
         % INPUTS:
         %   values       - (N x 1) numeric values
         %   group_labels - (N x 1) group assignments (exactly 2 unique values)
-        %   options      - name-value: 'test' ("auto"|"ranksum"|"ttest"), 'alpha' (0.05)
+        %   options      - name-value: 'test' ("auto"|"ranksum"|"ttest"), 'alpha' (0.05),
+        %                  'Clusters' (N x 1, e.g. culture IDs): units of one culture are
+        %                  not independent samples; with Clusters the test runs on the
+        %                  culture medians (n = number of cultures), avoiding
+        %                  pseudoreplication. For covariates use mixedEffects.
         %
         % OUTPUT:
         %   result - struct with: p, stat, test_name, effect_size (Cohen's d),
@@ -39,8 +43,12 @@ classdef StatisticalTest
                 group_labels
                 options.test string = "auto"
                 options.alpha (1,1) double = 0.05
+                options.Clusters = []
             end
 
+            if ~isempty(options.Clusters)
+                [values, group_labels] = StatisticalTest.clusterMedians(values, group_labels, options.Clusters);
+            end
             groups = unique(group_labels);
             assert(length(groups) == 2, 'StatisticalTest:compareGroups requires exactly 2 groups. Use anova for >2.');
 
@@ -104,7 +112,9 @@ classdef StatisticalTest
         %   values       - (N x 1) numeric values
         %   group_labels - (N x 1) group assignments (>=2 groups)
         %   options      - name-value: 'correction' ("bonferroni"|"holm"|"fdr"),
-        %                  'alpha' (0.05), 'test' ("auto"|"anova"|"kruskalwallis")
+        %                  'alpha' (0.05), 'test' ("auto"|"anova"|"kruskalwallis"),
+        %                  'Clusters' (N x 1): test the cluster (culture) medians instead
+        %                  of the units (see compareGroups)
         %
         % OUTPUT:
         %   result - struct with: p_omnibus, stat, test_name, posthoc (table),
@@ -115,8 +125,12 @@ classdef StatisticalTest
                 options.correction string = "bonferroni"
                 options.alpha (1,1) double = 0.05
                 options.test string = "auto"
+                options.Clusters = []
             end
 
+            if ~isempty(options.Clusters)
+                [values, group_labels] = StatisticalTest.clusterMedians(values, group_labels, options.Clusters);
+            end
             groups = unique(group_labels);
             n_groups = length(groups);
 
@@ -333,6 +347,22 @@ classdef StatisticalTest
             result.R2_marginal = sigma2_fixed / sigma2_total;
             result.R2_conditional = (sigma2_fixed + sigma2_random) / sigma2_total;
             result.formula = formula;
+        end
+
+        function [med, group_of] = clusterMedians(values, group_labels, clusters)
+        % CLUSTERMEDIANS  Median value per cluster (e.g. culture) and the cluster's group.
+        %   Every cluster must belong to exactly one group.
+            values = values(:); group_labels = group_labels(:); clusters = string(clusters(:));
+            assert(numel(clusters) == numel(values), 'StatisticalTest:clusters', ...
+                'Clusters must have one entry per value (%d), got %d.', numel(values), numel(clusters));
+            [cl, ~, ci] = unique(clusters);
+            med = accumarray(ci, values, [numel(cl) 1], @(v) median(v, 'omitnan'));
+            first = accumarray(ci, (1:numel(values))', [numel(cl) 1], @min);
+            group_of = group_labels(first);
+            mixed = accumarray(ci, (1:numel(values))', [numel(cl) 1], ...
+                @(i) numel(unique(string(group_labels(i)))) > 1);
+            assert(~any(mixed), 'StatisticalTest:clusters', ...
+                '%d cluster(s) contain more than one group; use mixedEffects instead.', sum(mixed));
         end
 
         function corrected = holmCorrection(raw_ps)

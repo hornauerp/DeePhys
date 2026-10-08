@@ -1,8 +1,9 @@
-addpath(genpath("/home/phornauer/Git/DeePhys"))
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+addpath(genpath(deephys_root))
 set(0,'defaultFigureRenderer','painters')
 
 %% LOAD DATA
-save_root = "/home/phornauer/Git/DeePhys/Data/Supplement/";
+save_root = fullfile(deephys_root, "Data", "Supplement/");
 load(fullfile(save_root,'figure_S3.mat'))
 
 %% SET PARAMETERS
@@ -33,4 +34,4 @@ leg(2).ItemTokenSize = [4 4];
 setAllFontSizes(fs3, fontsz)
 
 %%
-exportgraphics(fs3,'/home/phornauer/Git/DeePhys/Plots/FigureS3.tif','Resolution',300)
+exportgraphics(fs3,fullfile(deephys_root, 'Plots', 'FigureS3.tif'),'Resolution',300)

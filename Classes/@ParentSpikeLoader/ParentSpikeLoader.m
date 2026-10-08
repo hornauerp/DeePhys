@@ -57,7 +57,11 @@ classdef ParentSpikeLoader
             raw_times  = double(readNPY(npy_times));
             raw_units  = double(readNPY(npy_units));
             spike_times = raw_times / sampling_rate;
-            spike_units = raw_units + 1;  % 0-indexed → 1-indexed
+            % Map to 1-based TemplateIDs (SpikeData uses Kilosort value + 1). Kilosort writes
+            % 0-based values, but parent exports such as qc_output are already 1-based; adding
+            % 1 there gave every unit the ACG of the template before it.
+            base = ParentSpikeLoader.templateIndexBase(parent_path, raw_units);
+            spike_units = raw_units + (1 - base);
 
             % Sort by time (required by CCG)
             [spike_times, sort_idx] = sort(spike_times);
@@ -66,31 +70,22 @@ classdef ParentSpikeLoader
             % Compact local IDs (findgroups preserves ascending template order)
             [unit_ids_local, group_tids] = findgroups(spike_units);
 
-            n_bins = round(2 * acg_params.Lag / acg_params.BinSize) + 1;
-            fprintf('ParentSpikeLoader: computing CCG for %d templates in %s ...\n', ...
+            fprintf('ParentSpikeLoader: computing ACGs for %d templates in %s ...\n', ...
                 numel(group_tids), parent_path);
 
-            [ccg_3d, ~] = CCG(spike_times, unit_ids_local, ...
-                'binSize', acg_params.BinSize, ...
-                'duration', 2 * acg_params.Lag, ...
-                'Fs', 1 / sampling_rate);
-
-            % Build map: TemplateID string → (n_bins×1) ACG vector
+            % One autocorrelogram per template from its own spike train. (The full
+            % template x template CCG held n_templates^2 x n_bins counts only to read
+            % its diagonal: ~3 GB for 1,000 templates at 401 bins.)
+            train_of = splitapply(@(t) {t}, spike_times, unit_ids_local);
             acg_map = containers.Map('KeyType', 'char', 'ValueType', 'any');
             for t = 1:numel(group_tids)
-                raw_acg = double(ccg_3d(:, t, t));
+                raw_acg = CellTypeClassifier.computeACG(train_of{t}, acg_params.BinSize, ...
+                    acg_params.Lag, sampling_rate);
                 mx = max(raw_acg);
                 if mx > 0
                     raw_acg = raw_acg / mx;
                 end
                 acg_map(num2str(group_tids(t))) = raw_acg;
-            end
-
-            % Guard: if CCG produced wrong bin count, fill with zeros
-            if n_bins ~= size(ccg_3d, 1)
-                warning('ParentSpikeLoader:binMismatch', ...
-                    'Expected %d bins, got %d — ACGs zeroed.', n_bins, size(ccg_3d,1));
-                acg_map = containers.Map('KeyType', 'char', 'ValueType', 'any');
             end
 
             cache(key) = acg_map;  %#ok<NASGU>
@@ -101,6 +96,38 @@ classdef ParentSpikeLoader
         % CLEARCACHE  Remove all cached ACG maps to free memory.
             cache = ParentSpikeLoader.getCache();
             remove(cache, keys(cache));
+        end
+
+        function base = templateIndexBase(parent_path, raw_units)
+        % TEMPLATEINDEXBASE  0 if spike_templates.npy is 0-based (Kilosort), 1 if 1-based.
+        %
+        % A 0 value means 0-based. Otherwise the values are compared with the number of
+        % templates (templates.npy header, or phy_ids.npy for QC exports): a maximum equal to
+        % that count is only possible with 1-based values. If neither file settles it, the
+        % Kilosort convention is assumed with a warning.
+            if any(raw_units == 0)
+                base = 0;
+                return
+            end
+            n_templates = NaN;
+            tf = fullfile(parent_path, 'templates.npy');
+            pf = fullfile(parent_path, 'phy_ids.npy');
+            if isfile(tf)
+                shape = readNPYheader(tf);
+                n_templates = shape(1);
+            elseif isfile(pf)
+                n_templates = numel(readNPY(pf));
+            end
+            if ~isnan(n_templates) && max(raw_units) >= n_templates
+                base = 1;
+            else
+                base = 0;
+                if isnan(n_templates)
+                    warning('ParentSpikeLoader:indexBaseAmbiguous', ...
+                        ['%s: spike_templates has no 0 and no templates.npy/phy_ids.npy to check ' ...
+                         'against; assuming 0-based (Kilosort) template values.'], parent_path);
+                end
+            end
         end
 
     end

@@ -14,6 +14,19 @@ function connectivity = computeConnectivityCCG(spike_times, spike_units, n_units
 %                     .PreStart    (default 0.0032) — baseline window start (pre-spike)
 %                     .PostStart   (default 0.0008) — post-spike detection window start
 %                     .PostEnd     (default 0.004)  — post-spike detection window end
+%                   .InhibitoryCriterion (default "strict"):
+%                     "strict" — causal trough below both the pre-window MEAN (no symmetric
+%                         troughs, e.g. split units) and the slow flank level at 10 ms to the CCG
+%                         edge (no reverse artefact of excitation, see below): 0 % false calls in
+%                         simulated nulls, true one-sided inhibition still detected.
+%                     "cellexplorer" — as ce_MonoSynConvClick (CellExplorer, Petersen et al.
+%                         2021; the previous DeePhys default): causal trough below the Poisson
+%                         bound of the pre-window MAXIMUM. CellExplorer leaves inhibitory
+%                         detection off by default because it "finds many false positive
+%                         connections" and expects manual curation. One source: a strong
+%                         excitatory link j -> i inflates the smoothed prediction next to its
+%                         peak, so i -> j is called inhibitory (100 % of simulated cases).
+%                   Excitatory detection is the same in both (CellExplorer criterion).
 %
 % OUTPUTS:
 %   connectivity - struct with fields:
@@ -54,6 +67,8 @@ function connectivity = computeConnectivityCCG(spike_times, spike_units, n_units
     if ~isfield(ccg_params, 'PreStart'),    ccg_params.PreStart    = 0.0032; end
     if ~isfield(ccg_params, 'PostStart'),   ccg_params.PostStart   = 0.0008; end
     if ~isfield(ccg_params, 'PostEnd'),     ccg_params.PostEnd     = 0.004;  end
+    if ~isfield(ccg_params, 'InhibitoryCriterion'), ccg_params.InhibitoryCriterion = "strict"; end
+    strict_inh  = lower(string(ccg_params.InhibitoryCriterion)) == "strict";
     bonf_window = ccg_params.BonfWindow;
     pre_start   = ccg_params.PreStart;
     post_start  = ccg_params.PostStart;
@@ -62,6 +77,9 @@ function connectivity = computeConnectivityCCG(spike_times, spike_units, n_units
     nBonf    = round(bonf_window / binSize) * 2;
     prebins  = round(halfBin - pre_start / binSize):halfBin;
     postbins = round(halfBin + post_start / binSize):round(halfBin + post_end / binSize);
+    % slow baseline for inhibition: lags of 10 ms up to the CCG edge on both sides
+    flankbins = [1:max(0, halfBin - round(0.010 / binSize)), ...
+                 min(nBins + 1, halfBin + round(0.010 / binSize)):nBins];
 
     Pval   = nan(nBins, nCel, nCel);
     Pred   = zeros(nBins, nCel, nCel);
@@ -108,12 +126,21 @@ function connectivity = computeConnectivityCCG(spike_times, spike_units, n_units
                 sig_con(n_exc, :) = [cell2ID, refcellID];
             end
 
-            sigpost_inh = min(cch(postbins)) < poissinv(alpha, max(cch(prebins)));
+            % Inhibition (see InhibitoryCriterion in the header): "cellexplorer" compares the
+            % causal trough with the pre-window maximum, as ce_MonoSynConvClick; "strict" with
+            % the pre-window mean and the slow flank level.
+            if strict_inh
+                flank_ok = @(c) isempty(flankbins) || min(c(postbins)) < poissinv(alpha, mean(c(flankbins)));
+                sigpost_inh = min(cch(postbins)) < poissinv(alpha, mean(cch(prebins))) && flank_ok(cch);
+                sigpre_inh  = min(cchud(postbins)) < poissinv(alpha, mean(cchud(prebins))) && flank_ok(cchud);
+            else
+                sigpost_inh = min(cch(postbins)) < poissinv(alpha, max(cch(prebins)));
+                sigpre_inh  = min(cchud(postbins)) < poissinv(alpha, max(cchud(prebins)));
+            end
             if any(sig_inh(postbins)) && sigpost_inh
                 n_inh = n_inh + 1;
                 sig_con_inh(n_inh, :) = [refcellID, cell2ID];
             end
-            sigpre_inh = min(cchud(postbins)) < poissinv(alpha, max(cchud(prebins)));
             if any(sigud_inh(postbins)) && sigpre_inh
                 n_inh = n_inh + 1;
                 sig_con_inh(n_inh, :) = [cell2ID, refcellID];

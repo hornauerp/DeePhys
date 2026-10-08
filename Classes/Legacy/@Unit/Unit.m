@@ -9,7 +9,7 @@ classdef Unit < handle
         ReferenceWaveform
         ReferenceElectrode
         TemplateID
-        StableID string     % Deterministic ID: hash of (ChipID, PlatingDate, TemplateID, ReferenceElectrode)
+        StableID string     % Deterministic ID: hash of (ChipID, PlatingDate, sorting folder, TemplateID, ReferenceElectrode)
         SpikeTimes
         WaveformFeatures
         ActivityFeatures
@@ -151,18 +151,22 @@ classdef Unit < handle
 
         function generateStableID(unit)
         % GENERATESTABLEID  Create deterministic identifier from recording metadata + unit identity.
-        %   ID is a hex string derived from (ChipID, PlatingDate, TemplateID, ReferenceElectrode).
-        %   Deterministic: same inputs always produce the same ID.
+        %   Hash of (ChipID, PlatingDate, sorting folder, TemplateID, ReferenceElectrode). The
+        %   sorting folder (SpikeData.legacySortingKey) separates units of different sortings of
+        %   the same culture; segments of one sorting share it. Same inputs, same ID.
             if isempty(unit.MEArecording)
                 return
             end
             md = unit.MEArecording.Metadata;
             chip = "unknown";
             plating = "unknown";
+            sorting = "";
             if isfield(md, 'ChipID'),      chip    = string(md.ChipID);      end
             if isfield(md, 'PlatingDate'),  plating = string(md.PlatingDate); end
-            key = sprintf('%s_%s_%d_%d', chip, plating, unit.TemplateID, unit.ReferenceElectrode);
-            unit.StableID = string(dec2hex(abs(java.lang.String(key).hashCode()), 8));
+            if isfield(md, 'InputPath'),    sorting = SpikeData.legacySortingKey(md.InputPath); end
+            unit.StableID = string(paramHash(struct('ChipID', char(chip), 'PlatingDate', char(plating), ...
+                'Sorting', char(sorting), 'TemplateID', double(unit.TemplateID), ...
+                'ReferenceElectrode', double(unit.ReferenceElectrode))));
         end
 
         function computeACG(unit, params)

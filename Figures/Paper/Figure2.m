@@ -1,3 +1,4 @@
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
 %% Batch 3 FCDI
 rg = RecordingGroup(fcdi_array);
 
@@ -106,4 +107,4 @@ leg.ItemTokenSize = [5 5];
 setAllFontSizes(f2, fontsz)
 
 %%
-exportgraphics(f2,'/home/phornauer/Git/DeePhys/Plots/Figure2.tif','Resolution',300)
+exportgraphics(f2,fullfile(deephys_root, 'Plots', 'Figure2.tif'),'Resolution',300)

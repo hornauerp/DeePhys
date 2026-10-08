@@ -71,7 +71,12 @@ classdef MLPipeline
             else
                 switch alg
                     case 'svm'
-                        clf = fitcsvm(X_train, Y_train, 'Prior', params.RF.Prior);
+                        if numel(unique(Y_train)) > 2
+                            % fitcsvm is binary-only; one-vs-one ECOC for multiclass labels
+                            clf = fitcecoc(X_train, Y_train, 'Learners', templateSVM(), 'Prior', params.RF.Prior);
+                        else
+                            clf = fitcsvm(X_train, Y_train, 'Prior', params.RF.Prior);
+                        end
                     case 'cnb'
                         clf = fitcnb(X_train, Y_train, 'Prior', params.RF.Prior);
                     case 'knn'
@@ -79,17 +84,33 @@ classdef MLPipeline
                     case 'rf'
                         t = templateTree('Surrogate', params.RF.Surrogate, ...
                             'MinLeafSize', params.RF.MinLeafSize, ...
-                            'NumVariablesToSample', params.RF.NumVariablesToSample, ...
+                            'NumVariablesToSample', MLPipeline.resolveNumVariables( ...
+                                params.RF.NumVariablesToSample, size(X_train, 2), "classification"), ...
                             'Reproducible', params.RF.Reproducible);
                         clf = fitcensemble(X_train, Y_train, 'Method', 'Bag', 'Prior', params.RF.Prior, ...
                             'NumLearningCycles', params.RF.NumCycles, ...
                             'Learners', t, 'Options', statset("UseParallel", true));
                 end
                 if alg == "rf"
-                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classerror');  % OOB ≈ held-out performance, not true training accuracy
+                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classiferror');  % OOB ≈ held-out performance, not true training accuracy
                 else
-                    train_acc = 1 - resubLoss(clf, 'LossFun', 'classerror');  % resubstitution; optimistic (~1.0 for SVM/KNN)
+                    train_acc = 1 - resubLoss(clf, 'LossFun', 'classiferror');  % resubstitution; optimistic (~1.0 for SVM/KNN)
                 end
+            end
+        end
+
+        function n = resolveNumVariables(spec, n_features, task)
+        % RESOLVENUMVARIABLES  Predictors sampled per split. "auto" follows Breiman (2001):
+        %   sqrt(F) for classification, F/3 for regression. templateTree itself only
+        %   accepts a positive integer or 'all' ('all' = plain bagging, not a random forest).
+            if (ischar(spec) || isstring(spec)) && string(spec) == "auto"
+                if task == "classification"
+                    n = max(1, round(sqrt(n_features)));
+                else
+                    n = max(1, round(n_features / 3));
+                end
+            else
+                n = spec;
             end
         end
 
@@ -122,10 +143,9 @@ classdef MLPipeline
                         mdl = fitrsvm(X_train, Y_train, ...
                             'OptimizeHyperparameters', 'all', ...
                             'HyperparameterOptimizationOptions', opt_opts);
-                    case 'knn'
-                        mdl = fitrknn(X_train, Y_train, ...
-                            'OptimizeHyperparameters', 'all', ...
-                            'HyperparameterOptimizationOptions', opt_opts);
+                    case 'knn'   % MATLAB has no fitrknn: K chosen by leave-one-out error
+                        mdl = KNNRegressionModel(X_train, Y_train, ...
+                            KNNRegressionModel.selectK(X_train, Y_train));
                     case 'rf'
                         hyperparams = {'NumLearningCycles', 'MinLeafSize', 'MaxNumSplits', 'NumVariablesToSample'};
                         t = templateTree('Reproducible', true);
@@ -140,12 +160,13 @@ classdef MLPipeline
                 switch alg
                     case 'svm'
                         mdl = fitrsvm(X_train, Y_train);
-                    case 'knn'
-                        mdl = fitrknn(X_train, Y_train);
+                    case 'knn'   % MATLAB has no fitrknn
+                        mdl = KNNRegressionModel(X_train, Y_train, 5);
                     case 'rf'
                         t = templateTree('Surrogate', params.RF.Surrogate, ...
                             'MinLeafSize', params.RF.MinLeafSize, ...
-                            'NumVariablesToSample', params.RF.NumVariablesToSample, ...
+                            'NumVariablesToSample', MLPipeline.resolveNumVariables( ...
+                                params.RF.NumVariablesToSample, size(X_train, 2), "regression"), ...
                             'Reproducible', params.RF.Reproducible);
                         mdl = fitrensemble(X_train, Y_train, 'Method', 'Bag', ...
                             'NumLearningCycles', params.RF.NumCycles, ...

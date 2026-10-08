@@ -14,26 +14,80 @@ classdef MLUtils
         %
         %   g = MLUtils.resolveGroups(fs.UnitTable.RecordingID, height(X))
         %   g = MLUtils.resolveGroups([], height(X))   % → []
-            if isempty(groups_input)
+            labels = MLUtils.groupLabels(groups_input, N);
+            if isempty(labels)
                 g = [];
-                return
-            end
-            if ischar(groups_input) || isstring(groups_input)
-                [~, ~, g] = unique(string(groups_input(:)), 'stable');
-            elseif isnumeric(groups_input) || iscategorical(groups_input)
-                [~, ~, g] = unique(groups_input(:), 'stable');
             else
-                g = [];
-                return
-            end
-            if numel(g) ~= N
-                error('MLUtils:resolveGroups', ...
-                    'Group vector length (%d) must match number of observations (%d).', ...
-                    numel(g), N);
+                [~, ~, g] = unique(labels, 'stable');
             end
         end
 
-        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
+        function [permute_fn, scheme] = labelPermuter(Y, groups)
+        % LABELPERMUTER  Label shuffle for permutation tests that respects the CV groups.
+        %
+        %   [permute_fn, scheme] = MLUtils.labelPermuter(Y, groups)
+        %   Y_perm = permute_fn();   % uses the current random number generator
+        %
+        % scheme "group": the label is constant within each group (e.g. genotype per
+        %   culture), so whole groups are relabelled; shuffling single units would break
+        %   the group structure and make the null too easy to beat.
+        % scheme "within-group": labels vary within groups; they are shuffled within each.
+        % scheme "observation": no groups.
+            Y = Y(:);
+            if isempty(groups)
+                scheme = "observation";
+                permute_fn = @() Y(randperm(numel(Y)));
+                return
+            end
+            groups = groups(:);
+            [~, ~, y_idx] = unique(Y);
+            if all(splitapply(@(v) all(v == v(1)), y_idx, groups))
+                scheme = "group";
+                first_row = splitapply(@(i) i(1), (1:numel(Y))', groups);
+                group_y = Y(first_row);
+                permute_fn = @() MLUtils.indexBy(group_y(randperm(numel(group_y))), groups);
+            else
+                scheme = "within-group";
+                rows_of = splitapply(@(i) {i}, (1:numel(Y))', groups);
+                permute_fn = @() MLUtils.shuffleWithin(Y, rows_of);
+            end
+        end
+
+        function y = indexBy(v, idx)
+            y = v(idx);
+        end
+
+        function Y = shuffleWithin(Y, rows_of)
+            Y0 = Y;
+            for gi = 1:numel(rows_of)
+                rows = rows_of{gi};
+                Y(rows) = Y0(rows(randperm(numel(rows))));
+            end
+        end
+
+        function labels = groupLabels(groups_input, N)
+        % GROUPLABELS  Group vector as an (N x 1) string column that keeps the group names, or [].
+        %
+        % Use for normalisation groups: fitted per-group statistics are keyed by these names,
+        % so new data from the same plate/chip maps back to them and an unseen batch is
+        % recognised as unseen. (Indices from resolveGroups are only valid within one call.)
+        % Accepts string, char, cellstr, numeric, logical, categorical and datetime input.
+            if isempty(groups_input)
+                labels = [];
+                return
+            end
+            if ischar(groups_input)
+                groups_input = cellstr(groups_input);
+            end
+            labels = string(groups_input(:));
+            if numel(labels) ~= N
+                error('MLUtils:resolveGroups', ...
+                    'Group vector length (%d) must match number of observations (%d).', ...
+                    numel(labels), N);
+            end
+        end
+
+        function [X_train, X_test, feat_names, prep] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
         % NORMALIZEFEATURES  Impute NaN, normalise, drop bad columns — for train/test splits.
         %
         % Fits the normalization pipeline on training rows, applies to test rows.
@@ -51,6 +105,8 @@ classdef MLUtils
         %   X_train    - (N_train x F') normalised training matrix (numeric)
         %   X_test     - (N_test  x F') normalised test matrix, or [] if test_idx is empty
         %   feat_names - (1 x F') string feature names, bad columns removed
+        %   prep       - struct to replay this preprocessing on new data via
+        %                MLUtils.applyPreprocessing (stored as MLResult.Preprocessing)
             if nargin < 5 || isempty(pipeline_type)
                 pipeline_type = "";
             end
@@ -68,6 +124,7 @@ classdef MLUtils
 
             % Impute NaN per column using training-set median
             all_nan_cols = false(1, size(mat, 2));
+            meds = zeros(1, size(mat, 2));
             for col = 1:size(mat, 2)
                 train_col = mat(train_idx, col);
                 med = median(train_col(~isnan(train_col)));
@@ -75,6 +132,7 @@ classdef MLUtils
                     med = 0;
                     all_nan_cols(col) = true;
                 end
+                meds(col) = med;
                 mat(isnan(mat(:, col)), col) = med;
             end
             if any(all_nan_cols)
@@ -107,7 +165,7 @@ classdef MLUtils
             else
                 if use_combat
                     g_test   = norm_groups(test_idx);
-                    cov_test = covariate_labels(test_idx);
+                    cov_test = [];   % never use test labels: they are what is being predicted
                 elseif ~isempty(norm_groups)
                     g_test   = norm_groups(test_idx);
                     cov_test = [];
@@ -118,14 +176,55 @@ classdef MLUtils
                 X_test = np.transform(mat(test_idx, :), g_test, CovariateLabels=cov_test);
             end
 
-            % Drop zero-variance / all-NaN columns (fitted on training; applied to both)
-            bad = any(isnan(X_train));
+            % Drop zero-variance / all-NaN columns. The mask is decided on training rows only
+            % so the feature set does not depend on the test fold and can be replayed on new
+            % data; remaining test NaNs (e.g. a constant column within a test group) are set to
+            % 0, the training mean after the final global z-score.
+            bad = any(isnan(X_train), 1);
             if ~isempty(X_test)
-                bad = bad | any(isnan(X_test));
                 X_test(:, bad) = [];
+                X_test(isnan(X_test)) = 0;
             end
             X_train(:, bad) = [];
+            prep = struct('InputFeatures', feat_names, 'Medians', meds, 'Pipeline', np, ...
+                'Keep', ~bad, 'UsesGroups', use_combat || ~isempty(norm_groups));
             feat_names(bad) = [];
+        end
+
+        function X_out = applyPreprocessing(prep, X, norm_groups)
+        % APPLYPREPROCESSING  Replay a fold's fitted preprocessing on new data.
+        %
+        % prep is the struct returned by normalizeFeatures (stored as result.Preprocessing):
+        % training medians impute NaN, the fitted NormalizationPipeline transforms, and the
+        % training column mask is applied. X may be a table (columns matched by name) or a
+        % numeric matrix with the original column order.
+            if istable(X)
+                [found, loc] = ismember(prep.InputFeatures, string(X.Properties.VariableNames));
+                if ~all(found)
+                    error('MLUtils:missingFeatures', 'New data lacks %d training feature(s), e.g. "%s".', ...
+                        sum(~found), prep.InputFeatures(find(~found, 1)));
+                end
+                mat = X{:, loc};
+            else
+                mat = double(X);
+                assert(size(mat, 2) == numel(prep.InputFeatures), 'MLUtils:featureCount', ...
+                    'Expected %d columns, got %d.', numel(prep.InputFeatures), size(mat, 2));
+            end
+            nan_mask = isnan(mat);
+            med_mat = repmat(prep.Medians, size(mat, 1), 1);
+            mat(nan_mask) = med_mat(nan_mask);
+            if prep.UsesGroups
+                if isempty(norm_groups)
+                    error('MLUtils:normGroupsRequired', ...
+                        'The model was trained with group normalisation; pass the normalisation groups of the new data.');
+                end
+                g = MLUtils.groupLabels(norm_groups, size(mat, 1));
+            else
+                g = [];
+            end
+            X_out = prep.Pipeline.transform(mat, g, CovariateLabels=[]);
+            X_out = X_out(:, prep.Keep);
+            X_out(isnan(X_out)) = 0;
         end
 
         function [norm_data, feat_names] = normalizeAll(X, norm_groups)
@@ -191,8 +290,8 @@ classdef MLUtils
                 [~, maj_idx] = max(counts);
                 [~, min_idx] = min(counts);
                 warning('Classifier:imbalanced', ...
-                    'Class imbalance detected (%.1f:1 ratio). Majority "%s" (%d) vs minority "%s" (%d). ' ...
-                    'Consider opts.Prior = ''uniform'' to weight classes equally.', ...
+                    ['Class imbalance detected (%.1f:1 ratio). Majority "%s" (%d) vs minority "%s" (%d). ' ...
+                    'Consider opts.Prior = ''uniform'' to weight classes equally.'], ...
                     ratio, string(classes(maj_idx)), counts(maj_idx), ...
                     string(classes(min_idx)), counts(min_idx));
             end

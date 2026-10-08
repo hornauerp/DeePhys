@@ -1,4 +1,5 @@
-addpath(genpath("/home/phornauer/Git/DeePhys"))
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+addpath(genpath(deephys_root))
 
 %% Generate sorting_path_list 
 root_path = "/net/bs-filesvr02/export/group/hierlemann/intermediate_data/Mea1k/phornauer/";
@@ -52,4 +53,4 @@ xticklabels([0,60])
 ylabel('Units')
 %title('A53T','Color',red)
 setAllFontSizes(fs3a, fontsz)
-exportgraphics(fs3a,'/home/phornauer/Git/DeePhys/Plots/FigureS3a.tif','Resolution',300)
+exportgraphics(fs3a,fullfile(deephys_root, 'Plots', 'FigureS3a.tif'),'Resolution',300)

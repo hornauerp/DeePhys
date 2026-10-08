@@ -1,8 +1,9 @@
-addpath(genpath("/home/phornauer/Git/DeePhys"))
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+addpath(genpath(deephys_root))
 set(0,'defaultFigureRenderer','painters')
 
 %% LOAD DATA
-save_root = "/home/phornauer/Git/DeePhys/Data/Figure6";
+save_root = fullfile(deephys_root, "Data", "Figure6");
 load(fullfile(save_root,'qp_results.mat'))
 
 %% PREPARE DATA
@@ -71,7 +72,7 @@ leg.ItemTokenSize = [4 4]; leg.Position(2) = 0.96;
 setAllFontSizes(f6, fontsz)
 
 %%
-exportgraphics(f6,'/home/phornauer/Git/DeePhys/Plots/Figure6.tif','Resolution',300)
+exportgraphics(f6,fullfile(deephys_root, 'Plots', 'Figure6.tif'),'Resolution',300)
 
 %% OLD VERSION
 f6 = figure('Color','w','Position',[1200 200 595 595],'Units','points');

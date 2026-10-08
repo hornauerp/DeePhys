@@ -27,7 +27,8 @@ classdef test_computeBursts < matlab.unittest.TestCase
             [~, features] = computeBursts(st, su, fr, cv, n_units, max(st) + 1, params);
             expected = ["MeanInterBurstInterval","BurstDuration","RiseTime","FallTime", ...
                 "PeakFR","StdFR","StdBurstDuration","StdInterBurstInterval", ...
-                "IntraFiringRate","InterFiringRate"];
+                "IntraFiringRate","InterFiringRate", ...
+                "BurstWidth","BurstRise","BurstFall","BurstFWHM"];
             tc.verifyEqual(string(features.Properties.VariableNames), expected);
         end
 
@@ -41,6 +42,22 @@ classdef test_computeBursts < matlab.unittest.TestCase
             params.Outlier = struct('Method', '', 'ThresholdFactor', 3);
             [bursts, features] = computeBursts(st, su, fr, cv, 3, 100, params);
             tc.verifyTrue(isempty(bursts.T_start) || all(isnan(features.Variables)));
+        end
+
+        function testJointISINMethod(tc)
+            % "ISINJoint" (detectNetworkBursts) through computeBursts: bursts with peak times and
+            % diagnostics; no bursts in independent units
+            [st, su, truth] = simulateNetworkBursts(Seed=4);
+            nu = max(su); fr = accumarray(su, 1, [nu 1]) / 300; cv = ones(nu, 1);
+            p = struct('Method', "ISINJoint", 'Outlier', struct('Method', '', 'ThresholdFactor', 3));
+            [~, b, features] = evalc('computeBursts(st, su, fr, cv, nu, 300, p)');
+            tc.verifyEqual(numel(b.T_start), numel(truth.T_start));
+            tc.verifyNumElements(b.T_peak, numel(b.T_start));
+            tc.verifyTrue(b.Info.Gate);
+            tc.verifyClass(features, 'table');
+            [st0, su0] = simulateNetworkBursts(Mode="none", Seed=4);
+            [~, b0] = evalc('computeBursts(st0, su0, fr, cv, nu, 300, p)');
+            tc.verifyEmpty(b0.T_start);
         end
 
         function testOutputStructFields(tc)
@@ -74,8 +91,8 @@ classdef test_computeBursts < matlab.unittest.TestCase
             inter_spikes = sort(rand(50, 1) * 100);
             st = [st; inter_spikes];
             su = [su; randi(5, 50, 1)];
-            [st, idx] = sort(st);
-            su = su(idx);
+            [spike_times, idx] = sort(st);
+            spike_units = su(idx);
         end
     end
 end

@@ -6,22 +6,36 @@ function diagnosticOptimization(ctc, results)
 %   Rows 1-2, cols 3-4: (c) Best vs default   — text table with % change annotations
 %   Rows 3-4, tiles 9-15: (b) Parameter marginals — one scatter per variable
 %
-% Called at end of optimizeHyperparameters when Diagnostics.Enable = true.
-% Can also be called independently.
+% Called at the end of optimizeUnsupervisedUMAP when Diagnostics.Enable = true.
+% Can also be called independently with its results struct.
 
 arguments
     ctc     CellTypeClassifier
     results struct
 end
 
-% Parameter display metadata
-param_names  = {'MinDist', 'Spread', 'SupervisedNDims', 'SupervisedNNeighbors', ...
-                'TargetWeight', 'ACGWeight', 'WaveformWeight'};
-param_labels = {'MinDist', 'Spread', 'NDims', 'NNeigh', 'TgtWt', 'ACGWt', 'WFWt'};
-range_fields = {'MinDistRange', 'SpreadRange', 'SupervisedNDimsRange', ...
-                'SupervisedNNeighborsRange', 'TargetWeightRange', ...
-                'ACGWeightRange', 'WaveformWeightRange'};
-n_params = numel(param_names);
+% Optimised parameters: results.bestParams holds one struct per parameter group
+% (UMAP, Community); defaults come from the same groups of returnDefaultParams.
+def_p  = CellTypeClassifier.returnDefaultParams();
+groups = fieldnames(results.bestParams);
+param_names = {}; best_vals = []; def_vals = [];
+for g = 1:numel(groups)
+    s = results.bestParams.(groups{g});
+    f = fieldnames(s);
+    for k = 1:numel(f)
+        param_names{end+1} = f{k}; %#ok<AGROW>
+        best_vals(end+1, 1) = s.(f{k}); %#ok<AGROW>
+        if isfield(def_p, groups{g}) && isfield(def_p.(groups{g}), f{k})
+            def_vals(end+1, 1) = def_p.(groups{g}).(f{k}); %#ok<AGROW>
+        else
+            def_vals(end+1, 1) = NaN; %#ok<AGROW>
+        end
+    end
+end
+param_labels = param_names;
+range_fields = strcat(param_names, 'Range');
+is_integer   = ismember(param_names, {'NNeighbors', 'NDims'});
+n_params     = min(numel(param_names), 7);   % marginal tiles 9..15
 
 % Unpack BayOpt results
 bo          = results.bayesoptResult;
@@ -42,18 +56,6 @@ for ei = 1:n_evals
     end
 end
 
-% Best parameter values (from results struct)
-best = results.bestParams.UMAP;
-best_vals = [best.MinDist; best.Spread; best.SupervisedNDims; ...
-             best.SupervisedNNeighbors; best.TargetWeight; ...
-             best.ACGWeight; best.WaveformWeight];
-
-% Default parameter values (from class defaults, not user overrides)
-def_p = CellTypeClassifier.returnDefaultParams();
-def_vals = [def_p.UMAP.MinDist; def_p.UMAP.Spread; def_p.UMAP.SupervisedNDims; ...
-            def_p.UMAP.SupervisedNNeighbors; def_p.UMAP.TargetWeight; ...
-            def_p.UMAP.ACGWeight; def_p.UMAP.WaveformWeight];
-
 p_bo = ctc.Parameters.BayesianOptimization;
 
 % ── Figure -------------------------------------------------------------------
@@ -73,8 +75,7 @@ try
     hold off;
     xlabel('Iteration');
     ylabel('Objective');
-    title(sprintf('Convergence (%d evals, %s)', n_evals, p_bo.ObjectiveMetric), ...
-        'Interpreter', 'none');
+    title(sprintf('Convergence (%d evals)', n_evals), 'Interpreter', 'none');
     legend('Location', 'northeast', 'Box', 'off');
     box off;
 catch ME
@@ -92,9 +93,7 @@ try
     sep    = repmat('-', 1, 56);
     lines  = {header, sep};
 
-    is_integer = [false false true true false false false];   % per param_names order
-
-    for pi = 1:n_params
+    for pi = 1:numel(param_names)
         def_v = def_vals(pi);
         opt_v = best_vals(pi);
         if abs(def_v) > 1e-10
@@ -159,11 +158,13 @@ for pi = 1:n_params
         end
 
         % Search-space boundaries
-        range_v = p_bo.(range_fields{pi});
-        xline(range_v(1), '--', 'Color', [0.45 0.45 0.45], 'LineWidth', 0.8, ...
-            'HandleVisibility', 'off');
-        xline(range_v(2), '--', 'Color', [0.45 0.45 0.45], 'LineWidth', 0.8, ...
-            'HandleVisibility', 'off');
+        if isfield(p_bo, range_fields{pi})
+            range_v = p_bo.(range_fields{pi});
+            xline(range_v(1), '--', 'Color', [0.45 0.45 0.45], 'LineWidth', 0.8, ...
+                'HandleVisibility', 'off');
+            xline(range_v(2), '--', 'Color', [0.45 0.45 0.45], 'LineWidth', 0.8, ...
+                'HandleVisibility', 'off');
+        end
         hold off;
 
         xlabel(param_labels{pi}, 'FontSize', 8);

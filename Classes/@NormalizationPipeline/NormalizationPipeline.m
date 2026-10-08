@@ -39,9 +39,9 @@ classdef NormalizationPipeline < handle
         %   group_labels    - (N x 1) group assignment vector (numeric or categorical).
         %                     Used by group_zscore and combat steps. Pass [] if neither
         %                     step is present.
-        %   CovariateLabels - (N x 1) biological class labels to protect during ComBat
-        %                     correction. Required when pipeline contains a 'combat' step.
-        %                     Pass [] (default) to correct without protecting covariates.
+        %   CovariateLabels - (N x 1) biological class labels of the TRAINING rows, used to
+        %                     separate class composition from batch effects when ComBat
+        %                     estimates them. Pass [] (default) to estimate without.
         %
         % OUTPUTS:
         %   X_out - normalized training matrix
@@ -94,9 +94,10 @@ classdef NormalizationPipeline < handle
         % TRANSFORM  Apply previously fitted normalization to new data.
         %
         %   X_out = np.transform(X_test, group_labels_test)
-        %   X_out = np.transform(X_test, group_labels_test, CovariateLabels=Y_test)
         %
-        % CovariateLabels is required when the pipeline contains a 'combat' step.
+        % Never pass labels of the data being transformed: ComBat's correction is label-free
+        % (labels only inform fitting), and CovariateLabels is ignored here. It is accepted
+        % for backward compatibility only.
             arguments
                 np NormalizationPipeline
                 X {isnumeric}
@@ -179,26 +180,40 @@ end
 function [X_out, fit] = fitGroupZscore(X, group_labels)
 % Fit per-group z-score on training data. Returns transformed X and fit struct.
 % Groups with < 2 samples cannot be z-scored; their means/sds are set to NaN
-% so that transform() routes them to the pooled-statistics fallback.
+% so that transform() routes them to the pooled-statistics fallback (also applied here,
+% so training and new rows of a singleton group are treated the same way).
+% Labels are stored as strings: the statistics are keyed by group name, so new data from
+% the same plate/chip maps back to them whatever type the caller used.
+    group_labels = string(group_labels(:));
     groups = unique(group_labels);
     fit.groups = groups;
     fit.means = nan(length(groups), size(X, 2));
     fit.sds   = nan(length(groups), size(X, 2));
     X_out = X;
+    singleton = false(size(X, 1), 1);
     for g = 1:length(groups)
         mask = (group_labels == groups(g));
         if sum(mask) < 2
             warning('NormalizationPipeline:singletonGroup', ...
                 'Group has only %d sample(s) — group z-score skipped; pooled statistics used instead.', sum(mask));
+            singleton = singleton | mask;
         else
             [X_out(mask,:), fit.means(g,:), fit.sds(g,:)] = normalize(X(mask,:));
         end
+    end
+    valid_g = ~any(isnan(fit.means), 2);
+    if any(singleton) && any(valid_g)
+        fallback_sd = mean(fit.sds(valid_g, :), 1);
+        fallback_sd(fallback_sd == 0) = 1;
+        X_out(singleton, :) = normalize(X(singleton, :), 'center', mean(fit.means(valid_g, :), 1), 'scale', fallback_sd);
     end
 end
 
 function X_out = applyGroupZscore(X, group_labels, fit)
 % Apply previously fitted per-group z-score to new data.
 % Unseen groups and singleton groups (NaN means) fall back to pooled training statistics.
+    group_labels = string(group_labels(:));
+    fit.groups = string(fit.groups(:));
     X_out = X;
     known_mask = false(size(X, 1), 1);
     for g = 1:length(fit.groups)
@@ -209,7 +224,20 @@ function X_out = applyGroupZscore(X, group_labels, fit)
         end
         % Groups with NaN means (singletons during fit) remain in ~known_mask → pooled fallback
     end
-    % Handle unseen groups and singleton groups: use mean of valid fitted group statistics
+    % Groups unseen during fit (e.g. the held-out recording in recording-grouped CV) are
+    % z-scored with their own statistics. Per-group z-scoring is label-free, so this does not
+    % leak; using training statistics instead would leave the group offset in the data.
+    [new_groups, ~, gidx] = unique(group_labels(~known_mask));
+    rows = find(~known_mask);
+    for g = 1:numel(new_groups)
+        r = rows(gidx == g);
+        if numel(r) >= 2 && ~ismember(new_groups(g), fit.groups)
+            [X_out(r, :), ~, sd_g] = normalize(X(r, :));
+            X_out(r, sd_g == 0) = 0;
+            known_mask(r) = true;
+        end
+    end
+    % Singleton groups: use mean of valid fitted group statistics
     if any(~known_mask)
         warning('NormalizationPipeline:unseenGroup', ...
             '%d samples belong to unseen or singleton groups — using pooled training statistics.', sum(~known_mask));
@@ -227,12 +255,20 @@ function X_out = applyGroupZscore(X, group_labels, fit)
 end
 
 function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
-% Parametric empirical Bayes batch correction (Johnson et al., 2007).
+% Parametric empirical Bayes batch correction (Johnson, Li & Rabinovic, 2007).
 %
-% Estimates batch-specific additive (gamma) and multiplicative (delta) effects
-% on standardized residuals after removing biological signal via OLS. Empirical
-% Bayes shrinkage pools information across features to stabilize estimates for
-% small batches.
+% Model per feature g: x = alpha + C*beta + gamma_b + sqrt(delta_b) * sigma * e.
+%   1. Fit batch and covariate effects jointly (OLS); sigma^2 is the within-batch
+%      residual variance, alpha the size-weighted grand mean.
+%   2. Standardise: s = (x - alpha - C*beta) / sigma.
+%   3. Per batch, gamma_hat / delta_hat are the mean / variance of s. Their priors are
+%      estimated across features within each batch (normal for gamma, inverse gamma
+%      for delta) and the posteriors are solved iteratively.
+%
+% Covariate labels are used only to estimate the batch effects (so that a batch's class
+% composition is not mistaken for a batch effect). The correction itself does not use
+% labels — see applyComBat — so training and test rows are transformed identically and
+% no class information enters the features.
 %
 % INPUTS:
 %   X               - (N x F) data matrix
@@ -240,122 +276,122 @@ function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
 %   covariate_labels - (N x 1) biological variable to protect (may be [])
 
     [N, F] = size(X);
+    batch_labels = string(batch_labels(:));   % numeric, categorical, cellstr or string
     batches = unique(batch_labels);
     n_batch = numel(batches);
-
-    % Build design matrix for biological covariates (intercept + dummy coding)
-    Z = buildDesignMatrix(covariate_labels, N);
-
-    % OLS: estimate biological effects, then get residuals
-    if rank(Z) < size(Z, 2)
-        warning('NormalizationPipeline:combatRankDeficient', ...
-            'ComBat design matrix is rank-deficient (%d/%d independent columns). ' ...
-            'Check for collinear covariates or a single-level covariate.', ...
-            rank(Z), size(Z, 2));
+    B = zeros(N, n_batch);
+    for b = 1:n_batch
+        B(:, b) = batch_labels == batches(b);
     end
-    beta_hat = Z \ X;                     % (P x F)
-    R = X - Z * beta_hat;                 % (N x F) batch-free residuals
+    n_per_batch = sum(B, 1)';
 
-    % Pooled per-feature variance across all samples
-    var_pooled = var(R, 0, 1);            % (1 x F)
-    var_pooled(var_pooled == 0 | isnan(var_pooled)) = 1;
+    % Covariate dummies (no intercept: the batch columns span it)
+    C = buildDesignMatrix(covariate_labels, N);
+    C = C(:, 2:end);
+    if ~isempty(C) && rank([B, C]) < n_batch + size(C, 2)
+        warning('NormalizationPipeline:combatConfounded', ...
+            ['ComBat covariate is confounded with batch (%d/%d independent columns); ' ...
+             'it cannot be protected and is ignored.'], rank([B, C]), n_batch + size(C, 2));
+        C = zeros(N, 0);
+    end
 
-    % Standardize residuals
-    X_std = R ./ sqrt(var_pooled);        % (N x F)
+    D        = [B, C];
+    beta_hat = D \ X;                                        % (n_batch + P) x F
+    alpha    = (n_per_batch' / N) * beta_hat(1:n_batch, :);  % 1 x F grand mean
+    beta_cov = beta_hat(n_batch+1:end, :);                   % P x F covariate effects
+    var_pooled = sum((X - D * beta_hat).^2, 1) / N;          % within-batch variance
+    var_pooled(var_pooled == 0 | ~isfinite(var_pooled)) = 1;
+    sigma = sqrt(var_pooled);
 
-    % Per-batch mean (gamma_hat) and variance (delta_hat) of standardized residuals
+    S = (X - alpha - C * beta_cov) ./ sigma;
+
     gamma_hat = zeros(n_batch, F);
     delta_hat = ones(n_batch, F);
-    n_per_batch = zeros(n_batch, 1);
     for b = 1:n_batch
-        mask = (batch_labels == batches(b));
-        n_per_batch(b) = sum(mask);
-        if sum(mask) >= 1
-            gamma_hat(b,:) = mean(X_std(mask,:), 1);
-        end
-        if sum(mask) >= 2
-            delta_hat(b,:) = var(X_std(mask,:), 0, 1);
+        mask = B(:, b) > 0;
+        gamma_hat(b, :) = mean(S(mask, :), 1);
+        if n_per_batch(b) >= 2
+            delta_hat(b, :) = var(S(mask, :), 0, 1);
         end
     end
-    delta_hat(delta_hat == 0 | isnan(delta_hat)) = 1;
+    delta_hat(delta_hat <= 0 | ~isfinite(delta_hat)) = 1;
 
-    % Empirical Bayes hyperparameters (moment-matching across batches)
-    gamma_bar = mean(gamma_hat, 1);       % grand mean per feature
-    tau2_bar  = var(gamma_hat, 0, 1);    % between-batch variance per feature
-    tau2_bar(tau2_bar == 0) = 1e-6;
-
-    a_prior = (mean(delta_hat, 1).^2 + 2 .* var(delta_hat, 0, 1)) ./ ...
-              max(var(delta_hat, 0, 1), 1e-10);   % shape
-    b_prior = (mean(delta_hat, 1) .* var(delta_hat, 0, 1) + mean(delta_hat, 1).^3) ./ ...
-              max(var(delta_hat, 0, 1), 1e-10);   % rate
-
-    % Posterior estimates (shrinkage toward grand mean / prior)
-    gamma_star = zeros(n_batch, F);
-    delta_star = ones(n_batch, F);
-    for b = 1:n_batch
-        nb = n_per_batch(b);
-        % Additive shrinkage: precision-weighted average of batch estimate and grand mean
-        w = nb ./ (nb + var_pooled ./ max(tau2_bar, 1e-10));
-        gamma_star(b,:) = w .* gamma_hat(b,:) + (1 - w) .* gamma_bar;
-
-        % Multiplicative: inverse-gamma posterior mode
-        delta_star(b,:) = (b_prior + nb/2 .* delta_hat(b,:)) ./ ...
-                          (a_prior + nb/2 + 1);
-    end
-    delta_star = max(delta_star, 1e-6);   % keep positive
-
-    % Apply correction to training data
-    X_out = zeros(N, F);
-    for b = 1:n_batch
-        mask = (batch_labels == batches(b));
-        if ~any(mask); continue; end
-        X_corrected = (X_std(mask,:) - gamma_star(b,:)) ./ sqrt(delta_star(b,:));
-        X_out(mask,:) = X_corrected .* sqrt(var_pooled) + Z(mask,:) * beta_hat;
+    gamma_star = gamma_hat;
+    delta_star = delta_hat;
+    if n_batch < 2
+        % Nothing to correct between batches; return the data unchanged.
+        gamma_star(:) = 0;
+        delta_star(:) = 1;
+    else
+        for b = 1:n_batch
+            [gamma_star(b, :), delta_star(b, :)] = ebPosterior(S(B(:, b) > 0, :), ...
+                gamma_hat(b, :), delta_hat(b, :));
+        end
     end
 
-    % Store all parameters needed for applyComBat
-    fit.batches            = batches;
-    fit.beta_hat           = beta_hat;
-    fit.var_pooled         = var_pooled;
-    fit.gamma_star         = gamma_star;
-    fit.delta_star         = delta_star;
-    fit.covariate_cats     = getCovariateCategories(covariate_labels);
+    fit.batches    = batches;
+    fit.alpha      = alpha;
+    fit.sigma      = sigma;
+    fit.gamma_star = gamma_star;
+    fit.delta_star = delta_star;
+    X_out = applyComBat(X, batch_labels, [], fit);
 end
 
-function X_out = applyComBat(X, batch_labels, covariate_labels, fit)
-% Apply ComBat correction fitted on training data to new samples.
-% Unseen batches receive no correction and trigger a warning.
-    [N, ~] = size(X);
-
-    % Reconstruct design matrix using training-time covariate categories
-    Z = buildDesignMatrix(covariate_labels, N, fit.covariate_cats);
-
-    % Recover biological signal estimate for new data
-    X_hat = Z * fit.beta_hat;             % (N x F)
-    R = X - X_hat;
-    X_std = R ./ sqrt(fit.var_pooled);    % standardize using training variance
-
+function X_out = applyComBat(X, batch_labels, ~, fit)
+% Apply a fitted ComBat correction: x' = alpha + (x - alpha - sigma*gamma_b) / sqrt(delta_b).
+% Identical for training and new data and label-free (the covariate argument is ignored;
+% it is kept for call compatibility). Batches unseen during fit get their location and
+% scale estimated from their own samples — transductive but label-free, which is the
+% normal case for grouped cross-validation where the batch is a held-out recording.
+    [N, F] = size(X);
+    S = (X - fit.alpha) ./ fit.sigma;
     X_out = X;
-    seen = false(N, 1);
-    for b = 1:numel(fit.batches)
-        mask = (batch_labels == fit.batches(b));
-        if ~any(mask); continue; end
-        X_corrected = (X_std(mask,:) - fit.gamma_star(b,:)) ./ sqrt(fit.delta_star(b,:));
-        X_out(mask,:) = X_corrected .* sqrt(fit.var_pooled) + X_hat(mask,:);
-        seen = seen | mask(:);
+    [new_batches, ~, idx] = unique(string(batch_labels(:)));
+    for k = 1:numel(new_batches)
+        mask = idx == k;
+        b = find(string(fit.batches) == new_batches(k), 1);
+        if ~isempty(b)
+            g = fit.gamma_star(b, :);  d = fit.delta_star(b, :);
+        elseif sum(mask) >= 2
+            g = mean(S(mask, :), 1);
+            d = var(S(mask, :), 0, 1);
+            d(d <= 0 | ~isfinite(d)) = 1;
+            [g, d] = ebPosterior(S(mask, :), g, d);
+        else
+            warning('NormalizationPipeline:unseenBatch', ...
+                'Batch "%s" has a single unseen sample — no batch correction applied.', string(new_batches(k)));
+            continue
+        end
+        X_out(mask, :) = fit.alpha + (S(mask, :) - g) ./ sqrt(d) .* fit.sigma;
     end
+    if F == 0, X_out = zeros(N, 0); end
+end
 
-    unseen = ~seen;
-    if all(unseen)
-        error('NormalizationPipeline:allBatchesUnseen', ...
-            'No test samples match any batch seen during ComBat fit. ' ...
-            'Test batches: %s. Known batches: %s.', ...
-            strjoin(string(unique(batch_labels)), ', '), ...
-            strjoin(string(fit.batches), ', '));
-    elseif any(unseen)
-        warning('NormalizationPipeline:unseenBatch', ...
-            '%d samples belong to batches unseen during fit — no batch correction applied.', sum(unseen));
+function [g_star, d_star] = ebPosterior(S_b, g_hat, d_hat)
+% Parametric EB posteriors for one batch (Johnson et al. 2007, it.sol): priors are
+% estimated across features (gamma ~ N(g_bar, t2), delta ~ InvGamma(a, b)).
+    n = size(S_b, 1);
+    g_bar = mean(g_hat);
+    t2    = var(g_hat);
+    m     = mean(d_hat);
+    s2    = var(d_hat);
+    if numel(g_hat) < 2 || t2 <= 0 || s2 <= 0 || n < 2
+        g_star = g_hat;  d_star = d_hat;   % too little information to shrink
+        return
     end
+    a = (2 * s2 + m^2) / s2;
+    b = (m * s2 + m^3) / s2;
+    g_old = g_hat;  d_old = d_hat;
+    for it = 1:100
+        g_new = (n * t2 * g_hat + d_old * g_bar) ./ (n * t2 + d_old);
+        sum2  = sum((S_b - g_new).^2, 1);
+        d_new = (b + 0.5 * sum2) ./ (n / 2 + a - 1);
+        change = max(max(abs(g_new - g_old) ./ max(abs(g_old), eps)), ...
+                     max(abs(d_new - d_old) ./ max(abs(d_old), eps)));
+        g_old = g_new;  d_old = d_new;
+        if change < 1e-4, break; end
+    end
+    g_star = g_new;  d_star = max(d_new, 1e-6);
 end
 
 function Z = buildDesignMatrix(covariate_labels, N, cats)

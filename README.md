@@ -40,6 +40,18 @@ A dataset from our most recent paper will accompany the tutorials (link to be ad
 ## Citation
 If you find this package helpful or used in your analyses, please cite the [DeePhys paper](https://www.cell.com/stem-cell-reports/fulltext/S2213-6711(23)00501-5) and link to this GitHub repository.
 
+## Requirements
+- MATLAB R2021b or newer (name=value call syntax, `iforest`; tested on R2026b).
+- Statistics and Machine Learning Toolbox (classifiers, `tsne`, `fitgmdist`, `bayesopt`, `iforest`).
+- Signal Processing Toolbox (`findpeaks`, `xcorr`: bursts, regularity, E/I analysis).
+- Curve Fitting Toolbox (`fit`: regularity features).
+- Econometrics Toolbox (`parcorr`: activity features).
+- Optional:
+  - Parallel Computing Toolbox: `RecordingProcessor.loadMany` loads in parallel; without it, the loop runs serially.
+  - Database Toolbox: the `RecordingDatabase` registry (MATLAB's SQLite interface; no JDBC driver needed).
+- A Java runtime for the bundled UMAP toolbox (embeddings and plots). Recent MATLAB releases ship without one: install e.g. OpenJDK 8 and register it once with `jenv("<path to JRE>")`.
+- A C compiler (`mex -setup C`) for the catch22 features (run `mexAll` in `Toolboxes/catch22/wrap_Matlab`; catch22 stays off until compiled) and, on Linux/macOS, for `CCGHeart`, which is built automatically on first use (a Windows binary is included).
+
 ## Dependencies
 This package uses several packages/toolboxes, all of which are **bundled in the repository** (under `Functions/` and `Toolboxes/`) and added to the MATLAB path automatically by `startup.m`. No separate installation is required.
 

@@ -258,7 +258,7 @@ classdef FeatureCatalog
                              "IntraFiringRate", "InterFiringRate"];
 
                 case "NetworkRegularity"
-                    names = ["RegularityFrequency", "RegularityFit"];
+                    names = ["NetworkRegularityFrequency", "NetworkRegularityFit"];
 
                 case "NetworkCatch22"
                     names = string.empty;   % excluded from core
@@ -333,28 +333,25 @@ classdef FeatureCatalog
                 case "GraphFeatures"
                     % Per-unit graph columns: suffixed by algorithm (e.g. _CCG, _STTC)
                     % Listed as roots; actual names contain these as prefixes.
-                    names = ["ClusteringCoefficient", "LocalEfficiency", ...
+                    names = ["ClusteringCoefficient", "LocalEfficiency", "Strength_", ...
                              "EigenCentrality", "Betweenness"];
 
                 case "NetworkBurst"
                     names = ["MeanInterBurstInterval", "BurstDuration", ...
                              "RiseTime", "FallTime", "PeakFR", "StdFR", ...
                              "StdBurstDuration", "StdInterBurstInterval", ...
-                             "IntraFiringRate", "InterFiringRate"];
+                             "IntraFiringRate", "InterFiringRate", ...
+                             "BurstWidth", "BurstRise", "BurstFall", "BurstFWHM"];
 
                 case "NetworkRegularity"
-                    names = Unit.returnFeatureNames("reg");  % same names, network level
+                    names = "Network" + Unit.returnFeatureNames("reg");  % NetworkRegularityFrequency, ...
 
                 case "NetworkCatch22"
-                    try
-                        names = "SC_" + string(GetAllFeatureNames());
-                    catch
-                        names = string.empty;
-                    end
+                    names = string(GetAllFeatureNames(true));   % plain catch22 names (SC_ = single unit)
 
                 case "NetworkGraph"
                     % Network-level graph columns: suffixed by algorithm
-                    names = ["Density", "Assortativity", "RichClub", ...
+                    names = ["Density", "Assortativity", "RichClub", "MeanStrength_", ...
                              "GlobalEfficiency", "Modularity", "SmallWorldness"];
 
                 case "CellTypeGraph"

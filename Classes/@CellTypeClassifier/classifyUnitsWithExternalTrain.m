@@ -104,6 +104,9 @@ feat_names = nf.feat_names;    % (1 × F)
 n_dphy     = size(X_dphy, 1);
 
 % ── Build external train features ──────────────────────────────────────────────
+if isfield(nf, 'acg_sigma_ms') && nf.acg_sigma_ms > 0   % same ACG smoothing as the DeePhys units
+    acg_train = smoothACG(acg_train, nf.acg_sigma_ms / 1000 / ph.ACGBinSize);
+end
 [X_ext, feat_names_ext] = buildFeatureMatrix(ctc, wf_train, acg_train, sr_train);
 n_ext = size(X_ext, 1);
 
@@ -138,16 +141,7 @@ X_combined = X_combined ./ scale;
 
 % ── Dimension-normalised feature group weighting ───────────────────────────────
 p_umap = ctc.Parameters.UMAP;
-is_acg = startsWith(feat_names_trimmed, "FullACG") | startsWith(feat_names_trimmed, "ACG");
-is_wf  = startsWith(feat_names_trimmed, "Waveform") | startsWith(feat_names_trimmed, "ReferenceWaveform");
-n_acg  = sum(is_acg);
-n_wf_f = sum(is_wf);
-if n_acg > 0
-    X_combined(:, is_acg) = X_combined(:, is_acg) * sqrt(p_umap.ACGWeight / n_acg);
-end
-if n_wf_f > 0
-    X_combined(:, is_wf) = X_combined(:, is_wf) * sqrt(p_umap.WaveformWeight / n_wf_f);
-end
+X_combined = applyFeatureGroupWeights(X_combined, feat_names_trimmed, p_umap);
 
 % ── Unsupervised UMAP on combined DeePhys + external set ───────────────────────
 N_all = n_dphy + n_ext;
@@ -158,21 +152,12 @@ else
     n_neighbors = p_umap.NNeighbors;
 end
 
-rng(ctc.Parameters.RNGSeed, 'twister');
-fprintf('classifyUnitsWithExternalTrain: UMAP on %d units (%d DeePhys + %d external)\n', ...
+fprintf('classifyUnitsWithExternalTrain: joint graph on %d units (%d DeePhys + %d external)\n', ...
     N_all, n_dphy, n_ext);
 
-[reduction, umap_model, ~, ~] = run_umap(X_combined, ...
-    'n_components', p_umap.NDims, ...
-    'n_neighbors',  n_neighbors, ...
-    'min_dist',     p_umap.MinDist, ...
-    'spread',       p_umap.Spread, ...
-    'method',       'Java', ...
-    'verbose',      'none');
-
-% ── Build row-stochastic graph from UMAP COO edge list ─────────────────────────
-G = sparse(umap_model.head, umap_model.tail, umap_model.weights, N_all, N_all);
-G = (G + G') / 2;
+% ── Joint unit graph (same construction as the main pipeline) ──────────────────
+[G, reduction] = jointGraph(ctc, X_combined, n_neighbors, feat_names_trimmed);
+if isempty(reduction), reduction = nan(N_all, 0); end
 row_sums = sum(G, 2);
 row_sums(row_sums == 0) = 1;
 W = G ./ row_sums;

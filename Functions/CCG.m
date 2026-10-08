@@ -139,6 +139,7 @@ end
 nEvents = length(times);
 % 
 
+ensureCCGHeart();   % DeePhys: build the MEX on platforms without a shipped binary
 counts = double(CCGHeart(times,uint32(groups),binSize_Fs,uint32(halfBins)));
 % -----------------------------------
 % 

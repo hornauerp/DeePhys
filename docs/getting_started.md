@@ -25,17 +25,19 @@ startup
 
 ## Input data format
 
-DeePhys reads Kilosort output directories. The following files must be present:
+DeePhys reads Kilosort output directories, or the output of any other spike sorter exported to phy format (e.g. SpikeInterface `export_to_phy`). The following files are used:
 
 | File | Content |
 |---|---|
-| `spike_times.npy` | Spike times in samples |
-| `spike_templates.npy` | Template assignment per spike |
-| `templates.npy` | Template waveforms |
-| `channel_positions.npy` | Electrode XY coordinates |
-| `params.py` | Must contain `sample_rate`; optionally `n_samples` for accurate duration. This is a Kilosort-generated Python-format config file (e.g. `sample_rate = 30000.0`) |
+| `spike_times.npy` | Spike times in samples (required) |
+| `spike_templates.npy` | Template assignment per spike (Kilosort). Without it, `spike_clusters.npy` is used, whose cluster indices must then address `templates.npy` (one template per unit) |
+| `templates.npy` | Template waveforms (required) |
+| `channel_positions.npy` | Electrode XY coordinates (optional; needed for the spatial features) |
+| `params.py` | Must contain `sample_rate`; optionally `n_samples` for an accurate duration (e.g. `sample_rate = 30000.0`; any spacing) |
 
-Manual curation in [phy](https://github.com/cortex-lab/phy) is optional but recommended. When the KS label filter is enabled (`QC.KSLabel.Enable = true`), `cluster_KSLabel.tsv` is read to apply `good`/`mua` labels. By default this filter is off.
+Label tables are optional. With `QC.KSLabel.Enable = true`, `cluster_KSLabel.tsv` provides `good`/`mua` labels; with `QC.Bombcell.Enable = true`, Bombcell's `cluster_bc_unitType.tsv` does. If an enabled table is missing (e.g. Bombcell was not run), a warning is issued and only the standard QC applies. Units are defined by the templates: merges or splits from manual phy curation (`spike_clusters.npy` alongside `spike_templates.npy`) are not used.
+
+The `RecordingID` of a sorting is a hash of its spike data, so the same sorting gets the same ID on every machine and mount point.
 
 ## Metadata
 

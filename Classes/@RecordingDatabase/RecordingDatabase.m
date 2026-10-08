@@ -292,5 +292,31 @@ classdef RecordingDatabase < handle
                         exist('sqlite', 'class') == 8;
         end
 
+        function rec = recordingView(rec)
+        % RECORDINGVIEW  Present a RecordingProcessor with the fields the registry reads
+        % from an MEArecording (Metadata.InputPath, RecordingInfo, Units, Parameters).
+        % MEArecording objects are returned unchanged.
+            if isa(rec, 'MEArecording')
+                return
+            end
+            assert(isa(rec, 'RecordingProcessor'), 'RecordingDatabase:input', ...
+                'Expected a RecordingProcessor or MEArecording, got %s.', class(rec));
+            sd = rec.SpikeData;
+            md = sd.Metadata;
+            md.InputPath = sd.InputPath;
+            units = struct('StableID', {}, 'TemplateID', {}, 'ReferenceElectrode', {}, ...
+                'KSLabel', {}, 'BombcellType', {});
+            txt = @(s) fillmissing(string(s), 'constant', "");   % <missing> labels -> ""
+            for u = 1:numel(rec.Units)
+                ud = rec.Units(u);
+                units(u) = struct('StableID', txt(ud.UnitID), 'TemplateID', ud.TemplateID, ...
+                    'ReferenceElectrode', ud.ReferenceElectrode, 'KSLabel', txt(ud.KSLabel), ...
+                    'BombcellType', ud.BombcellType);
+            end
+            rec = struct('Metadata', md, 'Units', units, 'Parameters', rec.Parameters, ...
+                'RecordingInfo', struct('SamplingRate', sd.SamplingRate, ...
+                    'Duration', sd.Duration, 'N_templates', numel(unique(sd.SpikeUnits))));
+        end
+
     end
 end

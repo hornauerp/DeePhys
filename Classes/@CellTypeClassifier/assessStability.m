@@ -8,13 +8,12 @@ function stability = assessStability(ctc, opts)
 % region of the search space.
 %
 % Intended as a post-optimization validation step. Run after
-% optimizeHyperparameters to verify the selected parameters produce consistent
+% optimizeUnsupervisedUMAP to verify the selected parameters produce consistent
 % results.
 %
 % USAGE:
 %   ctc.identifyResponsiveUnits();
-%   results = ctc.optimizeHyperparameters();
-%   ctc.Parameters = parseStructParameters(ctc.Parameters, results.bestParams);
+%   ctc.optimizeUnsupervisedUMAP();     % writes the best parameters back
 %   stability = ctc.assessStability(NRuns=10);
 %
 % NAME-VALUE:

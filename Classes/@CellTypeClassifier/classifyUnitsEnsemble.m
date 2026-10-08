@@ -39,12 +39,18 @@ label_matrix = nan(N, n_units);
 fprintf('Ensemble classification: %d runs (seeds: %s, MinAgreement=%.2f)\n', ...
     N, num2str(seeds), p_ens.MinAgreement);
 
+% Single-run classification inside the loop; restore the caller's settings even if a run errors.
+ctc.Parameters.Ensemble.Enabled = false;
+restore = onCleanup(@() restoreSettings(ctc, orig_seed));
+
 for r = 1:N
     fprintf('  Run %d/%d (seed=%d)...\n', r, N, seeds(r));
     ctc.Parameters.RNGSeed = seeds(r);
 
     try
-        ctc.generateTrainLabels();
+        % Re-embed per seed: the UMAP embedding is the dominant source of seed
+        % sensitivity, so reusing one embedding would not make the vote robust to it.
+        ctc.generateTrainLabels('ReuseExistingUMAP', false);
         ctc.classifyUnits();
         label_matrix(r, :) = ctc.UnitLabels;
     catch ME
@@ -52,9 +58,14 @@ for r = 1:N
             'Run %d (seed=%d) failed: %s', r, seeds(r), ME.message);
     end
 end
+clear restore
 
-% Restore original seed
-ctc.Parameters.RNGSeed = orig_seed;
+n_failed = sum(all(isnan(label_matrix), 2));
+if n_failed == N
+    error('CellTypeClassifier:ensembleFailed', 'All %d ensemble runs failed — see warnings above.', N);
+elseif n_failed > 0
+    warning('CellTypeClassifier:ensemblePartial', '%d/%d ensemble runs failed; voting over the rest.', n_failed, N);
+end
 
 % -- Majority vote -----------------------------------------------------------
 final_labels     = nan(1, n_units);
@@ -86,4 +97,10 @@ n_inh = sum(final_labels == 2, 'omitnan');
 n_unc = sum(isnan(final_labels));
 fprintf('Ensemble result: %d excitatory, %d inhibitory, %d unclassified (agreement < %.2f)\n', ...
     n_exc, n_inh, n_unc, p_ens.MinAgreement);
+end
+
+function restoreSettings(ctc, orig_seed)
+% Undo the per-run overrides so later classifyUnits() calls run the ensemble again.
+ctc.Parameters.RNGSeed = orig_seed;
+ctc.Parameters.Ensemble.Enabled = true;
 end

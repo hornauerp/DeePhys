@@ -26,6 +26,27 @@ function ext_labels = classifyExternalUnits(ctc, wf_test, acg_test, sr_test, opt
 %                       it is checked against ctc.Parameters.Harmonization.WaveformPreTrough.
 %   WaveformPostTrough - ms of waveform captured after the trough. Checked against
 %                        ctc.Parameters.Harmonization.WaveformPostTrough.
+%   PerGroupZScore     - "auto" (default) | true | false. DeePhys features are z-scored
+%                        per Parameters.UMAP.NormalizationVar group before the global
+%                        normalisation; external features must get the same step or they
+%                        land on a different scale (an island in the joint graph that label
+%                        propagation never reaches). "auto" mirrors the classifier.
+%                        Caveat: a per-group z-score centres each group on its own mean, so
+%                        it assumes groups of similar class composition. Validation sets
+%                        enriched for one class (e.g. optotagged interneurons) are biased by
+%                        it; train with NormalizationVar = "" for such transfers.
+%   ExternalGroups     - (N_ext x 1) group labels for that z-score (default: one group).
+%   Cutoff             - threshold on P(inhibitory): 0.5 (default; the calibrated point within
+%                        the training domain) or "auto": inferred from the external scores
+%                        alone (two-component mixture on logit P, used only if clearly
+%                        bimodal; inferExternalCutoff). Use "auto" when the external data come
+%                        from another preparation (e.g. in vivo) and attach to the training
+%                        graph through a biased set of units: the ranking then stays good but
+%                        all scores shift. The culture labels are not affected. Result in
+%                        Reduction.External.Cutoff / CutoffInfo.
+%                        A per-group EM prior adjustment (as estimateComposition does for
+%                        cultures) is not offered: external scores are shifted, not only
+%                        re-weighted, and the EM then drifts towards one class.
 %
 %   Omitting ACG / waveform provenance parameters issues a warning.
 %   Use CellTypeClassifier.computeACGs() to generate compatible ACGs from
@@ -34,7 +55,10 @@ function ext_labels = classifyExternalUnits(ctc, wf_test, acg_test, sr_test, opt
 % Sets:  ctc.Reduction.External.Embedding    (N_ext × NDims) external embedding
 %        ctc.Reduction.External.DeePhysEmbedding (n_unique × NDims) DeePhys embedding
 %        ctc.Reduction.External.Confidence   (1 × N_ext) label confidence
-% Returns: ext_labels  (1 × N_ext)  1=excitatory, 2=inhibitory
+%        ctc.Reduction.External.JointGraph   (n_unique+N_ext square) graph used for propagation
+%        ctc.Reduction.External.Probability  (N_ext × 2) [P(exc) P(inh)] after propagation
+% Returns: ext_labels  (1 × N_ext)  1=excitatory, 2=inhibitory, NaN=not reached by
+%          label propagation (no graph path to a DeePhys training unit)
 
 arguments
     ctc      CellTypeClassifier
@@ -45,7 +69,14 @@ arguments
     opts.ACGLag             double = []
     opts.WaveformPreTrough  double = []
     opts.WaveformPostTrough double = []
+    opts.PerGroupZScore            = "auto"
+    opts.ExternalGroups            = []
+    opts.Cutoff                    = 0.5
 end
+
+auto_cutoff = (isstring(opts.Cutoff) || ischar(opts.Cutoff)) && lower(string(opts.Cutoff)) == "auto";
+assert(auto_cutoff || (isnumeric(opts.Cutoff) && isscalar(opts.Cutoff) && opts.Cutoff > 0 && opts.Cutoff < 1), ...
+    'CellTypeClassifier:badCutoff', 'Cutoff must be a number in (0,1) or "auto".');
 
 assert(~isempty(ctc.TrainLabels), ...
     'Run generateTrainLabels() before classifyExternalUnits().');
@@ -112,6 +143,9 @@ n_dphy = size(X_dphy, 1);
 % ── External features: apply same stored NormalizationParams ───────────────────
 % This places external units in the same normalized feature space as DeePhys,
 % which is required for the joint UMAP geometry to be meaningful.
+if isfield(np, 'acg_sigma_ms') && np.acg_sigma_ms > 0   % same ACG smoothing as the DeePhys units
+    acg_test = smoothACG(acg_test, np.acg_sigma_ms / 1000 / ph.ACGBinSize);
+end
 [X_ext_raw, ~] = buildFeatureMatrix(ctc, wf_test, acg_test, sr_test);
 n_ext = size(X_ext_raw, 1);
 
@@ -122,6 +156,31 @@ assert(size(X_ext_raw, 2) == numel(np.mu_global), ...
     size(X_ext_raw, 2), numel(np.mu_global));
 
 X_ext_raw(isnan(X_ext_raw)) = 0;
+
+% Mirror the per-group z-score that buildNormalizedFeatures applied to the DeePhys units.
+norm_var   = string(p_umap.NormalizationVar);
+uses_group = strlength(norm_var) > 0 && ...
+    ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames));
+if string(opts.PerGroupZScore) == "auto"
+    do_group = uses_group;
+else
+    do_group = logical(opts.PerGroupZScore);
+end
+if do_group
+    g_ext = opts.ExternalGroups;
+    if isempty(g_ext), g_ext = ones(n_ext, 1); end
+    assert(numel(g_ext) == n_ext, 'ExternalGroups must have one label per external unit.');
+    [~, ~, iG] = unique(string(g_ext(:)), 'stable');
+    for g = 1:max(iG)
+        X_ext_raw(iG == g, :) = normalize(X_ext_raw(iG == g, :));
+    end
+    X_ext_raw(isnan(X_ext_raw)) = 0;   % constant columns within a group
+elseif uses_group
+    warning('CellTypeClassifier:externalScaleMismatch', ...
+        ['The classifier z-scores DeePhys features per %s group but PerGroupZScore=false: ' ...
+         'external features are on a different scale.'], norm_var);
+end
+
 X_ext = normalize(X_ext_raw, 'center', np.mu_global, 'scale', np.sigma_global);
 X_ext(:, np.nan_cols) = [];
 X_ext = X_ext ./ np.scale;
@@ -140,18 +199,8 @@ if any(bad_cols)
 end
 
 % ── Dimension-normalised feature group weighting ───────────────────────────────
-is_acg = startsWith(feat_names_final, "FullACG") | startsWith(feat_names_final, "ACG");
-is_wf  = startsWith(feat_names_final, "Waveform") | startsWith(feat_names_final, "ReferenceWaveform");
-n_acg  = sum(is_acg);
-n_wf_f = sum(is_wf);
-if n_acg > 0
-    X_dphy(:, is_acg) = X_dphy(:, is_acg) * sqrt(p_umap.ACGWeight / n_acg);
-    X_ext(:, is_acg)  = X_ext(:, is_acg)  * sqrt(p_umap.ACGWeight / n_acg);
-end
-if n_wf_f > 0
-    X_dphy(:, is_wf) = X_dphy(:, is_wf) * sqrt(p_umap.WaveformWeight / n_wf_f);
-    X_ext(:, is_wf)  = X_ext(:, is_wf)  * sqrt(p_umap.WaveformWeight / n_wf_f);
-end
+X_dphy = applyFeatureGroupWeights(X_dphy, feat_names_final, p_umap);
+X_ext  = applyFeatureGroupWeights(X_ext,  feat_names_final, p_umap);
 
 % ── Unsupervised UMAP on combined DeePhys + external set ───────────────────────
 X_combined = [X_dphy; X_ext];
@@ -164,21 +213,12 @@ else
     n_neighbors = p_umap.NNeighbors;
 end
 
-rng(ctc.Parameters.RNGSeed, 'twister');
-fprintf('classifyExternalUnits: UMAP on %d units (%d DeePhys + %d external)\n', ...
+fprintf('classifyExternalUnits: joint graph on %d units (%d DeePhys + %d external)\n', ...
     N_all, n_dphy, n_ext);
 
-[reduction, umap_model, ~, ~] = run_umap(X_combined, ...
-    'n_components', p_umap.NDims, ...
-    'n_neighbors',  n_neighbors, ...
-    'min_dist',     p_umap.MinDist, ...
-    'spread',       p_umap.Spread, ...
-    'method',       'Java', ...
-    'verbose',      'none');
-
-% ── Build row-stochastic graph from UMAP COO edge list ─────────────────────────
-G = sparse(umap_model.head, umap_model.tail, umap_model.weights, N_all, N_all);
-G = (G + G') / 2;
+% ── Joint unit graph (same construction as the main pipeline) ──────────────────
+[G, reduction] = jointGraph(ctc, X_combined, n_neighbors, feat_names_final);
+if isempty(reduction), reduction = nan(N_all, 0); end
 row_sums = sum(G, 2);
 row_sums(row_sums == 0) = 1;
 W = G ./ row_sums;
@@ -226,27 +266,68 @@ if iter == max_iter
     fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
 end
 
+% Units without a graph path to any seed keep the uninformed [0.5 0.5]; flag them
+% before normalisation (previously the tie rule silently called them excitatory).
+unreached = all(abs(F_label - 0.5) < 1e-12, 2);
+
+% Seed-count normalisation, as in classifyUnits (no-op for balanced training sets).
+n_seed = [sum(y_train == 1), sum(y_train == 2)];
+if all(n_seed > 0) && n_seed(1) ~= n_seed(2)
+    F_label = F_label ./ n_seed;
+    F_label = F_label ./ max(sum(F_label, 2), eps);
+end
+
 % ── Extract external unit labels and confidence ────────────────────────────────
 ext_labels     = nan(1, n_ext);
 ext_confidence = nan(1, n_ext);
+n_unreached    = sum(unreached(n_dphy+1:end));
+if n_unreached > 0
+    warning('CellTypeClassifier:externalUnreached', ...
+        ['%d/%d external units have no graph path to a DeePhys training unit and are left ' ...
+         'unlabelled (NaN). Check that external features are normalised like the DeePhys ones.'], ...
+        n_unreached, n_ext);
+end
+% Decision threshold on P(inh): 0.5 (calibrated within the training domain) or inferred
+% from the external scores alone (Cutoff = "auto", see inferExternalCutoff).
+p_inh_ext = F_label(n_dphy+1:end, 2);
+p_inh_ext(unreached(n_dphy+1:end)) = NaN;
+cut_info = struct('method', "fixed", 'dBIC', NaN, 'inhibitory_share', NaN, 'bimodal', false);
+if auto_cutoff
+    [cutoff, cut_info] = inferExternalCutoff(p_inh_ext);
+    if ~cut_info.bimodal
+        warning('CellTypeClassifier:cutoffNotInferred', ...
+            'External P(inh) is not bimodal (dBIC %.1f); keeping the cut-off at 0.5.', cut_info.dBIC);
+    end
+    fprintf(['External cut-off: %.3f (%s; dBIC %.0f, estimated inhibitory share %.2f). ' ...
+             'Ranking is unchanged; only the operating point moves.\n'], ...
+        cutoff, cut_info.method, cut_info.dBIC, cut_info.inhibitory_share);
+else
+    cutoff = opts.Cutoff;
+end
 for i = 1:n_ext
     gi = n_dphy + i;
+    if unreached(gi), continue; end
     p_exc = F_label(gi, 1);
     p_inh = F_label(gi, 2);
-    if p_exc >= p_inh
-        ext_labels(i)     = 1;
-        ext_confidence(i) = p_exc;
-    else
+    if p_inh > cutoff
         ext_labels(i)     = 2;
         ext_confidence(i) = p_inh;
+    else
+        ext_labels(i)     = 1;
+        ext_confidence(i) = p_exc;
     end
 end
 
 ctc.Reduction.External = struct( ...
     'Embedding',          reduction(n_dphy+1:end, :), ...
     'DeePhysEmbedding',   reduction(1:n_dphy, :), ...
-    'Confidence',         ext_confidence);
+    'Confidence',         ext_confidence, ...
+    'JointGraph',         G, ...          % rows 1:NumDeePhys = DeePhys units, then external units
+    'NumDeePhys',         n_dphy, ...
+    'Probability',        F_label(n_dphy+1:end, :), ...   % [P(exc) P(inh)] per external unit
+    'Cutoff',             cutoff, ...
+    'CutoffInfo',         cut_info);
 
-fprintf('External classification: %d excitatory, %d inhibitory (%d total)\n', ...
-    sum(ext_labels == 1), sum(ext_labels == 2), n_ext);
+fprintf('External classification: %d excitatory, %d inhibitory, %d unreached (%d total)\n', ...
+    sum(ext_labels == 1), sum(ext_labels == 2), n_unreached, n_ext);
 end

@@ -16,6 +16,8 @@ classdef MLResult
         predImp     % OOB predictor importance (RF only; [] otherwise)
         Features    % Feature names used (string array)
         Parameters  % Struct: algorithm, normalization_var, K_fold, N_hyper, seed
+        Preprocessing % Struct from MLUtils.normalizeFeatures (training medians, fitted
+                      % NormalizationPipeline, column mask); replayed by Classifier.predict
     end
 
     methods
@@ -25,7 +27,7 @@ classdef MLResult
         % Called via r@MLResult(varargin{:}) from subclass constructors.
             if nargin > 0
                 shared = {'Mdl','Y_pred','Y_test','objects','train_acc', ...
-                          'predImp','Features','Parameters'};
+                          'predImp','Features','Parameters','Preprocessing'};
                 for i = 1:2:length(varargin)
                     if ismember(varargin{i}, shared)
                         r.(varargin{i}) = varargin{i+1};

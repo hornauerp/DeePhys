@@ -15,14 +15,14 @@ function computeActivity(eia)
 % The raw per-unit binned matrix is stored in Activity.binned_mat for reuse by
 % computeCorrelations (avoids redundant spike binning).
 %
-% Note on ratio smoothing: the stored ratio is movmean(I_raw ./ E_raw), not
-% movmean(I_raw) ./ movmean(E_raw). Per-bin ratio computation followed by
-% smoothing can produce larger transients near bins where E ≈ 0.
+% Ratio: the stored ratio is movmean(I_raw ./ E_raw, 'omitnan') over bins with
+% E_raw > 0 only (bins without excitatory spikes are excluded, see below).
 %
 % Clears BurstState, BurstCutouts, NormalizedCutouts, and Correlations to
 % prevent stale downstream results after re-running with new parameters.
 %
-% Requires eia.Classifier.UnitLabels to be set.
+% Requires eia.Classifier.UnitLabels to be set. Parameters.Labels chooses the labels
+% ("graph" UnitLabels, "composition", or "confident" units only; unlabelled units are left out).
 % Sets: eia.Activity
 
 arguments
@@ -85,20 +85,20 @@ for c = 1:n_cultures
     % total uses classified units only so that total is consistent with I and E
     if any(cls_rows); total_raw = rate_fn(binned_mat(cls_rows, :)); else; total_raw = zeros(1, n_bins); end
 
-    % I/E ratio — cap Inf at the finite maximum, replace NaN (0/0) with 0
-    ratio        = I_raw ./ E_raw;
-    finite_ratio = ratio(isfinite(ratio));
-    max_ratio    = max(finite_ratio, [], 'omitnan');
-    if isempty(max_ratio); max_ratio = 0; end
-    ratio(isinf(ratio)) = max_ratio;
-    ratio(isnan(ratio)) = 0;
-
     % Smooth
     sw       = p.SmoothWindow;
     I_fr     = movmean(I_raw,    sw);
     E_fr     = movmean(E_raw,    sw);
     total_fr = movmean(total_raw, sw);
-    ratio    = movmean(ratio,    sw);
+
+    % I/E ratio per bin, excluding bins with E = 0 (as in the published method), then
+    % smoothed over the remaining bins. Previously Inf (E = 0, I > 0) was capped at the
+    % culture's largest ratio and 0/0 was set to 0, so silent bins looked
+    % excitation-dominated and both artefacts were smeared into neighbouring bins.
+    % NaN where no bin in the window has E > 0 (never a burst bin).
+    ratio    = I_raw ./ E_raw;
+    ratio(E_raw <= 0) = NaN;
+    ratio    = movmean(ratio, sw, 'omitnan');
 
     activity(c) = struct( ...
         'I',          I_fr, ...

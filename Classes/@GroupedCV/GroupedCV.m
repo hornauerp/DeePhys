@@ -25,7 +25,7 @@ classdef GroupedCV
         NumFolds        (1,1) double    % Number of CV folds
         GroupIDs                        % (N x 1) group assignment per object
         UniqueGroups                    % Unique group values
-        GroupPartition  cvpartition     % Partition at the group level
+        GroupPartition                  % cvpartition at the group level (untyped: cvpartition cannot be default-constructed)
         ClassLabels                     % (N x 1) optional class labels for stratification
     end
 

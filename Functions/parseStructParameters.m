@@ -8,36 +8,29 @@ function merged = parseStructParameters(defaults, overrides)
 % OUTPUT:
 %   merged    - Defaults struct with overridden values applied
 %
-% Unknown top-level or sub-level fields in overrides emit a warning.
-% Empty overrides struct is silently ignored.
+% Nested structs are merged recursively at any depth, so overriding one field of
+% QC.KSLabel keeps the other QC.KSLabel defaults. A default that is an empty struct
+% (e.g. Bombcell.Overrides = struct()) is a free-form slot and takes the override as is.
+% Unknown fields in overrides emit a warning (parseStructParameters:unknownField) with
+% their full path and are ignored. An empty overrides struct is silently ignored.
 
-merged = defaults;
-parameter_fields = fieldnames(overrides);
+merged = mergeLevel(defaults, overrides, "");
 
-if isempty(parameter_fields)
-    return
 end
 
-for pf = 1:length(parameter_fields)
-    field = parameter_fields{pf};
-    if ismember(field, fieldnames(merged))
-        if isstruct(overrides.(field)) && isstruct(merged.(field))
-            subfields = fieldnames(overrides.(field));
-            for sf = 1:length(subfields)
-                subfield = subfields{sf};
-                if ismember(subfield, fieldnames(merged.(field)))
-                    merged.(field).(subfield) = overrides.(field).(subfield);
-                else
-                    warning("Unrecognized parameter field: %s.%s", field, subfield)
-                end
-            end
+function merged = mergeLevel(defaults, overrides, prefix)
+    merged = defaults;
+    fields = fieldnames(overrides);
+    for k = 1:numel(fields)
+        f = fields{k};
+        path = prefix + f;
+        if ~isfield(merged, f)
+            warning('parseStructParameters:unknownField', 'Unrecognized parameter field: %s', path);
+        elseif isstruct(overrides.(f)) && isscalar(overrides.(f)) && ...
+                isstruct(merged.(f)) && isscalar(merged.(f)) && ~isempty(fieldnames(merged.(f)))
+            merged.(f) = mergeLevel(merged.(f), overrides.(f), path + ".");
         else
-            % Direct (non-struct) override at the top level
-            merged.(field) = overrides.(field);
+            merged.(f) = overrides.(f);
         end
-    else
-        warning("Unrecognized parameter field: %s", field)
     end
-end
-
 end

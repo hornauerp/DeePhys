@@ -18,10 +18,11 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
     end
 
     interpolation_factor = 10;
-    ms_conversion = 10 * interpolation_factor;
+    ms_conversion = round(sampling_rate / 1000 * interpolation_factor);   % interpolated samples per ms (was hard-coded for 10 kHz)
     x = 1:size(norm_wf_matrix,1);
     xq = 1:(1/interpolation_factor):size(norm_wf_matrix,1);
-    interp_wf_matrix = double(interp1(x, norm_wf_matrix, xq, 'pchip'));
+    interp_wf_matrix = double(interp1(x(:), norm_wf_matrix, xq(:), 'pchip'));
+    if isvector(norm_wf_matrix), interp_wf_matrix = interp_wf_matrix(:); end   % interp1 returns a row for a single unit
     zci = @(v) find(v(1:end-1) .* v(2:end) <= 0);
     n_units = size(interp_wf_matrix, 2);
 
@@ -81,14 +82,14 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
 
         rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_abs_idx, u);
         if numel(rise_cutout) > 1
-            unit_features.Rise = mean(slewrate(rise_cutout, interpolation_factor));
+            unit_features.Rise = mean(slewrate(rise_cutout, ms_conversion));   % amplitude per ms, independent of sampling rate
         else
             unit_features.Rise = NaN;
         end
         decay_cutout = interp_wf_matrix(peak_2_abs_idx:end, u);
         decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout), 1, 'first'));
         if numel(decay_cutout) > 1
-            unit_features.Decay = mean(slewrate(decay_cutout, interpolation_factor));
+            unit_features.Decay = mean(slewrate(decay_cutout, ms_conversion));
         else
             unit_features.Decay = NaN;
         end

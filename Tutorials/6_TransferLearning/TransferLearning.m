@@ -94,9 +94,10 @@ title('Joint UMAP: DeePhys (circles) + external seeds (triangles)');
 % Pipeline:
 %   1. Apply stored NormalizationParams to both DeePhys and external features
 %      (ensures both sides are in the same normalized feature space).
-%   2. Unsupervised UMAP on the combined set.
+%   2. Joint unit graph on the combined set (same construction as the main
+%      pipeline: exact kNN fuzzy graph by default).
 %   3. Graph label propagation: DeePhys training labels are seeds, external
-%      units receive labels.
+%      units receive labels (NaN if no graph path reaches them).
 %
 % Requires generateTrainLabels() to have been run so NormalizationParams are set.
 
@@ -116,6 +117,24 @@ fprintf('Classified external: %d excitatory, %d inhibitory\n', ...
 % Confidence and embedding for the external units
 ext_conf = ctc_dphy.Reduction.External.Confidence;
 emb_ext2 = ctc_dphy.Reduction.External.Embedding;   % (N_ext × NDims)
+
+% Data from another preparation (e.g. in vivo recordings):
+%   - Normalisation: with a natural cell-type composition, z-score the external
+%     units per recording like the training data (PerGroupZScore=true,
+%     ExternalGroups=recording index). For a set enriched in one class (e.g.
+%     optotagged interneurons), train with NormalizationVar = "" and pass
+%     PerGroupZScore=false: per-group z-scoring would remove the class difference.
+%   - Window: train with the waveform window and ACG lag both datasets cover
+%     (Harmonization.WaveformPreTrough / PostTrough, ACGLag); short external
+%     waveforms are edge-padded otherwise.
+%   - Cutoff="auto": external units can attach to the training graph mainly through
+%     one class, which shifts all their P(inhibitory) values while the ranking stays
+%     good. "auto" infers the threshold from the external scores alone (two-component
+%     mixture on logit P, used only if clearly bimodal; otherwise 0.5 with a warning).
+%     The training labels are not affected; do not re-threshold the training data.
+ext_labels = ctc_dphy.classifyExternalUnits(wf_test_ext, acg_test_ext, sr_ext, Cutoff="auto");
+p_inh_ext  = ctc_dphy.Reduction.External.Probability(:, 2);   % ranking score
+disp(ctc_dphy.Reduction.External.CutoffInfo)
 
 %% C4  Waveform harmonization note
 %

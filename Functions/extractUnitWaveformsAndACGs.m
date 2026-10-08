@@ -110,15 +110,7 @@ else
     fprintf('Harmonization ACG params (%i bins) differ from cached %s (%i bins) — recomputing from parent recording\n', ...
         n_bins_harm, acg_source, n_bins_cached);
 
-    % Ensure CCGHeart MEX is compiled (required by CCG).
-    % Check for the binary directly — which('CCGHeart') would find a .m stub
-    % and return non-empty even when the MEX is missing.
-    func_dir = fileparts(mfilename('fullpath'));
-    if ~isfile(fullfile(func_dir, ['CCGHeart.' mexext()]))
-        prev_dir = cd(func_dir);
-        cleanup  = onCleanup(@() cd(prev_dir));
-        mex('CCGHeart.c');
-    end
+    ensureCCGHeart();   % CCG needs the compiled MEX
 
     % ── FullACG recompute: read from ParentRecordingPath (.npy) ────────────
     % The FullACG uses all spikes from the concatenated parent recording

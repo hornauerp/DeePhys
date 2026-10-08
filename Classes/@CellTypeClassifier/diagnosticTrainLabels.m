@@ -54,7 +54,12 @@ try
     inh_vals = [fc.n_responsive_in, fc.n_after_outlier, fc.n_after_geometric];
     exc_vals = [fc.n_ce_in, fc.n_ce_after_outlier];
 
-    if use_community
+    if lower(string(ctc.Parameters.OutlierDetection.Method)) == "enrichment"
+        % enrichment seeds have no purity step: responders -> consensus inhibitory seeds
+        inh_vals   = inh_vals(1:2);
+        inh_labels = {'Responders', 'Seeds (enriched, consensus)'};
+        exc_labels = {'Depleted-community pool', 'Excitatory seeds'};
+    elseif use_community
         inh_labels = {'Responsive candidates', 'After community filter', 'After purity filter'};
         exc_labels = {'CE community pool', 'CE training set'};
     else
@@ -81,10 +86,11 @@ try
     end
     hold off;
 
-    all_y      = [y_inh; y_exc];
-    all_labels = [fliplr(inh_labels), fliplr(exc_labels)];
+    % yticks requires increasing values; keep each label with its bar position
+    [all_y, order] = sort([y_inh; y_exc]);
+    all_labels     = [inh_labels, exc_labels];
     yticks(all_y);
-    yticklabels(all_labels);
+    yticklabels(all_labels(order));
     xlabel('Unit count');
     title('Label pipeline funnel');
     box off;

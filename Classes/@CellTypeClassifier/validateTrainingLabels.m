@@ -124,10 +124,16 @@ per_culture_acc  = nan(1, n_cultures);
 per_culture_n    = zeros(1, n_cultures);
 per_culture_cids = unique_cultures;
 
-tdir = p_umap.TemplateDir;
-assert(~isempty(tdir) && isfolder(tdir), ...
-    'CellTypeClassifier:validateTrainingLabels', ...
-    'Parameters.UMAP.TemplateDir must be set and exist for cross-validation.');
+% UMAP templates of the folds are only needed during this call: use TemplateDir when
+% set, otherwise a temporary folder that is removed afterwards.
+tdir = char(p_umap.TemplateDir);
+if isempty(tdir)
+    tdir = tempname;
+    mkdir(tdir);
+    remove_tdir = onCleanup(@() rmdir(tdir, 's')); %#ok<NASGU>
+end
+assert(isfolder(tdir), 'CellTypeClassifier:validateTrainingLabels', ...
+    'Parameters.UMAP.TemplateDir "%s" does not exist.', tdir);
 
 for ci = 1:n_cultures
     cid       = unique_cultures(ci);
@@ -152,7 +158,7 @@ for ci = 1:n_cultures
     y_held = y_train(held_mask);
 
     % Brief supervised UMAP: source as training, held-out as test
-    uid           = char(java.util.UUID.randomUUID);
+    [~, uid]      = fileparts(tempname);   % unique name without requiring a JVM
     template_file = fullfile(tdir, ['ctc_cv_template_', uid, '.mat']);
     cleanup       = onCleanup(@() deleteIfExists(template_file));
 

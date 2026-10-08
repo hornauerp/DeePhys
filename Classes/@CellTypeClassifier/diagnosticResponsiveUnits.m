@@ -301,16 +301,23 @@ try
     n_resp     = numel(unique(unit_ids_all(resp_idx)));
     n_nonresp  = n_total - n_resp;
     pct_resp   = 100 * n_resp / max(n_total, 1);
-    method     = ctc.Parameters.Bootstrap.GroundTruthMethod;
-    alpha_val  = ctc.Parameters.Bootstrap.Alpha;
-    alpha_fc   = ctc.Parameters.Bootstrap.FullCurveAlpha;
+    p_boot     = ctc.Parameters.Bootstrap;
+    method     = p_boot.GroundTruthMethod;
 
-    if lower(string(method)) == "full_curve"
-        thresh_str = sprintf('FullCurveAlpha = %.3g', alpha_fc);
-    elseif lower(string(method)) == "metadata"
-        thresh_str = sprintf('LabelField = "%s"', ctc.Parameters.Bootstrap.LabelField);
-    else
-        thresh_str = sprintf('Alpha = %.3g', alpha_val);
+    switch lower(string(method))
+        case "full_curve"
+            thresh_str = sprintf('|rho| >= %.2f, FC >= %.2g, p < %.0e', p_boot.MonotonicityThreshold, ...
+                p_boot.MinFoldChange, p_boot.ConfirmationAlpha);
+        case "control_calibrated"
+            if ~isnan(p_boot.TargetFDR)
+                thresh_str = sprintf('TargetFDR = %.2g', p_boot.TargetFDR);
+            else
+                thresh_str = sprintf('ControlQuantile = %.3g', p_boot.ControlQuantile);
+            end
+        case "metadata"
+            thresh_str = sprintf('LabelField = "%s"', p_boot.LabelField);
+        otherwise
+            thresh_str = sprintf('Alpha = %.3g', p_boot.Alpha);
     end
 
     summary_lines = {

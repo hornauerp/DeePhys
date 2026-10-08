@@ -2,7 +2,7 @@ classdef CellTypeClassifier < handle
 % CELLTYPECLASSIFIER  Transductive graph-based cell-type classification pipeline for MEA experiments.
 %
 % Identifies inhibitory (interneuron) vs excitatory neurons using unsupervised
-% UMAP embedding with Louvain community detection and graph label propagation.
+% unit graph with Leiden / Louvain community detection and graph label propagation.
 % Two ground truth strategies are supported:
 %
 %   Drug response (GroundTruthMethod = "two_window" or "full_curve"):
@@ -45,8 +45,12 @@ classdef CellTypeClassifier < handle
         UnitLabels              double          % (1 x N): 1=excitatory, 2=inhibitory, NaN=unclassified
         UnitConfidence          double          % (1 x N): kNN confidence in [0,1]; 1.0 for training units
         UnitGraphConnectivity   double          % (1 x N): number of direct training-unit neighbors in UMAP graph
+        Composition             struct = struct()   % estimateComposition: .Table per culture, .Probability /
+                                               %   .Labels per unit (calibrated, culture-prior adjusted)
         UMAP                                   % Trained UMAP model from run_umap
-        Reduction               struct          % Struct with Unsupervised/Train/Test/External embeddings
+        Graph                   struct = struct()   % Unit graph used for communities and label propagation
+                                               %   .W (n_unique x n_unique sparse), .k, .Method ("exact" | "umap")
+        Reduction               struct = struct()   % Unsupervised/Train/Test/External embeddings (a 0x0 struct cannot take new fields)
         HarmonizedWaveforms     double          % (N_samples x N_units) processed waveforms
         HarmonizedACGs          double          % (N_bins x N_units) ACGs
         HarmonizedSR            double          % Waveform sampling rate after harmonization
@@ -130,6 +134,26 @@ classdef CellTypeClassifier < handle
             s.HarmonizedWaveforms = [];
             s.HarmonizedACGs    = [];
             s.HarmonizedSR      = [];
+        end
+
+        function G = graphMatrix(ctc)
+        % GRAPHMATRIX  Symmetric unit graph used for communities and label propagation.
+        %
+        % The exact kNN graph (Parameters.Graph.Method = "exact", deterministic) when it was
+        % built, otherwise the fuzzy graph of the UMAP model (randomised neighbour search).
+            if isfield(ctc.Graph, 'W') && ~isempty(ctc.Graph.W)
+                G = ctc.Graph.W;
+            else
+                assert(~isempty(ctc.UMAP) && ~isempty(ctc.UMAP.head), ...
+                    'CellTypeClassifier:noGraph', ...
+                    'No unit graph — run generateTrainLabels() before classification.');
+                n = max([ctc.UMAP.head(:); ctc.UMAP.tail(:)]);
+                if ~isempty(ctc.Reduction) && isfield(ctc.Reduction, 'Unsupervised') && ~isempty(ctc.Reduction.Unsupervised)
+                    n = size(ctc.Reduction.Unsupervised, 1);
+                end
+                G = sparse(ctc.UMAP.head, ctc.UMAP.tail, ctc.UMAP.weights, n, n);
+                G = (G + G') / 2;
+            end
         end
 
         function clearCache(ctc)
@@ -221,10 +245,13 @@ classdef CellTypeClassifier < handle
         % GETOREXTRACT  Three-level cache: in-memory -> disk -> compute.
         %
         % ACG source strategy (ACGSource parameter):
-        %   "FullACG" — prefer Parent_ACG* columns from FeatureStore (pre-computed
-        %               from full parent spike train). Falls back to segment ACG if
-        %               Parent_ACG* columns are not present in the FeatureStore.
-        %   "ACG"     — always compute from UnitData.SpikeTimes (segment-level).
+        %   "FullACG"      — prefer Parent_ACG* columns from FeatureStore (pre-computed
+        %                    from full parent spike train). Falls back to the
+        %                    concatenated segments, then to the segment ACG.
+        %   "Concatenated" — spike trains of all segments of the unit joined.
+        %   "ACG"          — the unit's own segment only (UnitData.SpikeTimes). For
+        %                    dose-response data this is the drug-free (baseline) ACG;
+        %                    the other two include the drug periods.
             ph    = ctc.Parameters.Harmonization;
             N     = numel(unit_data);
             cache = ctc.CachedExtraction;
@@ -275,7 +302,7 @@ classdef CellTypeClassifier < handle
                             wf(1:L, i_wf) = double(wf_list{i_wf}(:));
                         end
                     end
-                    sr = unit_data(1).SamplingRate;
+                    sr = [unit_data.SamplingRate];   % per unit: datasets may mix rates
                 end
 
                 % ACG: prefer Parent_ACG* from FeatureStore when ACGSource == "FullACG"
@@ -314,11 +341,30 @@ classdef CellTypeClassifier < handle
                     [~, loc]  = ismember(ud_keys, fs_keys);
                     valid     = loc > 0;
                     n_bins    = numel(parent_acg_cols);
-                    acg       = zeros(n_bins, numel(unit_data));
+                    acg       = nan(n_bins, numel(unit_data));
                     if any(valid)
                         acg(:, valid) = ut{loc(valid), parent_acg_cols}';
                     end
-                    return
+                    if any(~valid)
+                        warning('CellTypeClassifier:acgMissing', ...
+                            '%d/%d units have no Parent_ACG row in the FeatureStore; their ACG is NaN.', ...
+                            sum(~valid), numel(valid));
+                    end
+                    % Stored ACGs use the processor's window; adapt or recompute when it differs.
+                    n_target = round(2 * ph.ACGLag / ph.ACGBinSize) + 1;
+                    if n_bins == n_target
+                        return
+                    end
+                    [from_bs, from_lag] = CellTypeClassifier.storedACGParams(unit_data, n_bins);
+                    adapted = CellTypeClassifier.adaptACG(acg, from_bs, from_lag, ph.ACGBinSize, ph.ACGLag);
+                    if ~isempty(adapted)
+                        fprintf('CellTypeClassifier: Parent_ACG adapted from %d bins (%.4g s, +-%.4g s) to %d bins.\n', ...
+                            n_bins, from_bs, from_lag, n_target);
+                        acg = adapted;
+                        return
+                    end
+                    fprintf(['CellTypeClassifier: Parent_ACG (%d bins) cannot be adapted to Harmonization ' ...
+                        '(BinSize=%.4g, Lag=%.4g) — recomputing from spike trains.\n'], n_bins, ph.ACGBinSize, ph.ACGLag);
                 end
                 % FeatureStore has no FullACG columns — try reading FullACG
                 % directly from the UnitData structs (legacy MEArecording path).
@@ -395,12 +441,13 @@ classdef CellTypeClassifier < handle
                     fprintf('CellTypeClassifier: No FullACG in FeatureStore or UnitData — using segment ACG.\n');
                 end
             end
-            % Prefer parent (combined-segment) spike trains when available.
-            % OriginalUnitDataArray holds all recording segments before
-            % discardSegmentUnits filtered to baseline only. Concatenating
-            % spike trains across segments approximates the full parent
-            % recording, producing a higher-quality ACG than any single segment.
-            if ~isempty(ctc.OriginalUnitDataArray) && numel(ctc.OriginalUnitDataArray) > numel(unit_data)
+            % "FullACG" without stored ACGs, and "Concatenated": join the spike trains of all
+            % segments (OriginalUnitDataArray, kept by discardSegmentUnits) to approximate the
+            % parent recording. More spikes, but in dose-response data this includes the drug
+            % periods, so the ACG of a responsive unit carries its drug response.
+            % "ACG": the unit's own (baseline) segment only, i.e. drug-free features.
+            use_concat = ismember(string(ph.ACGSource), ["FullACG", "Concatenated"]);
+            if use_concat && ~isempty(ctc.OriginalUnitDataArray) && numel(ctc.OriginalUnitDataArray) > numel(unit_data)
                 acg = ctc.computeParentACGs(unit_data, ph);
                 fprintf('CellTypeClassifier: ACG computed from parent spike trains (%d units, BinSize=%.4f, Lag=%.4f).\n', ...
                     numel(unit_data), ph.ACGBinSize, ph.ACGLag);
@@ -527,6 +574,30 @@ classdef CellTypeClassifier < handle
         end
 
         function defaultParams = returnDefaultParams()
+        % RETURNDEFAULTPARAMS  Default parameters. Most of them only serve optional methods.
+        %
+        % The default pipeline ("full_curve" responders, Graph.Method "exact", "enrichment"
+        % seeds, graph label propagation) reads:
+        %   Experiment description (must match the data; nothing to tune):
+        %     CultureKeys; UMAP.GroupingVar / GroupingValues (dose variable, baseline value);
+        %     UMAP.NormalizationVar (per-recording z-score for cultures of natural composition,
+        %     "" for a set enriched in one class); Bootstrap.Direction;
+        %     TrainLabels.ResponsiveClassLabel; the candidate cultures are the filter passed
+        %     to identifyResponsiveUnits.
+        %   Feature definition (fixed by what the data contain): Harmonization.* (waveform
+        %     window and rate, ACG bins and lag, ACGSource); UMAP.ACGWeight / WaveformWeight.
+        %   Chosen from the data: Harmonization.ACGSmoothing ("auto").
+        %   Fixed settings, not tuned per dataset:
+        %     responders  Bootstrap.MonotonicityThreshold, MinFoldChange, ConfirmationAlpha,
+        %                 ConfirmationNIter, NetworkCorrection, MinRecordings
+        %     seeds       UMAP.NNeighbors (graph k), Community.LouvainResolution,
+        %                 LouvainRestarts, SeedFDR
+        % Everything else belongs to alternative or legacy paths: the two_window /
+        % control_calibrated / metadata responder settings, the UMAP embedding (NDims, MinDist,
+        % Spread: plots only with the exact graph), OutlierDetection.* and the remaining
+        % Community.* settings of the "community" / "iforest" seed methods, the "knn"
+        % classifier, Ensemble, BayesianOptimization and the supervised-UMAP settings.
+        % qualityReport() replaces parameter tuning by acceptance checks.
 
             % ── Bootstrap: responsive unit identification ─────────────────────
             % GroundTruthMethod: how to identify inhibitory candidates.
@@ -549,6 +620,22 @@ classdef CellTypeClassifier < handle
             %     (e.g. "inhibitory"). Units with other non-empty values become counterexamples.
             defaultParams.Bootstrap.LabelField            = "";   % e.g. "CellType"
             defaultParams.Bootstrap.ResponsiveClassValue  = "";   % e.g. "inhibitory"
+            % control_calibrated: per unit, the firing-rate change from baseline to the
+            %   HighDoses highest doses (log2 fold change minus the culture median, rank-sum
+            %   test on BinSize-s counts). Thresholds are the ControlQuantile tails of the same
+            %   quantity in control cultures (ControlFilter, e.g. {'Construct', 0}: no DREADD),
+            %   so the call rate in controls is the false-positive rate and the estimated FDR is
+            %   reported. Replaces Alpha/NIter/NetworkCorrection/MinFoldChange tuning; needs
+            %   control cultures recorded with the same protocol.
+            defaultParams.Bootstrap.ControlFilter         = {};   % e.g. {'Construct', 0}
+            defaultParams.Bootstrap.ControlQuantile       = 0.01;
+            defaultParams.Bootstrap.CalibratedAlpha       = 0.01;
+            defaultParams.Bootstrap.HighDoses             = 2;
+            % TargetFDR: when set, the threshold is the least strict one whose control-estimated
+            %   FDR stays <= TargetFDR (more responders at a stated purity); NaN = fixed
+            %   ControlQuantile tails. Strict tails keep only the strongest responders, which
+            %   can be a biased subset of the target cells.
+            defaultParams.Bootstrap.TargetFDR             = NaN;
             % two_window: compares mean FR between two recordings within a culture,
             %   selected by their GroupingVar value.
             %   PreGroupValue/PostGroupValue identify which recordings to compare.
@@ -563,12 +650,19 @@ classdef CellTypeClassifier < handle
             defaultParams.Bootstrap.BinSize               = 20;           % two_window only (seconds)
             defaultParams.Bootstrap.NIter                 = 1000;         % two_window only
             defaultParams.Bootstrap.Alpha                 = 1e-3;         % two_window only; 1e-10 was unreliable for 1000 bootstrap samples
-            defaultParams.Bootstrap.FullCurveAlpha        = 0.05;         % full_curve: per-unit Spearman p-value threshold (legacy, unused by staged pipeline)
             defaultParams.Bootstrap.MonotonicityThreshold = 0.75;        % full_curve stage 1: min |Spearman rho|
             defaultParams.Bootstrap.MinFoldChange         = 1.5;         % full_curve stage 2: min fold change (baseline to max dose)
             defaultParams.Bootstrap.ConfirmationAlpha     = 1e-3;        % full_curve stage 3: bootstrap p-value threshold
             defaultParams.Bootstrap.ConfirmationNIter     = 1000;        % full_curve stage 3: bootstrap iterations
             defaultParams.Bootstrap.Direction             = "increase";   % "increase" | "decrease" | "both"
+            % ResponseRules: several perturbations of the responsive class, one row
+            %   {field, value, direction} each, e.g. {'Construct', 1, "increase"; 'Construct', 2, "decrease"}
+            %   (activating and silencing DREADD in interneurons). Responders of all rules are
+            %   pooled; validateResponseRules trains on each rule alone and validates on the
+            %   others - pool only if both directions hold; otherwise keep one rule as the
+            %   independent check.
+            %   Empty = one condition (identifyResponsiveUnits' metadata_filter + Direction).
+            defaultParams.Bootstrap.ResponseRules         = {};
             defaultParams.Bootstrap.MinResponsiveStrength = 0;  % 0 = no filtering
 
             % UseFDR: replace fixed Alpha with Benjamini-Hochberg FDR control.
@@ -595,6 +689,9 @@ classdef CellTypeClassifier < handle
             defaultParams.UMAP.SupervisedNNeighbors = 100;
             defaultParams.UMAP.UnitFeatures         = ["FullACG","ReferenceWaveform"];
             defaultParams.UMAP.NormalizationVar     = "ChipID";
+            % {field, value}: z-score each NormalizationVar group with the statistics of its
+            % reference units only (bridge wells of equal composition on every plate / batch)
+            defaultParams.UMAP.NormalizationReference = {};
             defaultParams.UMAP.GroupingVar          = "Concentration";
             defaultParams.UMAP.GroupingValues       = 0;
             defaultParams.UMAP.TrainingCultureIdx   = [];
@@ -606,11 +703,29 @@ classdef CellTypeClassifier < handle
             %   regardless of group size. sqrt(w/n) is applied column-wise so that
             %   sum-of-squared contributions = w for each group.
             %   1.0 = equal contribution per group (default); 2.0 = double contribution.
-            %   Applied only before supervised UMAP (not unsupervised) so training
-            %   labels are unaffected and BayOpt can optimize weights independently.
+            %   Applied before the unsupervised UMAP (runUnsupervisedUMAP and
+            %   optimizeUnsupervisedUMAP alike) and before the kNN classifier.
             defaultParams.UMAP.ACGWeight            = 1.0;
             defaultParams.UMAP.WaveformWeight       = 1.0;
             defaultParams.UMAP.ConfidenceK          = 15;  % k for kNN confidence scoring
+
+            % ── Unit graph ───────────────────────────────────────────────────
+            % Graph.Method: graph used for communities and label propagation.
+            %   "exact" (default) — UMAP's fuzzy kNN graph built with an exact neighbour
+            %                       search (buildKNNGraph): identical across runs and seeds.
+            %   "umap"            — the graph of the UMAP model (approximate, randomised
+            %                       neighbour search; results varied between runs).
+            %   "wnn"             — experimental weighted-nearest-neighbour graph (buildWNNGraph;
+            %                       Seurat WNN / PhysMAP): ACG and waveform get per-unit
+            %                       weights from how well each modality predicts the unit's
+            %                       neighbours; independent of UMAP.ACGWeight / WaveformWeight.
+            %   With "exact", the UMAP embedding (NDims, MinDist, Spread) only serves plots and
+            %   the embedding-based outlier methods ("community", "iforest"); it does not affect
+            %   labels from the default "enrichment" method.
+            defaultParams.Graph.Method              = "exact";
+            % ComputeEmbedding: run UMAP for the 2-D/ND embedding (diagnostic plots). Required
+            % by the embedding-based outlier methods; optional for "enrichment".
+            defaultParams.UMAP.ComputeEmbedding     = true;
 
             % AutoNNeighbors: UMAP n_neighbors set to max(MinNNeighbors, sqrt(N)).
             %   Structural scaling: prevents n_neighbors from exceeding dataset size
@@ -638,13 +753,18 @@ classdef CellTypeClassifier < handle
             % ── Outlier detection ─────────────────────────────────────────────
             % Method: controls how responsive-unit outliers are detected and how
             %   counterexamples are selected when no explicit CE labels are provided.
+            %   "enrichment" (default) — communities (Community.Algorithm) on the unit graph;
+            %                  significantly enriched in responders (hypergeometric test,
+            %                  BH-FDR Community.SeedFDR) give the inhibitory seeds, significantly
+            %                  depleted ones the excitatory seeds. No thresholds to tune and no
+            %                  fallback: errors if no community is enriched (selectEnrichmentSeeds).
             %   "community" — Louvain community filter + graph purity check + k-medoids CE.
             %                  Falls back to "iforest" if communities are not well-separated.
             %   "iforest"   — Isolation forest on feature-space (PCA or UMAP domain) +
             %                  geometric consistency filter + distance-based CE selection.
             %   "none"      — No outlier detection; all responsive units used as training
             %                  labels; distance-based CE selection without iforest filtering.
-            defaultParams.OutlierDetection.Method                            = "community";
+            defaultParams.OutlierDetection.Method                            = "enrichment";
             defaultParams.OutlierDetection.CounterexampleRatio               = 1;    % 1:1 balanced default; use actual ratio for metadata
             defaultParams.OutlierDetection.CounterexampleDistancePercentile  = 50;   % percentile of inh self-distances used as CE distance threshold
             defaultParams.OutlierDetection.Domain                = "umap";
@@ -658,20 +778,41 @@ classdef CellTypeClassifier < handle
             %     higher = finer communities). Set by optimizeUnsupervisedUMAP or manually.
             %   InhibitoryCommunityRelThresh: community is considered inhibitory if its
             %     responsive fraction >= this × max responsive fraction across communities.
-            %   CommunityFallbackThreshold: if fewer than this fraction of responsive units
-            %     land in inhibitory communities, fall back to distance-based CE selection.
+            %   FallbackCriterion: when to abandon the community path for iforest CE selection.
+            %     "permutation" (default): fall back unless responsive units concentrate in
+            %     the selected communities more than randomly drawn units do (p <=
+            %     FallbackAlpha over FallbackPermutations redraws; the partition is fixed).
+            %     "absolute": fall back if fewer than CommunityFallbackThreshold of the
+            %     responsive units land in inhibitory communities. With many false-positive
+            %     candidates that fraction is itself near 0.5, so the path can flip with the seed.
             %   MinCEPerCommunity: minimum k-medoids selected from each CE community.
             %   PuritySigmaThreshold: robust z-score cutoff for graph purity outlier removal.
-            %   LouvainRestarts: number of Louvain restarts; best-Q run is used.
+            %   LouvainRestarts: number of Louvain restarts; best-Q run is used. The UMAP
+            %     graph itself does not depend on the seed, so with enough restarts the
+            %     best-Q partition (and the labels) become seed-independent.
             %   EnrichmentFactor: community must have >= EnrichmentFactor × p_resp responsive
             %     fraction to qualify as inhibitory (chance-anchored absolute floor).
             defaultParams.Community.LouvainResolution             = 1.0;
             defaultParams.Community.InhibitoryCommunityRelThresh  = 0.3;
-            defaultParams.Community.CommunityFallbackThreshold    = 0.5;
+            defaultParams.Community.FallbackCriterion             = "permutation";
+            defaultParams.Community.FallbackAlpha                 = 0.01;
+            defaultParams.Community.FallbackPermutations          = 200;
+            defaultParams.Community.CommunityFallbackThreshold    = 0.5;   % "absolute" criterion only
             defaultParams.Community.MinCEPerCommunity             = 3;
             defaultParams.Community.PuritySigmaThreshold          = 2.5;
-            defaultParams.Community.LouvainRestarts               = 5;
+            defaultParams.Community.LouvainRestarts               = 30;
             defaultParams.Community.EnrichmentFactor              = 1.5;
+            % SeedFDR: false-discovery rate for responder enrichment / depletion of communities
+            %   ("enrichment" method; replaces EnrichmentFactor, InhibitoryCommunityRelThresh,
+            %   PuritySigmaThreshold and the fallback settings above).
+            defaultParams.Community.SeedFDR                       = 0.05;
+            % Algorithm: community detection for the enrichment seeds. "leiden" (default;
+            %   Traag et al. 2019, leidenCommunities: connected communities, works on the
+            %   sparse graph) or "louvain" (BCT community_louvain, needs the full N x N
+            %   matrix: ~20 GB at 50,000 units). Partition quality is similar; Leiden is
+            %   faster and its restarts agree more.
+            %   LouvainResolution / LouvainRestarts apply to both.
+            defaultParams.Community.Algorithm                     = "leiden";
 
             % ── Classification ────────────────────────────────────────────────
             defaultParams.Classification.Method                 = "graph";   % "knn" (feature-space kNN) or "graph" (UMAP graph label propagation)
@@ -679,18 +820,17 @@ classdef CellTypeClassifier < handle
             defaultParams.Classification.GraphConvergenceTol     = 1e-4;   % graph method: convergence tolerance
             defaultParams.Classification.UseConfidenceThreshold  = false;  % mark low-confidence predictions as NaN
             defaultParams.Classification.ConfidenceThreshold     = 0.8;    % threshold when UseConfidenceThreshold=true
-            defaultParams.Classification.UseJoinedTransform      = false;
 
             % ── Ensemble classification ───────────────────────────────────────
             % Enabled: run the pipeline N times with different RNG seeds and take
             %   majority-vote labels. Confidence = fraction of seeds agreeing.
-            %   Directly addresses non-reproducibility from single-seed sensitivity.
             %   MinAgreement: minimum vote fraction for label assignment.
             %   Units below this threshold become NaN (unclassified).
-            % Ensemble is on by default: majority vote across 5 seeds is the
-            % recommended path. Set Enabled=false for fast iteration during
-            % development (single-seed, ~5x faster but less reproducible).
-            defaultParams.Ensemble.Enabled      = true;
+            % Off by default: with Graph.Method "exact" and "enrichment" seeds (a consensus
+            % over Community.LouvainRestarts) the labels hardly depend on the seed, so the
+            % ensemble only multiplies the runtime and replaces P(inhibitory) by a vote
+            % fraction. Useful with Graph.Method "umap" or the embedding-based seed methods.
+            defaultParams.Ensemble.Enabled      = false;
             defaultParams.Ensemble.Seeds        = [42, 1042, 2042, 3042, 4042];
             defaultParams.Ensemble.MinAgreement = 0.6;
 
@@ -712,8 +852,8 @@ classdef CellTypeClassifier < handle
                 "NNeighbors", "MinDist", "Spread", "ACGWeight", "WaveformWeight", "LouvainResolution"];
             defaultParams.BayesianOptimization.NNeighborsRange        = [10, 100];
             defaultParams.BayesianOptimization.LouvainResolutionRange = [0.5, 3.0];
+            defaultParams.BayesianOptimization.LouvainRestarts        = 5;   % per evaluation (final run: Community.LouvainRestarts)
             defaultParams.BayesianOptimization.AutoLouvainRange       = true;
-            defaultParams.BayesianOptimization.UnsupObjectiveMetric   = "community_coherence";
 
             % ── Diagnostics ───────────────────────────────────────────────────
             % Enable: when true, each pipeline method generates a diagnostic figure
@@ -736,10 +876,28 @@ classdef CellTypeClassifier < handle
             defaultParams.Harmonization.WaveformTargetSamplingRate = 120000;  % Hz
             defaultParams.Harmonization.WaveformPreTrough          = 1.0;     % ms before trough
             defaultParams.Harmonization.WaveformPostTrough         = 2.0;     % ms after trough
-            defaultParams.Harmonization.WaveformEdgeMode           = "trim";  % "zero" | "edge" | "trim"
+            % WaveformEdgeMode: "edge" (default) pads short waveforms with their edge values so
+            %   every unit (and every external dataset) gets the same fixed window; "trim"
+            %   shrinks the window to the shortest span of the units at hand, so training and
+            %   external feature vectors could differ in length; "zero" pads with zeros.
+            defaultParams.Harmonization.WaveformEdgeMode           = "edge";
             defaultParams.Harmonization.ACGBinSize                 = 0.0005;  % s (0.5 ms bins)
             defaultParams.Harmonization.ACGLag                     = 0.1;     % s (+-100 ms -> 401 bins)
-            defaultParams.Harmonization.ACGSource                  = "FullACG";  % "FullACG" or "ACG"
+            % ACGSource: "ACG" (the unit's baseline segment only; default), "FullACG"
+            %   (stored parent ACG) or "Concatenated" (all segments joined). With drug-response
+            %   labels, "ACG" keeps the features drug-free: the other two include the drug
+            %   periods, so responsive units' ACGs encode the response used to label them.
+            %   "FullACG" is appropriate when the segments share one state (no perturbation),
+            %   where it only adds spikes.
+            defaultParams.Harmonization.ACGSource                  = "ACG";
+            % ACGSmoothing: Gaussian width (ms) applied to the ACGs before feature building,
+            %   or "auto" (default): chosen without labels by split-half prediction
+            %   (selectACGSmoothing). External units get the same width. 0 = none.
+            defaultParams.Harmonization.ACGSmoothing               = "auto";
+            % ACGNormalization: "peak" (default; divide by the maximum) or "baseline" (divide
+            %   by the mean of the outer fifth of the lags: 1 = uncorrelated level, the shape
+            %   no longer scales with firing rate / burstiness).
+            defaultParams.Harmonization.ACGNormalization           = "peak";
         end
 
     end
@@ -844,7 +1002,7 @@ classdef CellTypeClassifier < handle
                 sr = ph.WaveformTargetSamplingRate;  % placeholder when no waveforms
             else
                 wf = double(raw_wf);
-                sr = unit_data(1).SamplingRate;       % original sampling rate
+                sr = [unit_data.SamplingRate];        % original sampling rate, per unit
             end
 
             % ACG: compute from spike times at the specified bin size / lag
@@ -909,6 +1067,112 @@ classdef CellTypeClassifier < handle
                 if any(in_win)
                     binned(u, :) = histcounts(st(in_win), bins);
                 end
+            end
+        end
+
+        function W = knnGraph(X, k)
+        % KNNGRAPH  Deterministic UMAP-style fuzzy kNN graph with exact neighbours.
+        %   W = CellTypeClassifier.knnGraph(X, k)   (see private/buildKNNGraph)
+            W = buildKNNGraph(X, k);
+        end
+
+        function [W, info] = wnnGraph(X, is_acg, k)
+        % WNNGRAPH  Weighted-nearest-neighbour graph of the ACG and waveform columns.
+        %   [W, info] = CellTypeClassifier.wnnGraph(X, is_acg, k)   (see private/buildWNNGraph)
+            [W, info] = buildWNNGraph(X, is_acg, k);
+        end
+
+        function [sigma_ms, info] = acgSmoothingWidth(spike_trains, acg_used, bin_size, lag)
+        % ACGSMOOTHINGWIDTH  Label-free ACG smoothing width (see private/selectACGSmoothing).
+            [sigma_ms, info] = selectACGSmoothing(spike_trains, acg_used, bin_size, lag);
+        end
+
+        function [t, info] = externalCutoff(p, min_dbic)
+        % EXTERNALCUTOFF  Label-free threshold on external P(inhibitory) (see private/inferExternalCutoff).
+            if nargin < 2, min_dbic = 10; end
+            [t, info] = inferExternalCutoff(p, min_dbic);
+        end
+
+        function acg = smoothACGs(acg, sigma_ms, bin_size)
+        % SMOOTHACGS  Gaussian smoothing of ACG columns (centre bin kept; see private/smoothACG).
+            acg = smoothACG(acg, sigma_ms / 1000 / bin_size);
+        end
+
+        function T = responseTable(ud_all, meta, culture_keys, group_field, baseline_gv, cultures, p)
+        % RESPONSETABLE  Drift-corrected baseline vs high-dose response per unit
+        %   (see private/calibratedResponseTable).
+            T = calibratedResponseTable(ud_all, meta, culture_keys, group_field, baseline_gv, cultures, p);
+        end
+
+        function [inc, dec, info] = calibrateResponses(T, is_ctrl, q, alpha, target_fdr)
+        % CALIBRATERESPONSES  Responder calls with control-culture thresholds (see private/calibrateCalls).
+            if nargin < 5, target_fdr = NaN; end
+            [inc, dec, info] = calibrateCalls(T, is_ctrl, q, alpha, target_fdr);
+        end
+
+        function [T, inh_comm, exc_comm] = communityEnrichment(M, eligible, responsive, fdr)
+        % COMMUNITYENRICHMENT  Hypergeometric responder enrichment/depletion per community.
+        %   [T, inh, exc] = CellTypeClassifier.communityEnrichment(M, eligible, responsive, fdr)
+        %   (see private/communityEnrichmentTest)
+            [T, inh_comm, exc_comm] = communityEnrichmentTest(M, eligible, responsive, fdr);
+        end
+
+        function [inh_seeds, exc_seeds] = enrichmentSeeds(G, responsive, eligible, p_comm, rng_seed)
+        % ENRICHMENTSEEDS  Training seeds of the enrichment test on graph G, all units in the
+        %   training subset (see private/selectEnrichmentSeeds). Returns global unit indices.
+            if nargin < 5, rng_seed = 1; end
+            responsive = logical(responsive(:)');
+            subset = 1:size(G, 1);
+            [~, det] = evalc('selectEnrichmentSeeds(G, find(responsive), subset, responsive, logical(eligible(:)''), p_comm, rng_seed)');
+            inh_seeds = subset(det.clean_resp_local);
+            exc_seeds = subset(det.counterexample_idx_local);
+        end
+
+        function [labels, kept, expected_error] = selectConfident(p_inh, n_spikes, min_p, min_spikes)
+        % SELECTCONFIDENT  Labels of units with P(inhibitory) >= min_p or <= 1 - min_p and at
+        %   least min_spikes spikes; NaN otherwise (see confidentLabels). expected_error is
+        %   mean(1 - max(P, 1 - P)) over the kept units, the share of wrong labels if P is
+        %   calibrated.
+            p_inh = p_inh(:)'; n_spikes = n_spikes(:)';
+            kept = (p_inh >= min_p | p_inh <= 1 - min_p) & n_spikes >= min_spikes & ~isnan(p_inh);
+            labels = nan(size(p_inh));
+            labels(kept) = 1 + double(p_inh(kept) > 0.5);
+            expected_error = mean(min(p_inh(kept), 1 - p_inh(kept)));
+            if ~any(kept), expected_error = NaN; end
+        end
+
+        function rules = parseResponseRules(spec)
+        % PARSERESPONSERULES  Bootstrap.ResponseRules as a struct array (Filter = {field, value},
+        %   Direction). spec: n x 3 cell {field, value, direction} or a struct array with fields
+        %   Filter (or Field + Value) and Direction.
+            if iscell(spec)
+                assert(size(spec, 2) == 3, 'CellTypeClassifier:badResponseRules', ...
+                    'ResponseRules must have one row {field, value, direction} per rule.');
+                rules = struct('Filter', cell(1, size(spec, 1)), 'Direction', "");
+                for r = 1:size(spec, 1)
+                    rules(r).Filter = spec(r, 1:2);
+                    rules(r).Direction = lower(string(spec{r, 3}));
+                end
+            else
+                rules = struct('Filter', cell(1, numel(spec)), 'Direction', "");
+                for r = 1:numel(spec)
+                    if isfield(spec, 'Filter'), f = spec(r).Filter; else, f = {spec(r).Field, spec(r).Value}; end
+                    rules(r).Filter = f;
+                    rules(r).Direction = lower(string(spec(r).Direction));
+                end
+            end
+            for r = 1:numel(rules)
+                assert(ismember(rules(r).Direction, ["increase", "decrease", "both"]), ...
+                    'CellTypeClassifier:badResponseRules', ...
+                    'Rule %d: direction must be "increase", "decrease" or "both".', r);
+            end
+        end
+
+        function st = thinSpikeTrain(st, n, rs)
+        % THINSPIKETRAIN  Random subset of n spikes (sorted); all spikes if n >= numel(st).
+            if nargin < 3, rs = RandStream.getGlobalStream; end
+            if n < numel(st)
+                st = sort(st(randperm(rs, numel(st), n)));
             end
         end
 
@@ -989,7 +1253,7 @@ classdef CellTypeClassifier < handle
                 y_pred (1,:) double
                 y_true (1,:) double
             end
-            assert(numel(y_pred) == numel(y_true), ...
+            assert(numel(y_pred) == numel(y_true), 'CellTypeClassifier:lengthMismatch', ...
                 'y_pred (%d) and y_true (%d) must have the same length.', ...
                 numel(y_pred), numel(y_true));
 
@@ -1031,6 +1295,53 @@ classdef CellTypeClassifier < handle
     end
 
     methods (Static, Access = private)
+
+        function [bin_size, lag] = storedACGParams(unit_data, n_bins)
+        % STOREDACGPARAMS  Bin size and lag of stored parent ACGs ([] if unknown).
+        %   RecordingProcessor.computeParentFeatures records them on each unit; older
+        %   processors without that provenance are assumed to use its defaults when the
+        %   bin count matches them (0.5 ms bins, +-100 ms -> 401 bins).
+            bin_size = []; lag = [];
+            if ~isempty(unit_data) && isprop(unit_data(1), 'FullACGBinSize') && ...
+                    ~isempty(unit_data(1).FullACGBinSize) && ~isempty(unit_data(1).FullACGLag)
+                bin_size = unit_data(1).FullACGBinSize;
+                lag      = unit_data(1).FullACGLag;
+            elseif n_bins == 401
+                bin_size = 0.0005;
+                lag      = 0.1;
+            end
+        end
+
+        function out = adaptACG(acg, from_bs, from_lag, to_bs, to_lag)
+        % ADAPTACG  Crop (and re-bin by an integer factor) bin-centred ACGs to a narrower,
+        %   coarser window. Returns [] when the target cannot be derived from the source.
+            out = [];
+            if isempty(from_bs) || to_lag > from_lag + 1e-12
+                return
+            end
+            k = to_bs / from_bs;
+            if k < 1 - 1e-9 || abs(k - round(k)) > 1e-9
+                return
+            end
+            k = round(k);
+            n_from = size(acg, 1);
+            if n_from ~= round(2 * from_lag / from_bs) + 1
+                return
+            end
+            if k > 1
+                % A coarse bin centred on a fine-bin centre spans k fine bins; for even k
+                % the two outermost fine bins are split in half.
+                if mod(k, 2) == 0
+                    kernel = [0.5, ones(1, k - 1), 0.5];
+                else
+                    kernel = ones(1, k);
+                end
+                acg = conv2(acg, kernel(:), 'same');
+            end
+            centre = (n_from + 1) / 2;
+            m = round(to_lag / to_bs);
+            out = acg(centre + (-m:m) * k, :);
+        end
 
         function mask = buildCultureSubsetMask(fs, culture_indices, culture_keys)
         % BUILDCULTURESUBSETMASK  Logical mask over UnitTable for specified culture indices.

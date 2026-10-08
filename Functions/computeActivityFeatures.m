@@ -116,7 +116,7 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
     end
 
     if length(isi) > 3
-        pacf = parcorr(isi, 1);
+        pacf = parcorr(isi, 'NumLags', 1);
         act_feat.PartialAutocorrelation = pacf(2);
     else
         act_feat.PartialAutocorrelation = NaN;

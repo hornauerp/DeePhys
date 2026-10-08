@@ -13,7 +13,7 @@ classdef UnitData
 %   ud = UnitData.fromStruct(s);
 
     properties
-        UnitID              string  % Stable deterministic ID (hash of ChipID+PlatingDate+TemplateID+RefElectrode)
+        UnitID              string  % Stable deterministic ID (hash of ChipID+PlatingDate+SortingID+TemplateID+RefElectrode)
         RecordingID         string  % Links to parent SpikeData.RecordingID (string, not a handle)
         TemplateID          double  % 1-indexed template number from Kilosort
         ReferenceElectrode  double  % Channel index of peak-amplitude electrode

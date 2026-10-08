@@ -12,9 +12,14 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
 %       .Binning  (default 0.01)
 %       .Outlier.Method (string, e.g. "median", or "" to skip)
 %       .Outlier.ThresholdFactor (double)
+%       .ShapeLevel (default 0.25, see burstShape)
 %
 % OUTPUTS:
-%   burst_features - (1 x 10) table
+%   burst_features - (1 x 14) table. BurstDuration / RiseTime / FallTime (legacy, unchanged):
+%       detector span and the maximum bin within it, so they depend on how the detector sets
+%       its edges (unrelated between detectors for the same bursts) and on Binning.
+%       BurstWidth / BurstRise / BurstFall / BurstFWHM: medians of burstShape, measured at
+%       ShapeLevel of each burst's own peak above baseline, independent of the detector edges.
 
     arguments
         bursts      struct
@@ -26,7 +31,8 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
 
     params = parseStructParameters(struct( ...
         'Binning', 0.01, ...
-        'Outlier', struct('Method', '', 'ThresholdFactor', 3)), params);
+        'Outlier', struct('Method', '', 'ThresholdFactor', 3), ...
+        'ShapeLevel', 0.25), params);
 
     if length(bursts.T_start) < 3
         Burst.MeanInterBurstInterval = NaN;
@@ -39,6 +45,10 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
         Burst.StdInterBurstInterval = NaN;
         Burst.IntraFiringRate = NaN;
         Burst.InterFiringRate = NaN;
+        Burst.BurstWidth = NaN;
+        Burst.BurstRise = NaN;
+        Burst.BurstFall = NaN;
+        Burst.BurstFWHM = NaN;
         burst_features = struct2table(Burst);
         return
     end
@@ -89,6 +99,13 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
     Burst.StdInterBurstInterval = std(IBIs);
     Burst.IntraFiringRate = median(intra_fr);
     Burst.InterFiringRate = median(inter_fr);
+    % detector-independent timing and shape (burstShape at ShapeLevel)
+    S = burstShape(spike_times, bursts.T_start(:)', bursts.T_end(:)', ...
+        max([spike_times; bursts.T_end(:)]) + 1, Level=params.ShapeLevel);
+    Burst.BurstWidth = median(S.Duration, 'omitnan');
+    Burst.BurstRise  = median(S.Rise, 'omitnan');
+    Burst.BurstFall  = median(S.Fall, 'omitnan');
+    Burst.BurstFWHM  = median(S.FWHM, 'omitnan');
     burst_features = struct2table(Burst);
 end
 

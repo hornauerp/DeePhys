@@ -14,11 +14,15 @@ function [frequency, magnitude, fit_coeff] = computeRegularity(binned_signal, bi
 % OUTPUTS:
 %   frequency     - Dominant frequency [Hz]
 %   magnitude     - FFT magnitude at the dominant frequency
-%   fit_coeff     - Exponential decay coefficient (b in fit(x, y, 'exp1'));
+%   fit_coeff     - Exponential decay coefficient (b in fit(f, y, 'exp1'), f in Hz);
 %                   NaN if the fit fails
 
 NFFT = length(binned_signal);
 F = (0 : 1/NFFT : 1/2-1/NFFT) * (1/binning);
+% Remove mean and linear drift before windowing: a positive signal times the Hanning
+% window has a strong low-frequency lobe, so the "dominant frequency" was always the
+% lowest non-DC bin (1/duration).
+binned_signal = detrend(binned_signal(:))';
 % Apply Hanning window to reduce spectral leakage
 win = hanning(NFFT)';
 binned_signal = binned_signal .* win;
@@ -47,7 +51,9 @@ if length(p) >= 2
     p(p == 0) = eps;  % guard against log10(0) = -Inf from zero-power bins
     log_p = log10(p) - min(log10(p)); % shift to positive for fitting
     try
-        f = fit(abs_locs, log_p, 'exp1');
+        % Fit against frequency in Hz (not FFT bin index), so the coefficient does not
+        % scale with recording duration.
+        f = fit(F(abs_locs)', log_p, 'exp1');
         fit_coeff = f.b;
     catch
         fit_coeff = NaN;

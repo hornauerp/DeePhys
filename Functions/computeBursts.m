@@ -13,7 +13,11 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
 %   n_units       - (1 x 1) double, total number of units
 %   duration      - (1 x 1) double, recording duration in seconds
 %   params        - struct with fields:
-%       .Method         "ISIN" or "logISI" (default "ISIN")
+%       .Method         "ISIN" (legacy, default), "logISI" or "ISINJoint" (detectNetworkBursts:
+%                       N and threshold chosen jointly against surrogates, with a gate)
+%       .TonicMethod    "ISINJoint" only: unit removal before detection (default "gini")
+%       .ShapeLevel     onset / offset level for burst timing and shape (default 0.25, burstShape)
+%       .TonicMinRate   "ISINJoint" only: units below this rate (Hz, or "median") are never removed (default "median")
 %       .MergeFactor    (default 0.5)
 %       .Outlier        struct with .Method, .ThresholdFactor
 %       .Binning        (default 0.01, for burst statistics)
@@ -36,9 +40,25 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
         'Method',      "ISIN", ...
         'MergeFactor', 0.5, ...
         'Outlier',     struct('Method', '', 'ThresholdFactor', 3), ...
-        'Binning',     0.01), params);
+        'Binning',     0.01, ...
+        'TonicMethod', "gini", ...
+        'ShapeLevel', 0.25, ...
+        'TonicMinRate', "median"), params);
 
     bursts = struct('T_start', [], 'T_end', [], 'Method', params.Method);
+
+    if string(params.Method) == "ISINJoint"
+        % N and threshold chosen jointly against surrogates, uncoupled units removed, gate for
+        % cultures without network bursts (detectNetworkBursts); edges are trimmed there, so
+        % the legacy prune / merge steps are not applied
+        [bursts, info] = detectNetworkBursts(spike_times, spike_units, duration, ...
+            TonicMethod=params.TonicMethod, TonicMinRate=params.TonicMinRate, FiringRates=firing_rates, ...
+            CVISI=cv_isi, ShapeLevel=params.ShapeLevel);
+        bursts.Info = info;
+        burst_features = computeBurstStatistics(bursts, spike_times, spike_units, n_units, ...
+            struct('Binning', params.Binning, 'Outlier', params.Outlier, 'ShapeLevel', params.ShapeLevel));
+        return
+    end
 
     if string(params.Method) == "logISI"
         B = detectBurstsLogISI_local(spike_times);
@@ -59,7 +79,8 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
         bursts.dunns = dunns_coeffs;
 
         if isnan(best_N)
-            burst_features = computeBurstStatistics(bursts, spike_times, spike_units, n_units, params);
+            burst_features = computeBurstStatistics(bursts, spike_times, spike_units, n_units, ...
+                struct('Binning', params.Binning, 'Outlier', params.Outlier, 'ShapeLevel', params.ShapeLevel));   % only its own fields (no Method/MergeFactor warnings)
             return
         end
 
@@ -72,7 +93,8 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
     bursts = pruneBursts_local(bursts, spike_times);
     bursts = mergeBursts_local(bursts, params.MergeFactor);
 
-    burst_features = computeBurstStatistics(bursts, spike_times, spike_units, n_units, params);
+    burst_features = computeBurstStatistics(bursts, spike_times, spike_units, n_units, ...
+        struct('Binning', params.Binning, 'Outlier', params.Outlier, 'ShapeLevel', params.ShapeLevel));   % only its own fields (no Method/MergeFactor warnings)
 end
 
 
@@ -275,7 +297,10 @@ function [best_N, best_ISI_N, N_array, ISI_N_array, dunns_coeffs] = ...
                 idx_sub = idx;
             end
             distM = squareform(pdist(ISI_sub(:)));
-            dunns_coeffs(ni) = dunns(2, distM, idx_sub);
+            % all subsampled windows on one side of the threshold: no split (dunns returns [])
+            d_ni = dunns(2, distM, idx_sub);
+            if isempty(d_ni) || ~isfinite(d_ni), d_ni = 0; end
+            dunns_coeffs(ni) = d_ni;
         end
     end
 

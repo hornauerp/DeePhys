@@ -18,6 +18,16 @@ counter_label = 3 - resp_label;
 in_train_id = subset_global_idx(det.clean_resp_local);
 ex_train_id = subset_global_idx(det.counterexample_idx_local);
 
+% Degenerate training sets (typically from the iforest fallback) make the propagated labels
+% depend on a handful of seeds; flag them instead of failing silently.
+n_cls = [numel(ex_train_id), numel(in_train_id)];
+if min(n_cls) < 30 || max(n_cls) > 3 * max(min(n_cls), 1)
+    warning('CellTypeClassifier:degenerateTrainingSet', ...
+        ['Training set has %d counterexamples and %d responsive units. Labels from such a ' ...
+         'small or unbalanced set are unreliable; check the outlier-detection path ' ...
+         '(community fallback?) or the responsive-unit calls.'], n_cls(1), n_cls(2));
+end
+
 train_ids = [ex_train_id, in_train_id];
 y_train   = [counter_label * ones(1, numel(ex_train_id)), ...
              resp_label    * ones(1, numel(in_train_id))];
@@ -50,6 +60,8 @@ labels.use_community_path          = det.use_community_path;
 labels.ce_outlier_mask             = det.ce_outlier_mask;
 labels.ce_distances_from_inh_centroid = det.ce_distances_from_inh;
 labels.inh_centroid                = det.inh_centroid;
+if isfield(det, 'enrichment'), labels.enrichment = det.enrichment; end   % per-community test table
+if isfield(det, 'louvain'),    labels.louvain    = det.louvain;    end   % restarts reaching the best partition
 
 labels.filter_counts = struct( ...
     'n_responsive_in',    numel(det.responsive_local), ...

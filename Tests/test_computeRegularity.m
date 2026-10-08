@@ -75,5 +75,16 @@ classdef test_computeRegularity < matlab.unittest.TestCase
             tc.verifyGreaterThanOrEqual(frequency, 0);
         end
 
+        function testPositiveBurstTraceGivesBurstFrequency(tc)
+            % Normalised network activity is non-negative. Bursts every 2 s over 600 s must
+            % give 0.5 Hz, not the lowest FFT bin (1/600 Hz) from the windowed mean.
+            binning = 0.1;
+            t = 0 : binning : 600 - binning;
+            signal = max(0, sin(2 * pi * 0.5 * t)).^8;
+            signal = signal / max(signal);
+            frequency = computeRegularity(signal, binning, 10);
+            tc.verifyEqual(frequency, 0.5, 'AbsTol', 0.02);
+        end
+
     end
 end

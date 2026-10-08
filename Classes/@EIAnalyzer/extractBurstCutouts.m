@@ -65,6 +65,9 @@ for c = 1:numel(eia.Activity)
     else
         peak_trace = act.total;
     end
+    % PeakHeight / PeakProminence are fractions of the trace maximum: the raw trace is in
+    % mean spikes per bin, whose scale differs between cultures, rate types and bin sizes.
+    peak_trace = peak_trace ./ max(max(peak_trace), eps);
 
     [~, locs] = findpeaks(peak_trace, ...
         'MinPeakHeight',     p.PeakHeight, ...
@@ -344,9 +347,13 @@ function [burst_mat, i_mat, e_mat] = xcorrAlignToMean(burst_mat, i_mat, e_mat, m
 % xcorr-align rows to the current mean (used for per-cluster realignment).
     row_max    = max(burst_mat, [], 2);
     mean_burst = mean(burst_mat ./ max(row_max, eps), 1, 'omitnan');  % guard zero rows
+    mean_burst(isnan(mean_burst)) = 0;
     n          = size(burst_mat, 1);
     for b = 1:n
         norm_row     = burst_mat(b,:) ./ max(max(burst_mat(b,:)), eps);
+        % Rows shifted in stage 0 carry NaN padding; xcorr would turn every lag touching
+        % it into NaN and bias the argmax, so the padding counts as zero activity here.
+        norm_row(isnan(norm_row)) = 0;
         xc           = xcorr(norm_row, mean_burst, max_shift);
         [~, max_lag] = max(xc);
         shift        = (max_shift + 1) - max_lag;

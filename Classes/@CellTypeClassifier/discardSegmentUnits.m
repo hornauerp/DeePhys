@@ -91,6 +91,10 @@ end
 if ~isempty(ctc.CounterexampleUnitIdx)
     ctc.CounterexampleUnitIdx = ctc.CounterexampleUnitIdx(is_baseline);
 end
+if isstruct(ctc.ResponsivenessDetail) && isfield(ctc.ResponsivenessDetail, 'rule_of_unit') ...
+        && numel(ctc.ResponsivenessDetail.rule_of_unit) == numel(is_baseline)
+    ctc.ResponsivenessDetail.rule_of_unit = ctc.ResponsivenessDetail.rule_of_unit(is_baseline);
+end
 
 % -- Clear cached state (must be recomputed on filtered arrays) ----------------
 ctc.NormalizedFeatures  = [];

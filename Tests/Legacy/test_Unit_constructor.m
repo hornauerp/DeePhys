@@ -31,7 +31,8 @@ classdef test_Unit_constructor < matlab.unittest.TestCase
             names    = Unit.returnFeatureNames('act');
             expected = ["FiringRate", "MeanInterSpikeInterval", ...
                         "VarianceInterSpikeInterval", "CVInterSpikeInterval", ...
-                        "PartialAutocorrelation"];
+                        "CV2InterSpikeInterval", "LocalVariation", "RevisedLocalVariation", ...
+                        "FanoFactor", "PartialAutocorrelation"];
             tc.verifyEqual(names, expected);
         end
 

@@ -31,7 +31,7 @@ function T = queryRecordings(db, options)
     try
         db.ensureConnected();
 
-        esc = @(s) strrep(char(string(s)), '''', '''''');
+        esc = @(s) strrep(char(fillmissing(string(s), 'constant', "")), '''', '''''');   % missing -> ''
         conditions = {};
         needs_join = false;
 
@@ -70,12 +70,23 @@ function T = queryRecordings(db, options)
             conditions{end+1} = sprintf("ps.analysis_name = '%s'", esc(options.Analysis));
         end
 
-        % Build query
+        % Build query. MATLAB's sqlite fetch cannot import NULL, which the REAL columns
+        % hold for unknown values (e.g. no DIV): read them through a sentinel, and turn
+        % it back into NaN below.
+        cols = ["id", "input_path", "chip_id", "plate_id", "well_id", "plating_date", ...
+                "recording_date", "div", "mutation", "custom_metadata", "n_total_templates", ...
+                "n_good_units", "sampling_rate", "duration_s", "registered_at", "last_updated"];
+        real_cols = ["div", "sampling_rate", "duration_s"];
+        null_real = -1e300;
+        sel = "r." + cols;
+        is_real = ismember(cols, real_cols);
+        sel(is_real) = "COALESCE(r." + cols(is_real) + ", " + sprintf('%g', null_real) + ") AS " + cols(is_real);
+        sel = strjoin(sel, ", ");
         if needs_join
-            sql = "SELECT DISTINCT r.* FROM recordings r " + ...
+            sql = "SELECT DISTINCT " + sel + " FROM recordings r " + ...
                   "LEFT JOIN processing_status ps ON r.id = ps.recording_id";
         else
-            sql = "SELECT * FROM recordings r";
+            sql = "SELECT " + sel + " FROM recordings r";
         end
 
         if ~isempty(conditions)
@@ -93,6 +104,9 @@ function T = queryRecordings(db, options)
         % Ensure output is a table
         if ~istable(T)
             T = cell2table(T);
+        end
+        for c = real_cols(ismember(real_cols, string(T.Properties.VariableNames)))
+            T.(c)(T.(c) == null_real) = NaN;
         end
 
     catch ME

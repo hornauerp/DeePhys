@@ -1,28 +1,33 @@
 %% Tutorial 4 — Cell Type Classification
 %
 % Classifies neurons as excitatory (1) or inhibitory (2) using a transductive
-% graph-based pipeline. All units are embedded together in a single unsupervised
-% UMAP; Louvain community detection identifies inhibitory communities from their
-% responsive-unit enrichment; label propagation on the UMAP graph assigns cell
-% types to every unit without a separate test-set projection.
+% graph-based pipeline. All units share one deterministic kNN graph (exact
+% neighbours, UMAP's fuzzy weighting); communities that are statistically enriched
+% in drug-responsive units provide the inhibitory seeds, depleted ones the
+% excitatory seeds (consensus over Leiden restarts); label propagation on the
+% graph assigns cell types to every unit.
 %
-%   Drug-response (default): Bootstrap firing-rate test identifies units that
-%   increase firing after stimulus — these are the inhibitory ground-truth set.
-%   Louvain communities are evaluated by their fraction of responsive units.
+%   Drug-response (default): units whose firing increases with an activating
+%   DREADD in interneurons are the inhibitory ground-truth candidates. Features
+%   are drug-free (baseline ACGs, smoothed with a width chosen without labels).
 %
 %   Metadata (pure cultures): Labels read directly from a UnitTable column
 %   (e.g. optogenetics tag, genetic marker). Skips bootstrap entirely.
 %
 % Pipeline:
 %   identifyResponsiveUnits()       ← flag drug-responsive (inhibitory) candidates
-%   [optimizeUnsupervisedUMAP()]    ← optional Phase 1 BayOpt (recommended)
-%   generateTrainLabels()           ← Louvain on UMAP graph → inh/CE training set
-%   classifyUnits()                 ← label propagation on UMAP graph (transductive)
+%   discardSegmentUnits()           ← keep baseline rows (dose-response data)
+%   generateTrainLabels()           ← unit graph → enrichment seeds (inh / exc)
+%   classifyUnits()                 ← label propagation on the unit graph
+%   qualityReport()                 ← acceptance checks instead of parameter tuning
+%
+% The defaults are not meant to be tuned; check results with qualityReport
+% (Section 5b) rather than adjusting parameters.
 %
 % Prerequisites:
 %   - Tutorial 1 completed (FeatureStore and RecordingProcessors saved)
 %   - DeePhys on the MATLAB path
-%   - Brain Connectivity Toolbox (BCT) on the MATLAB path (community_louvain)
+%   - Brain Connectivity Toolbox (bundled; graph features and the "louvain" option)
 
 %% 1  Load data
 
@@ -38,204 +43,88 @@ for i = 1:numel(procs)
     ud = [ud, procs(i).Units]; %#ok<AGROW>
 end
 
-%% 2  Recommended parameter set
+%% 2  Parameters
 %
-% Parameters below reflect considered defaults for the typical MEA drug-response
-% experiment. Each choice is annotated with what it controls and what to try if
-% the result is unsatisfactory.
-%
-% A minimal working call needs only GroupingVar / GroupingValues. Everything else
-% has a principled default. Start with defaults; tune only what diagnostics flag.
+% Nothing here needs tuning. What you set describes the experiment and the
+% features; the remaining settings are fixed and the result is checked with
+% qualityReport (Section 5b). CellTypeClassifier.returnDefaultParams lists which
+% parameters the default pipeline reads; most others only serve the optional
+% methods of Sections 8-9.
 
 params = struct();
 
-% ── Harmonization ─────────────────────────────────────────────────────────────
+% ── Experiment description (must match your data) ──────────────────────────────
 %
+% CultureKeys: metadata columns that together identify one culture (well).
+% GroupingVar / GroupingValues: dose variable and its baseline value. Features come
+%   from the baseline recordings, so the drug response does not enter them.
+% NormalizationVar: per-group z-score of the features. 'RecordingID' removes
+%   recording-level offsets (electrodes, culture density) and suits cultures of
+%   natural cell-type composition. Use '' for a dataset enriched in one class, where
+%   per-group z-scoring would remove the class difference itself.
+% GroundTruthMethod 'full_curve': candidates are units whose firing rate follows the
+%   dose (Section 3). Direction: their response ('increase' for an activating DREADD
+%   in interneurons). The cultures that provide candidates are chosen in Section 3.
+% ControlFilter: non-transduced control cultures (qualityReport and
+%   validateIndependentResponders; also the 'control_calibrated' responder method).
+%   In this tutorial a metadata column 'Construct' codes the treatment: 0 control,
+%   1 activating DREADD in interneurons, 2 silencing DREADD in interneurons.
+%   Replace it with your own column and values.
+params.CultureKeys                = ["ChipID", "PlatingDate", "RecordingDate"];
+params.UMAP.GroupingVar            = 'Concentration';
+params.UMAP.GroupingValues         = 0;
+params.UMAP.NormalizationVar       = 'RecordingID';
+params.Bootstrap.GroundTruthMethod = 'full_curve';
+params.Bootstrap.Direction         = 'increase';
+params.Bootstrap.ControlFilter     = {'Construct', 0};
+
+% ── Feature definition (fixed by what the data contain) ────────────────────────
+%
+% Waveforms: trough-aligned, resampled to 120 kHz, window -1 to +2 ms
+%   (WaveformPreTrough / WaveformPostTrough); shorter waveforms are edge-padded.
 % ACGBinSize: 0.5 ms captures fine rebound inhibition peaks. Increase to 1 ms
 %   for speed on large datasets. Do not go below 0.2 ms — bins become too sparse
 %   for low-firing units.
 % ACGLag: ±100 ms covers the full rebound window for most inhibitory subtypes.
-%   Reduce to ±50 ms if memory is limited, but you lose late-rebound features.
-% ACGSource: 'FullACG' uses the parent recording ACG (better statistics than
-%   the per-recording ACG). Falls back to per-recording if Parent_ACG* is absent.
-params.Harmonization.ACGBinSize = 0.0005;
-params.Harmonization.ACGLag     = 0.1;
-params.Harmonization.ACGSource  = 'FullACG';
+% To classify external data later (Tutorial 6), train with the waveform window and
+%   ACG lag that both datasets cover.
+% ACGWeight / WaveformWeight (UMAP.*): equal total contribution of both feature
+%   groups (1:1), independent of their number of bins.
+% ACGSource: 'ACG' (default) uses the baseline recording only. With drug-response
+%   labels this keeps the features drug-free: 'FullACG' (parent recording) and
+%   'Concatenated' include the drug periods, so the ACGs of responsive units encode
+%   the very response used to label them. Use 'FullACG' only without a perturbation.
+% ACGSmoothing: 'auto' (default) chooses the Gaussian width from the data by
+%   split-half prediction (no labels); the same width is applied to external units.
+params.Harmonization.ACGBinSize   = 0.0005;
+params.Harmonization.ACGLag       = 0.1;
+params.Harmonization.ACGSource    = 'ACG';
+params.Harmonization.ACGSmoothing = 'auto';
 
-% ── Bootstrap firing-rate test ─────────────────────────────────────────────────
+% ── Fixed settings (not tuned per dataset) ─────────────────────────────────────
 %
-% GroundTruthMethod controls how inhibitory candidates are identified:
-%   'two_window' (default): bootstrap permutation test comparing pre vs post
-%     firing rate within each culture. Requires distinct baseline and treatment
-%     recordings selectable by GroupingVar.
-%   'full_curve': per-unit Spearman rank correlation between firing rate and
-%     GroupingVar across all recordings of the culture. More robust for
-%     multi-concentration dose-response experiments (e.g. 0, 1, 10, 100 µM).
-%     Falls back to 'two_window' if fewer than Bootstrap.MinRecordings are available.
-%   'metadata': read labels directly from UnitTable — see Section 6.
-params.Bootstrap.GroundTruthMethod = 'two_window';
-
-% Alpha: 1e-10 is deliberately strict. Louvain community detection handles
-%   impure candidates, but over-inclusion here (weak alpha) floods the community
-%   with noise units and degrades enrichment-based detection. If you get fewer
-%   than ~10 responsive units per culture, consider relaxing to 1e-6 first.
+% Responder calls ('full_curve'): |Spearman rho| >= Bootstrap.MonotonicityThreshold
+%   (0.75), fold change >= MinFoldChange (1.5), bootstrap p < ConfirmationAlpha (1e-3).
+% Seeds: exact kNN graph with UMAP.NNeighbors = 50; Leiden communities
+%   (Community.Algorithm; "louvain" also available) at Community.LouvainResolution = 1
+%   (standard modularity), LouvainRestarts = 30; Community.SeedFDR = 0.05.
+% Sensitivity check: before reporting an inhibitory fraction, vary the responder
+% thresholds (rho, fold change, alpha) and, separately, NNeighbors and
+% LouvainResolution. Check that the labels agree across settings and that the
+% independent validation AUC (Section 5b) stays stable. The ranking of the units is
+% expected to be stable; the inhibitory fraction can move by a few percentage
+% points, so report it with that range rather than tuning it.
 %
-%   Empirical fallback: when more than 20% of units have a non-Normal bootstrap
-%   null (Jarque-Bera test) AND Alpha < 1e-3, the test automatically switches
-%   from the fitted Normal CDF to empirical quantiles of the bootstrap null.
-%   This avoids inflated Type I error from parametric extrapolation at extreme
-%   alpha. The switch is logged but does not change the output format.
-%
-%   Resolution floor: at NIter = 1000, the finest empirically-resolvable alpha
-%   is 1/NIter = 1e-3. For Alpha < 1e-3, increase NIter (e.g. 10 000) or rely
-%   on the Normal fit. For very strict thresholds with few units, the empirical
-%   fallback improves reliability but requires more iterations for stability.
-%
-% FullCurveAlpha: equivalent threshold for 'full_curve' (Spearman p-value).
-%   0.05 is appropriate since the Spearman test is already conservative for
-%   monotonic dose-response and the small N (usually 4-6 recordings).
-params.Bootstrap.Alpha          = 1e-10;
-params.Bootstrap.FullCurveAlpha = 0.05;
-params.Bootstrap.NIter          = 1000;
-params.Bootstrap.Direction      = 'increase';
-
-% ── Normalization and recording selection ──────────────────────────────────────
-%
-% Per-chip z-score before the global z-score removes chip-level offsets in
-% feature distributions (different electrode impedances, culture densities).
-% Set NormalizationVar = '' to skip per-group normalization on single-chip datasets.
-params.UMAP.NormalizationVar = 'ChipID';
-
-% GroupingVar / GroupingValues: controls which recordings contribute to the
-% feature matrix. GroupingValues = 0 selects baseline/vehicle recordings — you
-% want features from the untreated state so drug-response changes do not
-% contaminate the feature space.
-params.UMAP.GroupingVar    = 'Concentration';
-params.UMAP.GroupingValues = 0;
-
-% ── Unsupervised UMAP geometry ─────────────────────────────────────────────────
-%
-% The unsupervised UMAP is the only embedding in this pipeline. It covers all N
-% unique units and its NxN fuzzy-simplicial-set graph is used for both Louvain
-% community detection (generateTrainLabels) and label propagation (classifyUnits).
-%
-% NDims: dimensionality of the embedding. Higher values (5–10) preserve more
-%   manifold structure and improve graph-based classification. 2 is interpretable
-%   visually but loses information. Default 5 is a good balance.
-%
-% NNeighbors: controls the local/global balance of the manifold. Smaller values
-%   emphasize fine-grained local structure (good for detecting small inhibitory
-%   subclusters); larger values capture broader topology. AutoNNeighbors = true
-%   sets this to max(MinNNeighbors, sqrt(N)) automatically — recommended.
-%
-% MinDist / Spread: control embedding compactness. MinDist < Spread is required.
-%   These mostly affect visualization; the graph-based classifier uses the NxN
-%   fuzzy simplicial set which is determined by NNeighbors, not MinDist/Spread.
-%   However, BayOpt optimizes them jointly because they affect which units end up
-%   in the same Louvain community.
-%
-% ACGWeight / WaveformWeight: L2 contribution weight of each feature group.
-%   ACGs typically have ~1000 dimensions vs ~240 for waveforms; without weighting
-%   ACG dominates >80% of pairwise distances. BayOpt finds the optimal balance
-%   (Section 8). Default 1.0 = equal group contribution after normalization.
-params.UMAP.NDims         = 5;
-params.UMAP.AutoNNeighbors  = true;
-params.UMAP.MinNNeighbors   = 15;
-params.UMAP.MinDist         = 0.1;
-params.UMAP.Spread          = 1.0;
-params.UMAP.ACGWeight       = 1.0;
-params.UMAP.WaveformWeight  = 1.0;
-
-% ── Louvain community detection ────────────────────────────────────────────────
-%
-% Louvain community detection runs on the NxN UMAP fuzzy simplicial set.
-% Communities are evaluated by their fraction of drug-responsive units to
-% identify inhibitory communities.
-%
-% LouvainResolution (gamma): controls community granularity.
-%   Higher → more, smaller communities.
-%   Lower  → fewer, larger communities.
-%   Default 1.0 is the standard Louvain modularity. For typical datasets
-%   (100–2000 units, 5–15% responsive), the BayOpt (Section 8) will set this
-%   automatically. If running without BayOpt:
-%     - Raise to 1.5–3.0 if responsive units split across too many communities
-%       (community plot shows many small red clusters).
-%     - Lower to 0.5–0.8 if the entire dataset collapses into 2–3 communities
-%       with no clear inhibitory enrichment.
-%
-% InhibitoryCommunityRelThresh: a community is "inhibitory" if its responsive
-%   fraction >= InhibitoryCommunityRelThresh × max_community_fraction.
-%   Default 0.3 means a community must have at least 30% of the highest
-%   responsive fraction in the dataset. Decrease if too few communities are
-%   selected; increase if CE communities are contaminated with responsive units.
-%
-% EnrichmentFactor: dual criterion (absolute floor). A community must have at
-%   least EnrichmentFactor × (n_responsive / N_all) responsive fraction.
-%   Default 3 = 3× above the dataset baseline rate. This prevents weakly-
-%   enriched communities from qualifying as inhibitory when baseline p_resp is
-%   high. Decrease to 2 if too few inhibitory communities are detected.
-%
-% PuritySigmaThreshold: responsive units with anomalously low UMAP-neighborhood
-%   purity (< median - PuritySigmaThreshold × robust_sigma) are removed as
-%   outliers before training label assignment. Default 2.5.
-%
-% CommunityFallbackThreshold: if the fraction of responsive units that land in
-%   inhibitory communities is below this value, the pipeline falls back to the
-%   legacy distance-based CE selection. Default 0.5 (50% coverage required).
-%
-% LouvainRestarts: number of Louvain runs per evaluation; the run with highest
-%   modularity Q is kept. Default 5. Increase to 10 on datasets where Q is
-%   unstable across runs (check Q value in diagnosticTrainLabels plot 1,2).
-params.Community.LouvainResolution            = 1.0;
-params.Community.InhibitoryCommunityRelThresh = 0.3;
-params.Community.EnrichmentFactor            = 3;
-params.Community.PuritySigmaThreshold        = 2.5;
-params.Community.CommunityFallbackThreshold  = 0.5;
-params.Community.LouvainRestarts             = 5;
-
-% ── Classification ─────────────────────────────────────────────────────────────
-%
-% Method: "graph" (default) — label propagation on the UMAP NxN graph.
-%   The graph is the same fuzzy simplicial set used for Louvain; propagation
-%   is fully transductive (no projection of held-out data needed). Training
-%   labels are clamped at each iteration; propagation stops when max label
-%   change < GraphConvergenceTol or GraphMaxIter is reached.
-%
-%   "knn" — distance-weighted kNN in feature space. Simpler and faster but
-%   ignores the manifold structure. Use as a sanity check or when the graph
-%   is very sparse (very small datasets).
-%
-% AutoConfidenceK / ConfidenceK: for "knn" method only. AutoConfidenceK = true
-%   sets k = max(5, sqrt(N_train)) — prevents k from approaching N_train on
-%   small datasets. Ignored in "graph" mode.
-%
-% UseConfidenceThreshold: mark predictions below ConfidenceThreshold as NaN.
-%   Default false (classify all units). Enable after inspecting the confidence
-%   distribution in diagnosticClassification (panel 1,1). A threshold of 0.6
-%   is a reasonable starting point for "graph" mode — values below 0.5 are
-%   near-random for binary classification.
-params.Classification.Method               = "graph";
-params.Classification.GraphMaxIter         = 100;
-params.Classification.GraphConvergenceTol  = 1e-4;
-params.Classification.AutoConfidenceK      = true;    % for "knn" method
-% params.Classification.UseConfidenceThreshold = true;
-% params.Classification.ConfidenceThreshold    = 0.6;
-
-% ── Counterexample selection ───────────────────────────────────────────────────
-%
-% In the community path (default), excitatory counterexamples are selected by
-% k-medoids from non-responsive units in CE (non-inhibitory) communities.
-% CounterexampleRatio = 1 gives one CE per inhibitory candidate — a balanced
-% training set. Increase to 2–3 if the inhibitory fraction after classification
-% is persistently > 30%; this helps the graph propagation discriminate better.
-params.OutlierDetection.CounterexampleRatio = 1;
+% No longer needed (only read by the optional methods of Sections 8-9): the UMAP
+% geometry (NDims, MinDist, Spread: plots only), EnrichmentFactor,
+% InhibitoryCommunityRelThresh, PuritySigmaThreshold, the fallback settings,
+% CounterexampleRatio, the isolation-forest settings, Ensemble and the Bayesian
+% optimisation.
 
 % ── Reproducibility ───────────────────────────────────────────────────────────
 %
-% RNGSeed controls UMAP and bootstrap random states. Run with 2–3 different seeds
-% to verify stability before finalizing results. If labels flip substantially
-% (ARI < 0.85), run optimizeUnsupervisedUMAP() — the embedding geometry is
-% sensitive to initial conditions at the default parameter values.
+% The graph is exact and the seeds are a consensus over the community restarts, so
+% the result should hardly depend on RNGSeed; compare the labels of two seeds to check.
 params.RNGSeed = 42;
 
 % ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -257,38 +146,40 @@ ctc = CellTypeClassifier(fs, ud, params);
 
 %% 3  Identify responsive units (drug-response scenario)
 %
-% Bootstrap permutation test: compares pre-stimulus vs post-stimulus firing
-% rate across cultures. Units with a significant rate increase become the
-% inhibitory candidate set (positive class).
+% 'full_curve': per unit, the firing rate must follow the dose monotonically,
+% change at least 1.5-fold and pass a bootstrap test of baseline vs highest dose
+% (with the network-wide rate change subtracted). Units that pass become the
+% inhibitory candidates. They need not be pure: Section 4 only uses graph
+% communities in which candidates are over-represented.
 %
-% The filter argument restricts which cultures contribute candidates.
-% Useful if only some conditions contain a drug that produces the response.
+% The filter argument restricts which cultures contribute candidates: only those
+% where the drug acts on interneurons. In cultures with an inhibitory DREADD,
+% units that increase are disinhibited excitatory neurons and must not be used.
 
-ctc.identifyResponsiveUnits();
-
-% With filter — only use control wells (concentration = 0):
-%   ctc.identifyResponsiveUnits({'Concentration', 0});
+% Candidates only from cultures where the activating DREADD targets interneurons:
+ctc.identifyResponsiveUnits({'Construct', 1});
+ctc.discardSegmentUnits();   % dose-response data: continue with the baseline rows
 
 fprintf('Inhibitory candidates: %d / %d total units (%.1f%%)\n', ...
     sum(ctc.ResponsiveUnitIdx), numel(ctc.ResponsiveUnitIdx), ...
     100 * mean(ctc.ResponsiveUnitIdx));
 
-%% 4  Generate training labels (Louvain community detection)
+%% 4  Generate training labels (enrichment seeds on the unit graph)
 %
-% Internally:
-%   1. buildNormalizedFeatures — extracts harmonized waveforms + ACGs; builds
-%      the feature matrix; applies per-group z-score (NormalizationVar groups);
-%      stores NormalizationParams for classifyUnits.
-%   2. Unsupervised UMAP on ALL unique units — produces an NxN fuzzy simplicial
-%      set stored as ctc.UMAP.graph and a 2D (or NDims-D) embedding in
-%      ctc.Reduction.Unsupervised. If ctc.UMAP is already populated (e.g. after
-%      optimizeUnsupervisedUMAP), this step is skipped automatically.
-%   3. Louvain community detection on ctc.UMAP.graph — identifies communities
-%      by responsive-unit enrichment (dual criterion: relative + absolute).
-%   4. Inhibitory training set — responsive units in inhibitory communities,
-%      after graph-purity outlier removal.
-%   5. Excitatory counterexamples — k-medoids selection from CE communities,
-%      proportional to community size, total = n_clean_inhibitory.
+% Internally (defaults):
+%   1. buildNormalizedFeatures — harmonized waveforms + drug-free ACGs (smoothed);
+%      feature matrix; per-group z-score (NormalizationVar groups).
+%   2. Unit graph — exact kNN fuzzy graph on all unique units (ctc.graphMatrix());
+%      deterministic. A UMAP embedding is also computed for plots
+%      (UMAP.ComputeEmbedding) but does not affect the labels.
+%   3. Leiden on the graph, LouvainRestarts times; per community a hypergeometric
+%      test of its responder count (BH-FDR Community.SeedFDR), among units of
+%      cultures where responders occur.
+%   4. Seeds by consensus over the restarts: responders in an enriched community in
+%      >= half of them are inhibitory seeds; as many excitatory seeds come from
+%      non-responders in depleted communities (lowest responder density).
+% No EnrichmentFactor / purity / fallback thresholds; an error is raised when no
+% responder is consistently enriched (the calls do not match the feature graph).
 
 ctc.generateTrainLabels();
 
@@ -303,10 +194,11 @@ end
 
 %% 5  Classify all units (graph label propagation)
 %
-% Uses the NxN UMAP graph stored in ctc.UMAP.graph. Training labels are clamped
-% at each iteration; label distributions propagate through edge weights until
-% convergence. No test-set projection is performed — the embedding covers all
-% units from the start (transductive learning).
+% Uses the same unit graph (ctc.graphMatrix()). Training labels are clamped at
+% each iteration; label distributions propagate through edge weights until
+% convergence. The graph covers all units from the start (transductive learning).
+% A unit is inhibitory when P(inhibitory) > 0.5 after propagation; the training
+% set is balanced, so 0.5 is the calibrated point within the training data.
 %
 % Confidence = winning class probability after propagation (0.5 = near-random,
 % 1.0 = unanimous neighborhood). Training units are always confidence = 1.0.
@@ -319,9 +211,22 @@ n_inh  = sum(labels == 2, 'omitnan');
 n_nan  = sum(isnan(labels));
 fprintf('Excitatory: %d  Inhibitory: %d  Unclassified: %d\n', n_exc, n_inh, n_nan);
 
-% Typical inhibitory fraction in MEA cultures: 15–25%. Values outside this
-% range suggest parameter issues — check diagnosticClassification (panel 1,2:
-% per-chip I/E fraction) and diagnosticTrainLabels (panel 2,2: community fractions).
+% Judge your result with qualityReport below rather than by adjusting parameters.
+
+%% 5b  Quality report (instead of tuning)
+%
+% Acceptance checks without ground truth: seed counts, responder FDR (with the
+% control_calibrated method), the inhibitory fraction per treatment condition
+% (cultures of one preparation should agree; a fraction that tracks the drug
+% condition means the features encode the drug response), an independent
+% validation, and the fraction with a 95% CI over cultures.
+%
+% Independent validation: cultures with an inhibitory DREADD in interneurons
+% (hM4Di) were not used for training. Units that decrease under the actuator are
+% silenced interneurons, units that increase are disinhibited excitatory neurons;
+% the AUC of P(inhibitory) between the two groups measures the classification.
+report = ctc.qualityReport(ConditionVar="Construct", ValidationFilter={'Construct', 2});
+% or separately: v = ctc.validateIndependentResponders({'Construct', 2});
 
 %% 6  Metadata-driven labels (pure culture scenario)
 %
@@ -360,15 +265,14 @@ fprintf('ACG      : %d x %d\n', size(acg,1), size(acg,2));
 plotCellTypeFeatures(ctc);
 sortACGsByPeak(ctc.HarmonizedACGs');
 
-%% 8  Bayesian optimization of UMAP + community parameters (Phase 1)
+%% 8  Optional (legacy): Bayesian optimization of graph + community parameters
 %
-% Run this when default parameters produce unsatisfying community structure:
-%   - diagnosticTrainLabels panel (1,2): responsive units scattered across many
-%     communities with no clear inhibitory enrichment.
-%   - diagnosticTrainLabels panel (2,2): community bar chart shows no community
-%     with clearly elevated responsive fraction (no red bar far from the pack).
-%   - Inhibitory fraction after classifyUnits is implausibly low (<10%) or high (>30%).
-%   - Labels are unstable across RNG seeds (ARI < 0.85 in assessStability).
+% Not needed with the defaults: the labels do not depend on the UMAP geometry
+% (MinDist, Spread, NDims; plots only), hardly depend on the RNG seed, and the
+% enrichment seeds do not use the community_coherence objective optimised here.
+% The optimiser writes NNeighbors, LouvainResolution and the feature weights back
+% to ctc.Parameters; see the sensitivity check in Section 2.
+% Kept for exploring Graph.Method "umap" or the "community" / "iforest" seeds.
 %
 % What is optimized (UnsupOptimizeVars — all six by default):
 %   NNeighbors       — local/global balance of the manifold. Smaller → finer
@@ -393,7 +297,8 @@ sortACGsByPeak(ctc.HarmonizedACGs');
 % The optimized parameters are written back to ctc.Parameters automatically.
 
 ctc_opt = CellTypeClassifier(fs, ud, params);
-ctc_opt.identifyResponsiveUnits();
+ctc_opt.identifyResponsiveUnits({'Construct', 1});
+ctc_opt.discardSegmentUnits();
 
 results = ctc_opt.optimizeUnsupervisedUMAP();
 fprintf('Phase 1 BayOpt: best coherence = %.3f\n', -results.bestObjective);
@@ -414,10 +319,12 @@ fprintf('Stability: ARI = %.3f +/- %.3f\n', stability.meanARI, stability.stdARI)
 %       ["MinDist", "Spread", "ACGWeight", "WaveformWeight", "LouvainResolution"];
 %   ctc_opt.optimizeUnsupervisedUMAP();
 
-%% 9  Validate training labels
+%% 9  Optional: cross-validate the training labels
 %
 % Leave-one-culture-out cross-validation on the training set. Trains on all
 % cultures except one, classifies held-out units, and reports accuracy.
+% Note: it uses a supervised UMAP classifier, not the graph propagation of
+% Section 5; the independent hM4Di check in qualityReport tests the actual labels.
 % Low per-culture accuracy (<75%) indicates that culture's training labels
 % are inconsistent with the rest — check diagnosticTrainLabels for that culture.
 
@@ -473,52 +380,32 @@ xlabel('UMAP 1'); ylabel('UMAP 2');
 %   - Training units (ctc.TrainLabels.sorted_train_ids) sit inside the relevant cluster.
 %   - High confidence (large markers) in cluster cores; lower confidence at boundaries.
 %
-% If inhibitory units are spatially intermixed with excitatory units:
-%   - Inspect diagnosticTrainLabels panel (2,2): are there clearly enriched communities?
-%   - If not, run optimizeUnsupervisedUMAP() (Section 8).
-%   - If yes but classification still fails, lower Community.EnrichmentFactor
-%     or adjust Community.InhibitoryCommunityRelThresh.
+% The embedding is for inspection only; the labels come from the unit graph.
 
-%% 11  Recommended troubleshooting workflows
+%% 11  Troubleshooting (follow the qualityReport checks, not parameters)
 %
-% ── Problem: fewer than ~10 responsive units per culture ───────────────────────
-%   1. Relax Bootstrap.Alpha to 1e-6 (keep Direction = 'increase').
-%   2. If still too few, switch to Bootstrap.GroundTruthMethod = 'full_curve'
-%      for dose-response designs.
-%   3. As last resort, use 'metadata' if external labels are available.
+% ── generateTrainLabels: "no community is enriched in responders" ─────────────
+%   The responder calls do not match the feature graph.
+%   1. diagnosticResponsiveUnits: are there candidates in the expected cultures
+%      (identifyResponsiveUnits filter, Direction)?
+%   2. Features: GroupingValues must select the baseline recordings, and
+%      NormalizationVar the right groups (Section 2).
+%   3. Few candidates per culture: GroundTruthMethod 'control_calibrated' with
+%      Bootstrap.TargetFDR (e.g. 0.2) calls more responders at a stated purity.
 %
-% ── Problem: inhibitory fraction < 10% or > 30% ───────────────────────────────
-%   1. Check diagnosticTrainLabels panel (2,2): community responsive fractions.
-%      - If the bar chart shows no clearly inhibitory community (all bars similar
-%        height): run optimizeUnsupervisedUMAP to improve community structure.
-%      - If an inhibitory community exists but fraction is still wrong: inspect
-%        diagnosticClassification panel (1,2) per-chip I/E bars. Outlier chips
-%        may indicate poor recording quality for those wells.
-%   2. Increase Bootstrap.Alpha (stricter) to reduce contamination in the
-%      responsive set if the fraction is too high.
-%   3. Increase CounterexampleRatio (e.g. to 2) if the fraction is too high —
-%      a larger excitatory training set helps the graph boundary discriminate.
+% ── [WARN] Condition balance ──────────────────────────────────────────────────
+%   The inhibitory fraction tracks the treatment, so the features encode the drug
+%   response: keep ACGSource = 'ACG' (baseline only) and check GroupingValues.
 %
-% ── Problem: unstable results across RNG seeds ────────────────────────────────
-%   1. Run ctc.assessStability('NRuns', 5). If ARI < 0.85, the embedding is
-%      sensitive to initialization — run optimizeUnsupervisedUMAP.
-%   2. After BayOpt, re-run assessStability. ARI > 0.90 is the target.
-%   3. If still unstable: increase LouvainRestarts (e.g. to 10) or reduce
-%      the BayOpt run by fixing WaveformWeight/ACGWeight at their best values
-%      and only optimizing geometry parameters.
+% ── [WARN] Independent validation ─────────────────────────────────────────────
+%   Expected interneurons (hM4Di decreasers) are not ranked above expected
+%   excitatory units. Check the candidate cultures and Direction first; then
+%   whether the validation cultures were recorded like the training cultures.
 %
-% ── Problem: Louvain fallback triggered ("Community fallback" warning) ─────────
-%   The pipeline fell back to distance-based CE selection because fewer than
-%   CommunityFallbackThreshold (50% by default) of responsive units landed in
-%   inhibitory communities. This means the UMAP graph does not separate
-%   inhibitory units into coherent communities at the current resolution.
-%   1. Run optimizeUnsupervisedUMAP — community coherence is the direct objective.
-%   2. If already optimized: lower Community.CommunityFallbackThreshold to 0.3
-%      to be more permissive, or lower Community.EnrichmentFactor to 2.
+% ── Labels differ between RNG seeds ───────────────────────────────────────────
+%   Should not happen with Graph.Method "exact" and "enrichment" seeds. If you use
+%   "umap" or the embedding-based seed methods, enable Ensemble or optimise them
+%   (Section 8).
 %
-% ── Problem: generateTrainLabels reruns UMAP despite prior optimizeUnsupervisedUMAP
-%   Should not happen with default ReuseExistingUMAP = true. If it does:
-%   - Check that ctc is the same object (not a new CellTypeClassifier instance).
-%   - Call explicitly: ctc.generateTrainLabels('ReuseExistingUMAP', true).
-%   - If you changed UMAP parameters after BayOpt: ReuseExistingUMAP=false is
-%     correct behaviour — you want a fresh UMAP reflecting the new parameters.
+% ── External data: (almost) all units in one class ────────────────────────────
+%   See Tutorial 6: matching window, normalisation, and Cutoff="auto".

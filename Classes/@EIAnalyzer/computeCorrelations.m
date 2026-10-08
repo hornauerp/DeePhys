@@ -19,7 +19,7 @@ end
 
 assert(~isempty(eia.Activity), 'Run computeActivity() before computeCorrelations()');
 
-all_labels = eia.Classifier.UnitLabels;
+all_labels = eia.unitLabels();   % same labels as computeActivity (Parameters.Labels)
 corrs      = repmat(struct('pop_corr', [], 'cell_id', []), 1, numel(eia.Activity));
 
 for c = 1:numel(eia.Activity)

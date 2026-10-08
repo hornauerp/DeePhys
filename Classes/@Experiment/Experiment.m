@@ -95,7 +95,10 @@ classdef Experiment < handle
         % opts fields (all optional):
         %   .Algorithm, .KFold, .NHyper  — see Classifier.classify
         %   .FeatureGroups               — string array for feature selection (default "all")
-        %   .CVLevel                     — 'recording' or 'culture' for CV grouping
+        %   .CVLevel                     — 'culture' (default) or 'recording': rows of one
+        %                                  culture / recording are never split across folds
+        %   .IdentityKeys                — metadata columns defining a culture
+        %                                  (default ["ChipID","PlatingDate"])
         %   .NormalizationVar            — metadata field name for per-group normalization
         %   .GroupingVar, .GroupingValues — for Culture-level aggregation
         %   .Normalization               — "baseline" or "scaled" for culture aggregation
@@ -167,9 +170,8 @@ classdef Experiment < handle
 
             switch level
                 case "Unit"
-                    [X, unit_ids] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet, MinFiringRate=opts.MinFiringRate);
-                    full_tbl    = exp.FeatureStore.UnitTable;
-                    unit_tbl    = full_tbl(ismember(full_tbl.UnitID, unit_ids), :);
+                    [X, ~, row_idx] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet, MinFiringRate=opts.MinFiringRate);
+                    unit_tbl    = exp.FeatureStore.UnitTable(row_idx, :);
                     norm_groups = exp.metadataColumn(unit_tbl, opts.NormalizationVar);
                 case "Recording"
                     [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf, FeatureSet=opts.FeatureSet);
@@ -207,9 +209,9 @@ classdef Experiment < handle
     end
 
     % =====================================================================
-    % Private helpers
+    % Private helpers (also reachable from unit tests)
     % =====================================================================
-    methods (Access = private)
+    methods (Access = {?Experiment, ?matlab.unittest.TestCase})
 
         function [X, Y, cv_groups, norm_groups] = prepareML(exp, level, label_var, opts)
         % Extract feature matrix X, labels Y, and group vectors for the requested level.
@@ -217,24 +219,17 @@ classdef Experiment < handle
             pf = opts.ParentFeatures;
             switch level
                 case "Unit"
-                    [X, unit_ids] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet, MinFiringRate=opts.MinFiringRate);
-                    % Filter UnitTable to only the rows returned by unitMatrix
-                    % (important when MinFiringRate drops some units).
-                    full_tbl = exp.FeatureStore.UnitTable;
-                    tbl = full_tbl(ismember(full_tbl.UnitID, unit_ids), :);
-                    if opts.CVLevel == "culture"
-                        cv_groups = FeatureStore.getCultureIDsForUnits( ...
-                            tbl.RecordingID, exp.FeatureStore.MetadataTable, ...
-                            opts.IdentityKeys);
-                    else
-                        cv_groups = exp.metadataColumn(tbl, 'RecordingID');
-                    end
+                    [X, ~, row_idx] = exp.FeatureStore.unitMatrix(fg, pf, FeatureSet=opts.FeatureSet, MinFiringRate=opts.MinFiringRate);
+                    % Align metadata by row index: UnitIDs repeat across recordings, so
+                    % matching on UnitID would pull in rows MinFiringRate dropped.
+                    tbl = exp.FeatureStore.UnitTable(row_idx, :);
+                    cv_groups   = exp.cvGroups(tbl.RecordingID, opts);
                     norm_groups = exp.metadataColumn(tbl, opts.NormalizationVar);
                     Y = exp.extractLabel(tbl, label_var);
                 case "Recording"
                     [X, ~] = exp.FeatureStore.recordingMatrix(fg, pf, FeatureSet=opts.FeatureSet);
                     tbl    = exp.FeatureStore.RecordingTable;
-                    cv_groups   = [];
+                    cv_groups   = exp.cvGroups(tbl.RecordingID, opts);
                     norm_groups = exp.metadataColumn(tbl, opts.NormalizationVar);
                     Y = exp.extractLabel(tbl, label_var);
                 case "Culture"
@@ -257,6 +252,26 @@ classdef Experiment < handle
                     end
                 otherwise
                     error('Experiment:prepareML', 'Unknown level "%s".', level);
+            end
+        end
+
+        function groups = cvGroups(exp, rec_ids, opts)
+        % CV groups for recording- or unit-level rows. CVLevel "culture" (default): rows of
+        % one culture (opts.IdentityKeys) stay in the same fold, because recordings of a
+        % culture (DIVs, doses, segments) share their neurons and are not independent.
+        % "recording": rows of one recording stay together.
+            rec_ids = string(rec_ids);
+            keys    = string(opts.IdentityKeys);
+            meta    = exp.FeatureStore.MetadataTable;
+            if opts.CVLevel == "culture" && all(ismember(keys, string(meta.Properties.VariableNames)))
+                groups = FeatureStore.getCultureIDsForUnits(rec_ids, meta, keys);
+            else
+                if opts.CVLevel == "culture"
+                    warning('Experiment:noCultureKeys', ['IdentityKeys (%s) not all in ' ...
+                        'MetadataTable: cross-validation grouped by recording, not culture.'], ...
+                        strjoin(keys, ', '));
+                end
+                groups = rec_ids;
             end
         end
 
@@ -292,8 +307,8 @@ classdef Experiment < handle
             vars = string(meta.Properties.VariableNames);
             if ~ismember(string(label_var), vars)
                 error('Experiment:cultureLabels', ...
-                    'Column "%s" not found in MetadataTable. ' + ...
-                    'Pass Y explicitly via opts.Y for culture-level classification.', ...
+                    ['Column "%s" not found in MetadataTable. ' ...
+                     'Pass Y explicitly via opts.Y for culture-level classification.'], ...
                     label_var);
             end
             % Build culture IDs per recording (same keys as cultureMatrix)
@@ -342,7 +357,7 @@ classdef Experiment < handle
             if ~isfield(opts, 'FeatureSet'),      opts.FeatureSet = "full";            end
             if ~isfield(opts, 'NormalizationVar'),      opts.NormalizationVar = "";      end
             if ~isfield(opts, 'NormalizationPipeline'), opts.NormalizationPipeline = ""; end
-            if ~isfield(opts, 'CVLevel'),          opts.CVLevel = "recording";         end
+            if ~isfield(opts, 'CVLevel'),          opts.CVLevel = "culture";           end
             if ~isfield(opts, 'Method'),           opts.Method = "UMAP";               end
             if ~isfield(opts, 'IdentityKeys'),     opts.IdentityKeys = ["ChipID","PlatingDate"]; end
             if ~isfield(opts, 'GroupingVar'),      opts.GroupingVar = "DIV";           end

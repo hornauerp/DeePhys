@@ -28,7 +28,7 @@ SpikeData  →  RecordingProcessor  →  FeatureStore
 | [Regressor](Regressor.md) | Random forest / SVM / KNN regression |
 | [DimReducer](DimReducer.md) | UMAP / PCA / t-SNE dimensionality reduction |
 | `CellTypeClassifier` | Transductive E/I labelling pipeline |
-| `EIAnalyzer` | E/I activity traces and burst statistics |
+| [EIAnalyzer](EIAnalyzer.md) | E/I activity around network bursts (legacy traces + burst-event metrics with rate-matched nulls) |
 | [Experiment](Experiment.md) | Orchestrates multi-recording analyses |
 
 ## Result classes

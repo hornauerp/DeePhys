@@ -20,14 +20,17 @@ exp = Experiment.fromProcessors(procs);
 
 %% 2  Unit-level classification
 %
-% Classifies each unit using cross-validation grouped by recording,
-% so units from the same recording are never split across train/test.
+% Classifies each unit using cross-validation grouped by culture, so units
+% from the same culture are never split across train/test. Recordings of one
+% culture (DIVs, segments) contain the same neurons, so grouping by recording
+% would leak them between folds.
 
 opts = struct();
 opts.Algorithm     = 'rf';      % 'rf' (random forest) or 'svm'
 opts.KFold         = 5;
 opts.FeatureGroups = 'all';     % or ["ActivityFeatures","WaveformFeatures"]
-opts.CVLevel       = 'recording';  % group CV at recording level
+opts.CVLevel       = 'culture';               % default; 'recording' groups per recording
+opts.IdentityKeys  = ["ChipID","PlatingDate"]; % metadata columns that define a culture
 
 result_unit = exp.classify('Unit', 'Mutation', opts);
 

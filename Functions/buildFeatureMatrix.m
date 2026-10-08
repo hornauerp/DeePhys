@@ -27,7 +27,8 @@ function [X, feature_names, aligned_wf, norm_acgs, wf_window] = buildFeatureMatr
 %                  Waveforms at a different rate are resampled automatically.
 %   acgs         - (N_bins × N_units) autocorrelograms (central peak NOT removed)
 %                  Must satisfy: N_bins == round(2*acg_lag/acg_bin_size) + 1
-%   sr_wf        - waveform sampling rate in Hz
+%   sr_wf        - waveform sampling rate in Hz: scalar, or one value per unit for
+%                  datasets recorded at different rates (shorter waveforms NaN-padded)
 %   acg_bin_size - ACG bin size in seconds   (default: ctc.Parameters.Harmonization.ACGBinSize)
 %   acg_lag      - one-sided ACG lag in seconds (default: ctc.Parameters.Harmonization.ACGLag)
 %
@@ -41,7 +42,7 @@ arguments
     ctc          CellTypeClassifier
     waveforms    (:,:) double
     acgs         (:,:) double
-    sr_wf        (1,1) double
+    sr_wf        (1,:) double
     acg_bin_size (1,1) double = ctc.Parameters.Harmonization.ACGBinSize
     acg_lag      (1,1) double = ctc.Parameters.Harmonization.ACGLag
 end
@@ -90,6 +91,11 @@ assert(c_wf == c_acg, ...
     'Inconsistent number of units: waveforms has %i, acgs has %i (after auto-orient).', ...
     c_wf, c_acg);
 N_units = c_wf;
+if isscalar(sr_wf)
+    sr_wf = repmat(sr_wf, 1, N_units);
+end
+assert(numel(sr_wf) == N_units, 'buildFeatureMatrix:samplingRate', ...
+    'sr_wf must be a scalar or have one value per unit (%d), got %d.', N_units, numel(sr_wf));
 
 % ── Validate ACG parameters ──────────────────────────────────────────────────
 n_bins_in       = size(acgs, 1);
@@ -121,7 +127,7 @@ assert(n_bins_in == n_bins_harm, ...
 %   5. Normalise by max(abs)
 
 wf_raw    = double(waveforms);
-dt_in     = 1000 / sr_wf;                                  % input sample spacing in ms
+dt_in_all = 1000 ./ sr_wf;                                  % input sample spacing in ms, per unit
 dt_out    = 1000 / target_sr;                               % output sample spacing in ms
 edge_mode = ph.WaveformEdgeMode;                            % "zero" | "edge" | "trim"
 
@@ -130,8 +136,9 @@ if edge_mode == "trim"
     global_pre_ms  = pre_trough_ms;
     global_post_ms = post_trough_ms;
     for u = 1:N_units
-        wf_u = wf_raw(:, u);
-        if all(wf_u == 0); continue; end
+        wf_u = trimPadding(wf_raw(:, u));
+        dt_in = dt_in_all(u);
+        if isempty(wf_u) || all(wf_u == 0); continue; end
         [~, trough_samp] = min(wf_u);
         avail_pre_ms  = (trough_samp - 1) * dt_in;         % ms before trough
         avail_post_ms = (size(wf_u,1) - trough_samp) * dt_in; % ms after trough
@@ -151,10 +158,11 @@ aligned_wf = nan(n_out, N_units);   % NaN for skipped/short units; downstream im
 n_truncated = 0;
 
 for u = 1:N_units
-    wf_u = wf_raw(:, u);
+    wf_u  = trimPadding(wf_raw(:, u));   % units shorter than the matrix are NaN-padded
+    dt_in = dt_in_all(u);
 
-    % Skip all-zero waveforms
-    if all(wf_u == 0)
+    % Skip empty / all-zero waveforms
+    if isempty(wf_u) || all(wf_u == 0)
         continue
     end
 
@@ -209,11 +217,27 @@ if n_truncated > 0
     fprintf('Waveform edge handling (%s): %d/%d units had incomplete coverage\n', ...
         edge_mode, n_truncated, N_units);
 end
-fprintf('Waveform alignment: %d units, %d input samples @ %g Hz → %d output samples @ %g Hz\n', ...
-    N_units, size(wf_raw, 1), sr_wf, n_out, target_sr);
+if all(sr_wf == sr_wf(1))
+    sr_str = sprintf('%g Hz', sr_wf(1));
+else
+    sr_str = sprintf('%g-%g Hz (per unit)', min(sr_wf), max(sr_wf));
+end
+fprintf('Waveform alignment: %d units, %d input samples @ %s → %d output samples @ %g Hz\n', ...
+    N_units, size(wf_raw, 1), sr_str, n_out, target_sr);
 
 % ── ACG normalisation ────────────────────────────────────────────────────────
-norm_acgs = acgs ./ max(acgs, [], 1);
+% "peak" (default): divide by the maximum. "baseline": divide by the mean of the outer
+% fifth of the lags, so 1 = the uncorrelated (Poisson-like) level and the shape no longer
+% scales with firing rate or burstiness.
+acg_norm = "peak";
+if isfield(ph, 'ACGNormalization'), acg_norm = lower(string(ph.ACGNormalization)); end
+if acg_norm == "baseline"
+    n_tail = max(1, round(0.2 * (size(acgs, 1) - 1) / 2));
+    tail = [1:n_tail, size(acgs, 1) - n_tail + 1:size(acgs, 1)];
+    norm_acgs = acgs ./ mean(acgs(tail, :), 1);
+else
+    norm_acgs = acgs ./ max(acgs, [], 1);
+end
 norm_acgs(~isfinite(norm_acgs)) = 0;
 
 % ── Assemble feature matrix (FullACG first, Waveform second) ─────────────────
@@ -231,4 +255,10 @@ wf_window.pre_trough_ms  = n_out_pre  * dt_out;
 wf_window.post_trough_ms = n_out_post * dt_out;
 wf_window.n_samples      = n_out;
 wf_window.target_sr      = target_sr;
+end
+
+function wf = trimPadding(wf)
+% Drop trailing NaN samples (padding of units recorded with fewer samples).
+    last = find(~isnan(wf), 1, 'last');
+    wf = wf(1:last);
 end

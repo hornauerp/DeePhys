@@ -143,29 +143,34 @@ elseif strcmp(method,'jitter')
         stdevbinsize = stdev;
     end
     
-    % Jitter the data
+    % Jitter the data (vectorised; the per-spike loop called unique() on the whole train
+    % for every spike)
     for iChannel = 1:asdf2.nchannels
-        
-        % Get the number of spikes
-        nSpikes = length(asdf2.raster{iChannel});
-        
-        % Make a random ordering of which spikes will be jittered when
-        jitterorder = randperm(nSpikes);
-        for iSpike = 1:nSpikes
-            
-            % Jitter the spike
-            randasdf2.raster{iChannel}(jitterorder(iSpike)) = round(asdf2.raster{iChannel}(jitterorder(iSpike)) + stdevbinsize*randn);
-            
-            % Error check
-            if randasdf2.raster{iChannel}(jitterorder(iSpike)) < 1 % Jittered off the front of the spike train
-                randasdf2.raster{iChannel}(jitterorder(iSpike)) = asdf2.raster{iChannel}(jitterorder(iSpike));
-            elseif randasdf2.raster{iChannel}(jitterorder(iSpike)) > asdf2.nbins % Jittered off the end of the spike train
-                randasdf2.raster{iChannel}(jitterorder(iSpike)) = asdf2.raster{iChannel}(jitterorder(iSpike));
-            elseif length(unique(randasdf2.raster{iChannel})) < nSpikes % Jittered into another spike
-                randasdf2.raster{iChannel}(jitterorder(iSpike)) = asdf2.raster{iChannel}(jitterorder(iSpike));
-            end
+        orig = asdf2.raster{iChannel};
+        nSpikes = numel(orig);
+        if nSpikes == 0
+            randasdf2.raster{iChannel} = orig;
+            continue
         end
-        randasdf2.raster{iChannel} = sort(randasdf2.raster{iChannel});
+
+        % Jitter every spike; spikes jittered off either end keep their original time
+        jit = round(orig + stdevbinsize * randn(size(orig)));
+        off = jit < 1 | jit > asdf2.nbins;
+        jit(off) = orig(off);
+
+        % Spikes jittered into another spike keep their original time. As in the
+        % sequential version, a random order decides which of the colliding spikes moves.
+        % Reverting can create new collisions, so repeat until none are left.
+        priority = randperm(nSpikes);
+        for iPass = 1:50
+            [~, first] = unique(jit(priority), 'stable');
+            collided = true(size(orig));
+            collided(priority(first)) = false;
+            collided = collided & jit ~= orig;   % duplicates already present in the input stay
+            if ~any(collided), break; end
+            jit(collided) = orig(collided);
+        end
+        randasdf2.raster{iChannel} = sort(jit);
     end
     
     % Leave a note in the randomized asdf2 raster

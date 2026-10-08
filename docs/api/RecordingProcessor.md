@@ -95,8 +95,19 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `MinSpikeCount` | `10` | Minimum spike count per unit |
 | `KSLabel.Enable` | `false` | Filter by Kilosort label (`cluster_KSLabel.tsv`) |
 | `KSLabel.AcceptedLabels` | `"good"` | Labels to keep (`"good"`, `"mua"`, or both) |
-| `Bombcell.Enable` | `false` | Filter using Bombcell quality metrics |
+| `Bombcell.Enable` | `false` | Filter using Bombcell quality metrics (`cluster_bc_unitType.tsv`; missing table: warning, standard QC only) |
 | `Bombcell.AcceptedTypes` | `[1, 2]` | Bombcell unit types to keep (1=good, 2=MUA) |
+
+### Burst parameters (`params.Bursts`)
+
+| Field | Default | Description |
+|---|---|---|
+| `Method` | `"ISIN"` | `"ISIN"` (legacy: N by Dunn index, valley threshold, tonic heuristic), `"logISI"`, or `"ISINJoint"` (`detectNetworkBursts`: N and threshold chosen jointly against circular-shift surrogates; distinct maxima of the significance map are levels of grouping (bursts, sub-events, superbursts / epochs); within the burst level the finest scale that keeps bursts whole, so all synchronous events recruiting `MinBurstUnits` units (significantly more than expected by chance) count; superbursts - trains of bursts without silence between them - are split into their bursts (`proc.Bursts.Superburst`, `proc.Bursts.Info.Superbursts`); returns no bursts for cultures without network bursts; diagnostics in `proc.Bursts.Info`, levels in `proc.Bursts.Info.Levels`) |
+| `TonicMethod` | `"gini"` | `"ISINJoint"` only: units removed before detection (`"gini"`: not burstier than Poisson, adaptive bins of ~3 spikes; `"coupling"` population coupling; `"regular"` more regular than Poisson; `"coupling+regular"`; `"either"`, `"both"`, `"legacy"`, `"none"`) |
+| `TonicMinRate` | `"median"` | `"ISINJoint"` only: units firing below this rate (Hz, or `"median"` of the recording's units) are never removed as tonic; low-rate units carry burst spikes rather than background |
+| `ShapeLevel` | `0.25` | Burst onset / offset at this fraction of each burst's peak above baseline (`burstShape`); gives the `BurstWidth`, `BurstRise`, `BurstFall`, `BurstFWHM` features, comparable between detectors and bursts (the legacy `BurstDuration`, `RiseTime`, `FallTime` depend on the detector edges) |
+| `MergeFactor` | `0.5` | Legacy methods: merge bursts closer than MergeFactor x threshold |
+| `Binning` | `0.1` | Bin size (s) for burst statistics |
 
 ### Connectivity parameters
 
@@ -106,12 +117,25 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `CCG.BinSize` | `0.001` | Bin width (s) |
 | `CCG.Duration` | `0.1` | One-sided lag (s) |
 | `CCG.Alpha` | `0.001` | Significance threshold for edge detection |
+| `CCG.InhibitoryCriterion` | `"strict"` | Inhibitory links: `"strict"` (causal trough below the pre-spike mean and the slow 10 ms-to-edge flank; no reverse artefact of strong excitation) or `"cellexplorer"` (CellExplorer `ce_MonoSynConvClick`, the previous DeePhys default; many false positives) |
 | `STTC.MaxLag` | `0.05` | Synchrony window (s) |
 | `STTC.N_Surrogates` | `100` | Surrogate count for significance |
 | `STTC.Percentile` | `95` | Significance percentile |
 | `DDC.BinSize` | `0.001` | Bin width (s) |
 | `DDC.N_Surrogates` | `100` | Surrogate count |
 | `DDC.Percentile` | `95` | Significance percentile |
+| `GraphFeatures.Types` | `"binary"` | Graph features from the unweighted graphs (`"binary"`), the weighted graphs (`"weighted"`, columns `<Feature>_<Method>_w`), or both |
+| `GraphFeatures.SmallWorldnessIterations` | `100` | Randomised graphs for small-worldness |
+
+Connectivity results per method (`proc.Connectivity.<Method>`):
+
+| Method | Unweighted graph | Weighted graph |
+|---|---|---|
+| CCG | `.bd` (directed; -1 = inhibitory link) | — |
+| STTC | `.bu` (undirected, surrogate-significant) | `.wu` (tiling coefficients) |
+| DDC | `.bd` (directed, surrogate-significant) | `.wd` (signed DDC coefficients, all pairs), `.wd_sig` (significant links only) |
+
+Weighted graph features use the absolute weights of the significant links, normalised to (0, 1]. For DDC, positive coefficients indicate excitatory and negative ones inhibitory influence; the sign is kept in `.wd` / `.wd_sig`.
 
 ## Notes
 

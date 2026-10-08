@@ -62,21 +62,15 @@ unique_confidence = nan(1, n_unique);
 unique_confidence(labels.sorted_train_ids) = 1.0;
 
 if classify_method == "graph"
-    % ── Graph-based label propagation on UMAP's own NxN fuzzy simplicial set ──
-    % Note: ACGWeight and WaveformWeight are applied during UMAP embedding in
-    % generateTrainLabels, so the graph topology already reflects them. They
-    % are not re-applied here.
-    % Reconstructed from ctc.UMAP.head/tail/weights (COO edge list set by
-    % simplicial_set_embedding). Covers all N unique units. Symmetrise →
+    % ── Graph-based label propagation on the unit graph ──────────────────
+    % ctc.graphMatrix(): the exact kNN fuzzy graph (Graph.Method "exact") or the UMAP
+    % model's graph. ACGWeight and WaveformWeight were applied when it was built in
+    % generateTrainLabels, so they are not re-applied here. Covers all N unique units;
     % row-normalise → propagate, clamping training labels each iteration.
-    assert(~isempty(ctc.UMAP) && ~isempty(ctc.UMAP.head), ...
-        ['ctc.UMAP graph data is empty — run generateTrainLabels() before classifyUnits(). ' ...
-         'The graph is populated by the unsupervised UMAP run in generateTrainLabels.']);
-
-    % Reconstruct weighted graph from COO edge list (head/tail/weights are always
-    % populated by simplicial_set_embedding; graph field is not reliable with Java SGD).
-    G = sparse(ctc.UMAP.head, ctc.UMAP.tail, ctc.UMAP.weights, n_unique, n_unique);
-    G = (G + G') / 2;
+    G = ctc.graphMatrix();
+    assert(size(G, 1) == n_unique, 'CellTypeClassifier:graphSize', ...
+        'Unit graph has %d nodes but there are %d unique units — rerun generateTrainLabels().', ...
+        size(G, 1), n_unique);
     row_sums = sum(G, 2);
     row_sums(row_sums == 0) = 1;
     W = G ./ row_sums;  % row-stochastic transition matrix
@@ -144,11 +138,36 @@ if classify_method == "graph"
         fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
     end
 
+    % Units with no graph path to a training unit keep the uninformed [0.5 0.5]; leave
+    % them unlabelled (NaN) instead of calling them excitatory by the tie rule.
+    unreached = all(abs(F_label - 0.5) < 1e-12, 2);
+    if any(unreached(test_idx))
+        warning('CellTypeClassifier:unreached', ['%d units have no graph path to a ' ...
+            'training unit and are left unlabelled (NaN).'], sum(unreached(test_idx)));
+    end
+
+    % Seed-count normalisation: F(:,k) is the probability that a walk from the unit is
+    % absorbed at a class-k training unit, which grows with the number of class-k seeds.
+    % With unbalanced training sets the larger class floods the graph. Dividing by the seed
+    % counts compares per-seed absorption instead (cf. class mass normalisation, Zhu et al.
+    % 2003, with no assumed output prior); it is a no-op for balanced training sets.
+    n_seed = [sum(labels.sorted_y_train == 1), sum(labels.sorted_y_train == 2)];
+    if all(n_seed > 0) && n_seed(1) ~= n_seed(2)
+        F_label = F_label ./ n_seed;
+        F_row_sum = sum(F_label, 2);
+        F_row_sum(F_row_sum == 0) = 1;
+        F_label = F_label ./ F_row_sum;
+    end
+
     % Extract predictions and confidence for test units
     test_global_idx = find(test_idx);
     Y_pred = nan(1, numel(test_global_idx));
     for i = 1:numel(test_global_idx)
         gi = test_global_idx(i);
+        if unreached(gi)
+            unique_confidence(gi) = NaN;
+            continue   % Y_pred(i) stays NaN
+        end
         p_exc = F_label(gi, 1);
         p_inh = F_label(gi, 2);
         if p_exc >= p_inh
@@ -166,17 +185,7 @@ else
     % Apply dimension-normalised feature group weighting before kNN search so
     % ACG and Waveform groups contribute proportionally to their configured weights.
     if isfield(np, 'feat_names_trimmed') && ~isempty(np.feat_names_trimmed)
-        feat_names_final = np.feat_names_trimmed;
-        is_acg = startsWith(feat_names_final, "FullACG") | startsWith(feat_names_final, "ACG");
-        is_wf  = startsWith(feat_names_final, "Waveform") | startsWith(feat_names_final, "ReferenceWaveform");
-        n_acg  = sum(is_acg);
-        n_wf   = sum(is_wf);
-        if n_acg > 0
-            X_all(:, is_acg) = X_all(:, is_acg) * sqrt(p_umap.ACGWeight / n_acg);
-        end
-        if n_wf > 0
-            X_all(:, is_wf)  = X_all(:, is_wf)  * sqrt(p_umap.WaveformWeight / n_wf);
-        end
+        X_all = applyFeatureGroupWeights(X_all, np.feat_names_trimmed, p_umap);
     end
     X_train = X_all(train_idx, :);
     X_test  = X_all(test_idx, :);
@@ -195,15 +204,22 @@ else
     if ~isempty(X_test) && ~isempty(X_train)
         k_actual = min(conf_k, size(X_train, 1));
         [nn_idx, nn_dists] = knnsearch(X_train, X_test, 'K', k_actual);
+        % Per-class seed weights: votes are divided by the class's training count so an
+        % unbalanced training set does not tilt every vote (no-op when balanced).
+        n_seed   = [sum(labels.sorted_y_train == 1), sum(labels.sorted_y_train == 2)];
+        cls_w    = ones(1, 2);
+        if all(n_seed > 0), cls_w = mean(n_seed) ./ n_seed; end
         for i = 1:numel(test_global_idx)
             neighbor_labels = labels.sorted_y_train(nn_idx(i, :));
             d       = nn_dists(i, :);
             eps_d   = max(d) * 1e-6;
             if eps_d == 0; eps_d = 1e-10; end
             w       = 1 ./ (d + eps_d);
-            w_total = sum(w);
-            w_exc   = sum(w(neighbor_labels == 1)) / w_total;
-            w_inh   = sum(w(neighbor_labels == 2)) / w_total;
+            w_e     = cls_w(1) * sum(w(neighbor_labels == 1));
+            w_i     = cls_w(2) * sum(w(neighbor_labels == 2));
+            w_total = w_e + w_i;
+            w_exc   = w_e / w_total;
+            w_inh   = w_i / w_total;
             if w_exc >= w_inh
                 Y_pred(i) = 1;
                 unique_confidence(test_global_idx(i)) = w_exc;

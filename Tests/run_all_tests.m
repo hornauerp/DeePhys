@@ -15,6 +15,7 @@ addpath(genpath(fullfile(root, 'Classes')));
 addpath(genpath(fullfile(root, 'Toolboxes')));
 
 test_dir = fileparts(mfilename('fullpath'));
+addpath(fullfile(test_dir, 'fixtures'));   % make_mock_sorting and other test helpers
 suite    = matlab.unittest.TestSuite.fromFolder(test_dir, 'IncludingSubfolders', false);
 runner   = matlab.unittest.TestRunner.withTextOutput('Verbosity', 2);
 results  = runner.run(suite);

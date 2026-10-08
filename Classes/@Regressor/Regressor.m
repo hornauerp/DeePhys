@@ -33,6 +33,8 @@ classdef Regressor
         %     .CVGroups          - (N x 1) string/numeric for hierarchy-aware CV
         %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
         %     .StratificationVar - (N x 1) for stratified CV splitting (ignored when CVGroups set)
+        %     .ComputeImportance - RF OOB permutation importance per fold (default true;
+        %                          dominates RF run time, off inside permutationTest)
         %
         % OUTPUTS:
         %   result - (1 x K) RegressionResult array
@@ -49,7 +51,7 @@ classdef Regressor
                 rng(opts.Seed);
             end
 
-            norm_groups = Regressor.resolveGroups(opts.NormalizationGroups, height(X));
+            norm_groups = MLUtils.groupLabels(opts.NormalizationGroups, height(X));
             cv_groups   = Regressor.resolveGroups(opts.CVGroups, height(X));
 
             % CV partition — prefer hierarchy-aware GroupedCV when CVGroups provided
@@ -81,7 +83,7 @@ classdef Regressor
                 Y_train = Y(train_idx);
                 Y_test  = Y(test_idx);
 
-                [X_train, X_test, feat_names] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups, opts.NormalizationPipeline, opts.CovariateLabels);
+                [X_train, X_test, feat_names, prep] = Regressor.normalizeFeatures(X, train_idx, test_idx, norm_groups, opts.NormalizationPipeline, opts.CovariateLabels);
 
                 if isempty(X_test)
                     warning('Regressor:emptyTestFold', ...
@@ -93,7 +95,7 @@ classdef Regressor
                 [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, opts.NHyper);
                 Y_pred = predict(mdl, X_test);
 
-                if opts.Algorithm == "rf"
+                if opts.Algorithm == "rf" && opts.ComputeImportance
                     predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
                 else
                     predImp = [];
@@ -113,6 +115,7 @@ classdef Regressor
                     'objects',   [], ...
                     'predImp',   predImp, ...
                     'Features',  feat_names, ...
+                    'Preprocessing', prep, ...
                     'Parameters', struct( ...
                         'algorithm',        opts.Algorithm, ...
                         'normalization_var', opts.NormalizationVar, ...
@@ -132,8 +135,10 @@ classdef Regressor
         % PERMUTATIONTEST  Estimate regression significance via label permutation.
         %
         % Shuffles target values n_permutations times and runs regress() each time,
-        % building a null distribution of R² values. Returns a one-sided p-value:
-        %   P(null_R² >= observed_R²)
+        % building a null distribution of R² values. With opts.CVGroups the shuffle respects
+        % the groups (MLUtils.labelPermuter: whole groups when the target is constant within
+        % them, otherwise within groups). One-sided p-value with the +1 correction:
+        %   (1 + #(null_R² >= observed_R²)) / (1 + n_permutations)
         %
         % INPUTS:
         %   X              - (N x F) feature table
@@ -156,24 +161,29 @@ classdef Regressor
             obs_summary = RegressionResult.summarizeFolds(obs_result);
             obs_r2      = obs_summary.mean_R2;
 
+            Y = Y(:);
+            groups = Regressor.resolveGroups(Regressor.defaultOpts(opts).CVGroups, numel(Y));
+            [permute_fn, scheme] = MLUtils.labelPermuter(Y, groups);
             null_r2s  = zeros(n_permutations, 1);
             perm_opts = opts;
-            base_seed = opts.Seed;
+            perm_opts.ComputeImportance = false;   % not needed for null runs; dominates RF time
+            base_seed = [];
+            if isfield(opts, 'Seed'), base_seed = opts.Seed; end
             for p = 1:n_permutations
                 if ~isempty(base_seed)
                     perm_opts.Seed = base_seed + p;
                     rng(base_seed + p);  % seed the Y-shuffle too, not just the CV partition inside regress()
                 end
-                Y_perm = Y(randperm(numel(Y)));
+                Y_perm = permute_fn();
                 perm_result  = Regressor.regress(X, Y_perm, perm_opts);
                 perm_summary = RegressionResult.summarizeFolds(perm_result);
                 null_r2s(p)  = perm_summary.mean_R2;
             end
 
-            p_value = mean(null_r2s >= obs_r2);
+            p_value = (1 + sum(null_r2s >= obs_r2)) / (1 + n_permutations);
 
             AnalysisLog.instance().add('Regressor.permutationTest', ...
-                struct('n_permutations', n_permutations, 'opts', opts), ...
+                struct('n_permutations', n_permutations, 'scheme', scheme, 'opts', opts), ...
                 sprintf('obs_R2=%.3f p=%.4f (n=%d)', obs_r2, p_value, n_permutations), 0);
         end
 
@@ -226,16 +236,17 @@ classdef Regressor
             if ~isfield(opts, 'CovariateLabels'),     opts.CovariateLabels = [];     end
             if ~isfield(opts, 'CVGroups'),            opts.CVGroups = [];          end
             if ~isfield(opts, 'StratificationVar'),   opts.StratificationVar = []; end
+            if ~isfield(opts, 'ComputeImportance'),   opts.ComputeImportance = true; end
         end
 
         function g = resolveGroups(groups_input, N)
             g = MLUtils.resolveGroups(groups_input, N);
         end
 
-        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
+        function [X_train, X_test, feat_names, prep] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
             if nargin < 5, pipeline_type = ""; end
             if nargin < 6, covariate_labels = []; end
-            [X_train, X_test, feat_names] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels);
+            [X_train, X_test, feat_names, prep] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels);
         end
 
     end

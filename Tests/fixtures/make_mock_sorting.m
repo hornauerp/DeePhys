@@ -54,12 +54,19 @@ writeNPY(uint32(templates_id), fullfile(sorting_path, 'spike_templates.npy'));
 % ------------------------------------------------------------------ %
 n_samples  = 82;
 n_channels = 4;
-waveforms  = 0.1 * randn(n_units, n_samples, n_channels, 'single');
+waveforms  = zeros(n_units, n_samples, n_channels, 'single');
 
-% Give each unit a plausible negative peak near sample 20
+% Smooth biphasic spike (trough near sample 20, slower positive repolarisation), decaying
+% across channels, plus a little noise. Amplitudes are scaled by the QC LSB (6.2 uV) and
+% must clear RecordingProcessor's default Amplitude window [20 1000]; white-noise
+% templates would fail the waveform noise check (too many zero crossings).
+t = 1:n_samples;
 for u = 1:n_units
-    peak_amp = -(1.5 + 0.5 * rand);
-    waveforms(u, 18:24, :) = waveforms(u, 18:24, :) + single(peak_amp);
+    amp   = 5 + 3 * rand;
+    shape = -amp * exp(-(t - 20).^2 / (2 * 1.5^2)) + 0.3 * amp * exp(-(t - 30).^2 / (2 * 4^2));
+    for c = 1:n_channels
+        waveforms(u, :, c) = single(shape * 0.6^(c - 1) + 0.002 * amp * randn(1, n_samples));
+    end
 end
 
 writeNPY(waveforms, fullfile(sorting_path, 'templates.npy'));

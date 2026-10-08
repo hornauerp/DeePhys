@@ -42,7 +42,7 @@ classdef DimReducer
             end
 
             opts = DimReducer.defaultOpts(opts);
-            norm_groups = DimReducer.resolveGroups(opts.NormalizationGroups, height(X));
+            norm_groups = MLUtils.groupLabels(opts.NormalizationGroups, height(X));
 
             % Normalize
             norm_data  = DimReducer.normalizeFeatures(X, norm_groups);
@@ -87,11 +87,15 @@ classdef DimReducer
                     graph = [];
 
                 case 'tSNE'
-                    tsne_args = {'Algorithm', 'exact', 'Perplexity', perplexity};
-                    if ~isempty(opts.Seed)
-                        tsne_args = [tsne_args, {'Seed', opts.Seed}];
+                    % The exact algorithm is O(N^2) in time and memory; Barnes-Hut scales as
+                    % N log N and handles up to 3 output dimensions. The seed is set via rng
+                    % above (tsne has no Seed option).
+                    algo = 'barneshut';
+                    if N <= 2000 || opts.NDims > 3
+                        algo = 'exact';
                     end
-                    reduction = tsne(norm_data, tsne_args{:});
+                    reduction = tsne(norm_data, 'Algorithm', algo, 'Perplexity', perplexity, ...
+                        'NumDimensions', opts.NDims);
                     graph = [];
 
                 otherwise

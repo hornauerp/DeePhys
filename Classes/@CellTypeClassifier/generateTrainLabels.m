@@ -5,13 +5,17 @@ function generateTrainLabels(ctc, opts)
 %   1. Global normalization + optional feature selection  (computeGlobalNormalization)
 %   2. Unsupervised UMAP on all unique units              (runUnsupervisedUMAP)
 %   3. Outlier detection and CE selection                 (selectExplicitCE |
+%                                                          selectEnrichmentSeeds (default) |
 %                                                          detectCommunityOutliers |
 %                                                          selectIforestCE | selectNoCE)
 %   4. Assemble training labels                           (assembleTrainLabels)
 %
 % Two label-source strategies:
 %   Drug response  — responsive units = inhibitory ground truth; CEs inferred.
-%   Metadata       — ctc.CounterexampleUnitIdx provides explicit excitatory labels.
+%   Metadata       — ctc.CounterexampleUnitIdx provides explicit excitatory labels. With
+%                    OutlierDetection.Method "enrichment" (default) the seeds come from the same
+%                    enrichment test (labelled units = eligible pool); other methods use the
+%                    iforest cleaning of selectExplicitCE.
 %
 % Requires ctc.ResponsiveUnitIdx (run identifyResponsiveUnits first).
 % Sets: ctc.TrainLabels, ctc.NormalizationParams, ctc.Reduction.Unsupervised
@@ -35,6 +39,7 @@ nf = ctc.NormalizedFeatures;
 
 % -- Stage 1: global normalization + feature selection ------------------------
 [X_all, norm_params] = computeGlobalNormalization(nf, p_umap, ctc.Parameters.Harmonization);
+norm_params.acg_sigma_ms = nf.acg_sigma_ms;   % applied to external ACGs too
 ctc.NormalizationParams = norm_params;
 
 % -- Stage 2: unsupervised UMAP -----------------------------------------------
@@ -67,7 +72,16 @@ X_feat          = X_all(nf.subset_mask, :);
 has_explicit_ce = ~isempty(ctc.CounterexampleUnitIdx) && any(ctc.CounterexampleUnitIdx);
 
 % -- Stage 3: outlier detection and CE selection ------------------------------
-if has_explicit_ce
+if has_explicit_ce && lower(string(p_outlr.Method)) == "enrichment"
+    % Both classes labelled (e.g. pure cultures): the same enrichment test, with the labelled
+    % units as the eligible pool. Seeds are labelled units whose community is enriched for
+    % their own class, so contaminants of the other type in a "pure" culture are left out.
+    labelled_fs = ctc.ResponsiveUnitIdx(:) | ctc.CounterexampleUnitIdx(:);
+    eligible_global = false(1, nf.n_unique);
+    eligible_global(:) = labelled_fs(nf.unique_to_fs);
+    det = selectEnrichmentSeeds(ctc.graphMatrix(), responsive_local, subset_global_idx, ...
+        resp_unique, eligible_global, ctc.Parameters.Community, ctc.Parameters.RNGSeed);
+elseif has_explicit_ce
     ce_uid_table = unique(unit_ids_table(ctc.CounterexampleUnitIdx));
     ce_subset    = ismember(unique_ud_ids(nf.subset_mask), ce_uid_table);
     ce_local_all = find(ce_subset);
@@ -77,10 +91,22 @@ else
     odm = lower(string(p_outlr.Method));
 
     comm_diagnostics = [];
-    if odm == "community"
+    if odm == "enrichment"
+        % Eligible units: those in cultures where responders occur (e.g. hM3Dq cultures),
+        % so the enrichment test is not confounded by culture condition.
+        ut      = ctc.FeatureStore.UnitTable;
+        cult    = FeatureStore.getCultureIDsForUnits(ut.RecordingID, ctc.FeatureStore.MetadataTable, ...
+                      ctc.Parameters.CultureKeys);
+        resp_cultures = unique(cult(ctc.ResponsiveUnitIdx));
+        elig_fs = ismember(cult, resp_cultures);
+        eligible_global = false(1, nf.n_unique);
+        eligible_global(:) = elig_fs(nf.unique_to_fs);
+        det = selectEnrichmentSeeds(ctc.graphMatrix(), responsive_local, subset_global_idx, ...
+            resp_unique, eligible_global, ctc.Parameters.Community, ctc.Parameters.RNGSeed);
+    elseif odm == "community"
         det = detectCommunityOutliers(X_feat, responsive_local, subset_responsive, ...
             subset_global_idx, reduction, size(X_all, 1), n_neighbors, resp_unique, ...
-            ctc.Parameters.Community, ctc.UMAP, ctc.Parameters.RNGSeed);
+            ctc.Parameters.Community, ctc.graphMatrix(), ctc.Parameters.RNGSeed);
         if ~det.success
             comm_diagnostics = det;   % preserve Louvain results even on fallback
             odm = "iforest";

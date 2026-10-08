@@ -62,7 +62,7 @@ classdef test_bootstrapFiringRateResponse < matlab.unittest.TestCase
             pre  = rand(3, 10);
             post = rand(3, 15);   % different bin count
             tc.verifyError(@() bootstrapFiringRateResponse(pre, post), ...
-                'MATLAB:assert:failed');
+                'bootstrapFiringRateResponse:binMismatch');
         end
 
         function testSingleUnitWorks(tc)

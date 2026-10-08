@@ -48,6 +48,12 @@ classdef test_RecordingProcessor < matlab.unittest.TestCase
                 tc.verifyTrue(ismember(expected_cols(c), col_names), ...
                     "Expected column missing: " + expected_cols(c));
             end
+            % ACG1..N on the Parameters.ACG grid (0.5 ms, +-100 ms -> 401 bins), peak 1
+            acg_cols = col_names(startsWith(col_names, "ACG"));
+            tc.verifyEqual(numel(acg_cols), 401);
+            A = proc.UnitFeatureTable{:, acg_cols};
+            tc.verifyLessThanOrEqual(max(A, [], 'all'), 1);
+            tc.verifyEqual(max(A(any(A > 0, 2), :), [], 2), ones(sum(any(A > 0, 2)), 1));
         end
 
         function testComputeNetworkFeatures(tc)
@@ -117,6 +123,30 @@ classdef test_RecordingProcessor < matlab.unittest.TestCase
             tc.verifyEqual(height(proc.UnitFeatureTable), h_first);
         end
 
+        function testTooFewUnitsDropsRecording(tc)
+            % QC.N_Units: recordings with fewer good units are dropped (legacy behaviour).
+            [proc, sorting_path] = test_RecordingProcessor.buildTestProcessor();
+            cleanup = onCleanup(@() rmdir(sorting_path, 's'));
+            proc.Parameters.QC.N_Units = 10;
+            tc.verifyWarning(@() proc.runQC(), 'RecordingProcessor:tooFewUnits');
+            tc.verifyEmpty(proc.Units);
+            tc.verifyEqual(proc.Status.QC, "done");
+        end
+
+        function testRecordingDatabaseView(tc)
+            % The registry reads MEArecording fields; processors are presented the same way.
+            [proc, sorting_path] = test_RecordingProcessor.buildTestProcessor();
+            cleanup = onCleanup(@() rmdir(sorting_path, 's'));
+            proc.runQC();
+            v = RecordingDatabase.recordingView(proc);
+            tc.verifyEqual(string(v.Metadata.InputPath), string(proc.SpikeData.InputPath));
+            tc.verifyEqual(v.Metadata.ChipID, proc.SpikeData.Metadata.ChipID);
+            tc.verifyEqual(v.RecordingInfo.SamplingRate, proc.SpikeData.SamplingRate);
+            tc.verifyEqual(numel(v.Units), numel(proc.Units));
+            tc.verifyEqual(string(v.Units(1).StableID), string(proc.Units(1).UnitID));
+            tc.verifyError(@() RecordingDatabase.recordingView(struct()), 'RecordingDatabase:input');
+        end
+
     end
 
     methods (Static, Access = private)
@@ -125,6 +155,7 @@ classdef test_RecordingProcessor < matlab.unittest.TestCase
             sorting_path = make_mock_sorting(string(tempdir), 5, 50, 20000, 60);
             metadata = struct('ChipID', 'TestChip', 'PlatingDate', '2024-01-01');
             sd = SpikeData.fromKilosort(sorting_path, metadata);
+            p.QC.N_Units            = 1;      % the mock sorting has only 5 templates
             p.Analyses.Regularity   = false;
             p.Analyses.Catch22      = false;
             p.Analyses.Bursts       = true;

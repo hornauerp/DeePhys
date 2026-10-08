@@ -20,6 +20,14 @@ function identifyResponsiveUnits(ctc, metadata_filter)
 %       Cultures with fewer than MinRecordings recordings fall back to
 %       "two_window" with a printed notice.
 %
+%   "control_calibrated" (recommended when control cultures exist)
+%       Baseline vs the Bootstrap.HighDoses highest doses per unit: log2 fold change
+%       minus the culture median (drift / network correction) and a rank-sum test on
+%       BinSize-s counts. Thresholds are the ControlQuantile tails of the same quantity
+%       in control cultures (Bootstrap.ControlFilter), so they need no tuning and the
+%       estimated false-discovery rate is reported (ResponsivenessDetail.calibration).
+%       metadata_filter selects the treated cultures (default: all non-control ones).
+%
 %   "metadata"
 %       Per-unit ground truth labels read directly from a column in
 %       FeatureStore.UnitTable. No firing-rate tests are run. Both classes
@@ -38,6 +46,16 @@ function identifyResponsiveUnits(ctc, metadata_filter)
 % Optional FDR correction: Parameters.Bootstrap.UseFDR (Benjamini-Hochberg).
 % Optional strength filter: Parameters.Bootstrap.MinResponsiveStrength.
 %
+% Several perturbations of the same cell class: Parameters.Bootstrap.ResponseRules, one row
+% {field, value, direction} per perturbation, e.g. an activating and a silencing DREADD in
+% interneurons:
+%     prm.Bootstrap.ResponseRules = {'Construct', 1, "increase"; 'Construct', 2, "decrease"};
+% Each rule is evaluated on its own cultures with its own direction (the method above, called
+% with {field, value} as metadata_filter) and the responders of all rules are pooled as
+% ResponsiveClassLabel units. ResponsivenessDetail.rules lists each rule's calls and
+% ResponsivenessDetail.rule_of_unit which rule flagged a unit (0 = none);
+% validateResponseRules trains on each rule alone and validates on the others.
+%
 % INPUTS:
 %   ctc             - CellTypeClassifier
 %   metadata_filter - (optional) {field, value} cell pair to restrict which
@@ -46,6 +64,14 @@ function identifyResponsiveUnits(ctc, metadata_filter)
 arguments
     ctc             CellTypeClassifier
     metadata_filter cell = {}
+end
+
+if isfield(ctc.Parameters.Bootstrap, 'ResponseRules') && ~isempty(ctc.Parameters.Bootstrap.ResponseRules) ...
+        && lower(string(ctc.Parameters.Bootstrap.GroundTruthMethod)) ~= "metadata"
+    assert(isempty(metadata_filter), 'CellTypeClassifier:rulesAndFilter', ...
+        'Pass either a metadata_filter or Bootstrap.ResponseRules, not both.');
+    applyResponseRules(ctc, CellTypeClassifier.parseResponseRules(ctc.Parameters.Bootstrap.ResponseRules));
+    return
 end
 
 if ~isempty(metadata_filter)
@@ -112,6 +138,58 @@ culture_ids     = FeatureStore.getCultureIDsForUnits( ...
 unique_cultures = unique(culture_ids, 'stable');
 
 unit_ids_in_table = fs.UnitTable.UnitID;
+
+% -- Control-calibrated method: thresholds from control cultures ----------------
+if strcmp(method, 'control_calibrated')
+    [treated, controls] = selectCultures(meta, ctc.Parameters.CultureKeys, filter_field, filter_val, p);
+    T = calibratedResponseTable(ud, meta, ctc.Parameters.CultureKeys, group_field, ...
+        ctc.Parameters.UMAP.GroupingValues, [treated; controls], p);
+    is_ctrl = ismember(T.Culture, controls);
+    target_fdr = NaN;
+    if isfield(p, 'TargetFDR'), target_fdr = p.TargetFDR; end
+    [inc, dec, info] = calibrateCalls(T, is_ctrl, p.ControlQuantile, p.CalibratedAlpha, target_fdr);
+    switch direction
+        case "increase", call = inc;
+        case "decrease", call = dec;
+        case "both",     call = inc | dec;
+        otherwise
+            error('CellTypeClassifier:invalidDirection', ...
+                'Bootstrap.Direction must be "increase", "decrease", or "both". Got "%s".', p.Direction);
+    end
+    % Flag every FeatureStore row of a called unit in its (treated) culture, as the other methods do
+    row_key  = string(unit_ids_in_table) + "|" + culture_ids;
+    tkey     = T.UnitID + "|" + T.Culture;
+    [hit, loc] = ismember(row_key, tkey);
+    called_row = false(numel(row_key), 1);
+    called_row(hit) = call(loc(hit)) & ~is_ctrl(loc(hit));
+    dir_row = repmat("none", numel(row_key), 1);
+    dir_row(hit & called_row) = "increase";
+    dir_row(hit & called_row & dec(max(loc, 1))) = "decrease";
+    strength = zeros(numel(row_key), 1);
+    strength(hit) = T.LFCc(loc(hit));
+    ctc.ResponsiveUnitIdx       = called_row(:)';
+    ctc.ResponsiveUnitDirection = dir_row(:)';
+    ctc.ResponsiveStrength      = strength(:)';
+    ud_keys = string({ud.UnitID})' + "|" + string({ud.RecordingID})';
+    [~, ud_order] = ismember(string(unit_ids_in_table) + "|" + string(unit_rec_ids), ud_keys);
+    ctc.ResponsivenessDetail = buildResponsivenessDetail(ctc, unit_ids_in_table, ...
+        ud, ud_order, meta, group_field, method, p);
+    ctc.ResponsivenessDetail.calibration = info;
+    ctc.ResponsivenessDetail.calibration_table = T;
+    fprintf(['Control-calibrated responders (%s): %d treated units in %d cultures, %d control units in %d cultures\n' ...
+             '   thresholds: increase LFCc > %.2f, decrease LFCc < %.2f (control %.0f%% tails, rank-sum p < %.3g)\n' ...
+             '   increase: %.1f%% treated vs %.1f%% control (est. FDR %.2f); decrease: %.1f%% vs %.1f%% (est. FDR %.2f)\n' ...
+             '   responsive units flagged: %d\n'], ...
+        p.Direction, info.n_treated, numel(treated), info.n_control, numel(controls), ...
+        info.thr_inc, info.thr_dec, 100 * info.q, info.alpha, ...
+        100 * info.rate_inc_treated, 100 * info.rate_inc_control, info.fdr_inc, ...
+        100 * info.rate_dec_treated, 100 * info.rate_dec_control, info.fdr_dec, ...
+        numel(unique(tkey(call & ~is_ctrl))));
+    if ctc.Parameters.Diagnostics.Enable
+        ctc.diagnosticResponsiveUnits();
+    end
+    return
+end
 
 % Map each FeatureStore row to the correct UnitData entry using
 % (UnitID, RecordingID) as a compound key.
@@ -226,16 +304,18 @@ for c = 1:numel(unique_cultures)
         end
 
         % Select pre and post recordings by GroupingVar value (or auto)
-        valid_gv = ~isnan(gv_here);
+        % Non-finite values (e.g. Concentration = Inf for the washout) are not doses.
+        valid_gv = isfinite(gv_here);
+        gv_sel   = gv_here; gv_sel(~valid_gv) = NaN;
         if ~isempty(p.PreGroupValue) && isnumeric(p.PreGroupValue)
             pre_ri = find(valid_gv & gv_here == p.PreGroupValue, 1);
         else
-            [~, pre_ri] = min(gv_here);   % lowest GroupingVar = baseline
+            [~, pre_ri] = min(gv_sel);   % lowest GroupingVar = baseline
         end
         if ~isempty(p.PostGroupValue) && isnumeric(p.PostGroupValue)
             post_ri = find(valid_gv & gv_here == p.PostGroupValue, 1);
         else
-            [~, post_ri] = max(gv_here);  % highest GroupingVar = max treatment
+            [~, post_ri] = max(gv_sel);  % highest GroupingVar = max treatment
         end
 
         if isempty(pre_ri) || isempty(post_ri) || pre_ri == post_ri
@@ -425,7 +505,7 @@ function detail = buildResponsivenessDetail(ctc, unit_ids_in_table, ud, ud_order
     if ismember(group_field, meta.Properties.VariableNames)
         all_gv = unique(meta.(group_field), 'sorted');
         if iscell(all_gv); all_gv = cell2mat(all_gv); end
-        all_gv = all_gv(~isnan(all_gv));
+        all_gv = all_gv(isfinite(all_gv));   % washout (Inf) is not a dose
     else
         all_gv = [0, 1];
     end
@@ -503,7 +583,7 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
         end
     end
 
-    valid_rec_mask = ~isnan(group_vals);
+    valid_rec_mask = isfinite(group_vals);   % washout (Inf) would otherwise become the "max dose"
     if sum(valid_rec_mask) < 2 || numel(unique(group_vals(valid_rec_mask))) < 2
         return
     end
@@ -618,8 +698,11 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
         post_ud_idx = [];
         s3_kept     = [];  % which s3_idx entries have matched pre+post
 
-        for si = 1:numel(s3_idx)
-            u = s3_idx(si);
+        % Bootstrap every unit present at baseline and max dose, not just the stage-2
+        % candidates: NetworkCorrection subtracts the mean change of the tested units, which
+        % must be the population drift. Over candidates alone it subtracts their own response.
+        % Only stage-2 candidates can pass (see the mapping below).
+        for u = 1:n_unique
             uid = unique_uids(u);
             local_mask = row_unit_ids == uid;
             local_ud_raw = ud_order(unit_rows(local_mask));
@@ -666,6 +749,7 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
             % Map bootstrap results back to unique-unit indices
             for ki = 1:n_tested
                 u = s3_kept(ki);
+                if ~pass_s2(u), continue; end
                 if isfield(response, 'p_values') && numel(response.p_values) >= ki
                     boot_pvals(u) = response.p_values(ki);
                 end
@@ -714,4 +798,77 @@ function [flag_inc, flag_dec, strengths, pvals] = fullCurveResponsive( ...
             end
         end
     end
+end
+
+%% ── Helper: treated / control cultures for the control_calibrated method ──
+function [treated, controls] = selectCultures(meta, culture_keys, filter_field, filter_val, p)
+% Control cultures match Bootstrap.ControlFilter ({field, value}); treated cultures match
+% the metadata_filter argument, or are all non-control cultures when it is empty.
+    assert(isfield(p, 'ControlFilter') && iscell(p.ControlFilter) && numel(p.ControlFilter) == 2, ...
+        'CellTypeClassifier:noControlFilter', ...
+        ['GroundTruthMethod "control_calibrated" needs Bootstrap.ControlFilter = {field, value} ' ...
+         'identifying the control cultures (e.g. {''Construct'', 0}).']);
+    rec_cult = FeatureStore.buildCultureIDs(meta, culture_keys);
+    matches = @(field, val) arrayfun(@(i) isequal(string(meta.(field)(i)), string(val)), (1:height(meta))');
+    is_ctrl_rec = matches(p.ControlFilter{1}, p.ControlFilter{2});
+    controls = unique(rec_cult(is_ctrl_rec), 'stable');
+    if ~isempty(filter_field)
+        treated = unique(rec_cult(matches(filter_field, filter_val)), 'stable');
+    else
+        treated = unique(rec_cult(~is_ctrl_rec), 'stable');
+    end
+    treated = setdiff(treated, controls, 'stable');
+    controls = controls(:); treated = treated(:);
+end
+
+
+% -------------------------------------------------------------------------
+function applyResponseRules(ctc, rules)
+% Responders of every rule (its cultures, its direction), pooled as ResponsiveClassLabel units.
+p0 = ctc.Parameters;
+N = height(ctc.FeatureStore.UnitTable);
+idx = false(1, N); dirs = repmat("none", 1, N); strength = zeros(1, N); rule_of = zeros(1, N);
+details = cell(1, numel(rules));
+for r = 1:numel(rules)
+    ctc.Parameters.Bootstrap.ResponseRules = {};
+    ctc.Parameters.Bootstrap.Direction = rules(r).Direction;
+    fprintf('Response rule %d: %s = %s, %s\n', r, string(rules(r).Filter{1}), string(rules(r).Filter{2}), ...
+        rules(r).Direction);
+    try
+        identifyResponsiveUnits(ctc, rules(r).Filter);
+    catch err
+        ctc.Parameters = p0;
+        rethrow(err);
+    end
+    hit = ctc.ResponsiveUnitIdx(:)' & ~idx;          % a unit flagged by several rules keeps the first
+    idx = idx | ctc.ResponsiveUnitIdx(:)';
+    dirs(hit) = ctc.ResponsiveUnitDirection(hit);
+    rule_of(hit) = r;
+    % strength oriented towards the rule's direction; first non-zero value per unit
+    s = ctc.ResponsiveStrength(:)';
+    if rules(r).Direction == "decrease", s = -s; end
+    fill = strength == 0 & ~isnan(s);
+    strength(fill) = s(fill);
+    details{r} = ctc.ResponsivenessDetail;
+end
+ctc.Parameters = p0;
+ctc.ResponsiveUnitIdx       = idx;
+ctc.ResponsiveUnitDirection = dirs;
+ctc.ResponsiveStrength      = strength;
+detail = details{1};
+if ~isstruct(detail) || isempty(detail), detail = struct(); end
+calib = cellfun(@(d) localField(d, 'calibration'), details, 'UniformOutput', false);
+detail.rules = struct('Filter', {rules.Filter}, 'Direction', {rules.Direction}, ...
+    'NResponsive', num2cell(arrayfun(@(r) sum(rule_of == r), 1:numel(rules))), ...
+    'Calibration', calib, 'Detail', details);
+detail.rule_of_unit = rule_of;
+ctc.ResponsivenessDetail = detail;
+fprintf('Response rules: %d responsive units (%s)\n', sum(idx), ...
+    strjoin(arrayfun(@(r) sprintf('rule %d: %d', r, sum(rule_of == r)), 1:numel(rules), ...
+    'UniformOutput', false), ', '));
+end
+
+function v = localField(s, f)
+    v = [];
+    if isstruct(s) && isfield(s, f), v = s.(f); end
 end

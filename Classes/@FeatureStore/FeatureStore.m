@@ -204,9 +204,9 @@ classdef FeatureStore < handle
                 fs            FeatureStore
                 recording_ids string
             end
-            mask_u = ismember(fs.UnitTable.RecordingID,      recording_ids);
-            mask_r = ismember(fs.RecordingTable.RecordingID, recording_ids);
-            mask_m = ismember(fs.MetadataTable.RecordingID,  recording_ids);
+            mask_u = FeatureStore.recordingRows(fs.UnitTable,      recording_ids);
+            mask_r = FeatureStore.recordingRows(fs.RecordingTable, recording_ids);
+            mask_m = FeatureStore.recordingRows(fs.MetadataTable,  recording_ids);
 
             fs2 = FeatureStore();
             fs2.UnitTable      = fs.UnitTable(mask_u, :);
@@ -308,7 +308,7 @@ classdef FeatureStore < handle
     % =====================================================================
     methods
 
-        function [X, unit_ids] = unitMatrix(fs, feature_groups, parent_features, options)
+        function [X, unit_ids, row_idx] = unitMatrix(fs, feature_groups, parent_features, options)
         % UNITMATRIX  Return feature table and unit IDs for ML.
         %
         %   [X, unit_ids] = fs.unitMatrix('all')
@@ -320,7 +320,8 @@ classdef FeatureStore < handle
         %
         % X is a table with only feature columns (no identity/metadata cols).
         % Output column names are always child names (ACG1, not Parent_ACG1).
-        % unit_ids is a string vector of UnitIDs corresponding to rows.
+        % unit_ids is a string vector of UnitIDs corresponding to rows. UnitIDs are only
+        % unique within a recording, so use row_idx (rows of fs.UnitTable) to align metadata.
         %
         % FeatureSet options (see FeatureCatalog for definitions):
         %   "full" (default) — all features in each group (backwards compatible)
@@ -338,6 +339,7 @@ classdef FeatureStore < handle
             end
 
             tbl = fs.UnitTable;
+            row_idx = (1:height(tbl))';
 
             % Apply minimum firing rate filter when requested and column exists.
             % Note: this filters UnitTable rows only. MetadataTable and RecordingTable
@@ -352,6 +354,7 @@ classdef FeatureStore < handle
                             '%d units dropped (FiringRate < %.3g Hz).', n_dropped, options.MinFiringRate);
                     end
                     tbl = tbl(keep, :);
+                    row_idx = row_idx(keep);
                 else
                     warning('FeatureStore:unitMatrix', ...
                         'MinFiringRate filter requested but "FiringRate" column not found — filter skipped.');
@@ -363,7 +366,7 @@ classdef FeatureStore < handle
             unit_ids = tbl.UnitID;
         end
 
-        function [X, rec_ids] = recordingMatrix(fs, feature_groups, parent_features)
+        function [X, rec_ids] = recordingMatrix(fs, feature_groups, parent_features, options)
         % RECORDINGMATRIX  Return feature table and recording IDs for ML.
         %
         %   [X, rec_ids] = fs.recordingMatrix('all')
@@ -378,6 +381,10 @@ classdef FeatureStore < handle
                 feature_groups  string = "all"
                 parent_features string = string.empty
                 options.FeatureSet (1,1) string = "full"
+            end
+            if ~ismember('RecordingID', fs.RecordingTable.Properties.VariableNames)
+                error('FeatureStore:noRecordingFeatures', ['No recording-level features in this ' ...
+                    'FeatureStore: run computeNetworkFeatures() on the RecordingProcessors first.']);
             end
             cols    = fs.selectFeatureCols(fs.RecordingTable, feature_groups, options.FeatureSet);
             X       = fs.resolveParentFeatures(fs.RecordingTable, cols, parent_features);
@@ -410,6 +417,11 @@ classdef FeatureStore < handle
 
             % Get recording-level feature columns
             [rec_feat, rec_ids] = fs.recordingMatrix(feature_groups, parent_features, FeatureSet=options.FeatureSet);
+            if width(rec_feat) == 0
+                error('FeatureStore:noRecordingFeatures', ...
+                    'Feature group(s) "%s" have no recording-level columns; cultureMatrix aggregates recording features.', ...
+                    strjoin(string(feature_groups), '", "'));
+            end
             meta = fs.MetadataTable;
 
             % Build culture ID string per recording
@@ -434,7 +446,13 @@ classdef FeatureStore < handle
                     % Find recording in this culture with grouping_var == val
                     gv_col = meta.(grouping_var)(cult_mask);
                     if isnumeric(val)
-                        match_mask = abs(gv_col - val) <= options.NumericTolerance;
+                        % Nearest recording within the tolerance, so an exact match wins:
+                        % with a tolerance spanning several doses the first hit was always the lowest.
+                        dist = abs(gv_col - val);
+                        dist(~(dist <= options.NumericTolerance)) = Inf;
+                        [best_dist, best_idx] = min(dist);
+                        match_mask = false(size(gv_col));
+                        if isfinite(best_dist), match_mask(best_idx) = true; end
                     else
                         match_mask = string(gv_col) == string(val);
                     end
@@ -563,8 +581,8 @@ classdef FeatureStore < handle
                             end
                         case "GraphFeatures"
                             % Per-unit graph columns: suffixed by algorithm (e.g. _CCG, _STTC)
-                            graph_roots = ["ClusteringCoefficient","LocalEfficiency", ...
-                                           "EigenCentrality","Betweenness"];
+                            graph_roots = ["ClusteringCoefficient","LocalEfficiency","Strength_", ...
+                                           "EigenCentrality","Betweenness"];   % Strength_: weighted graphs
                             for r = graph_roots
                                 selected = selected | startsWith(all_cols, r);
                             end
@@ -581,21 +599,22 @@ classdef FeatureStore < handle
                             names = ["MeanInterBurstInterval","BurstDuration", ...
                                      "RiseTime","FallTime","PeakFR","StdFR", ...
                                      "StdBurstDuration","StdInterBurstInterval", ...
-                                     "IntraFiringRate","InterFiringRate"];
+                                     "IntraFiringRate","InterFiringRate", ...
+                                     "BurstWidth","BurstRise","BurstFall","BurstFWHM"];
                             selected = selected | ismember(all_cols, names);
                         case "NetworkRegularity"
-                            names = Unit.returnFeatureNames("reg");
+                            % Network columns are NetworkRegularityFrequency etc.; the bare
+                            % names belong to the single-unit regularity features
+                            names = "Network" + Unit.returnFeatureNames("reg");
                             selected = selected | ismember(all_cols, names);
                         case "NetworkCatch22"
-                            try
-                                names = "SC_" + string(GetAllFeatureNames());
-                                selected = selected | ismember(all_cols, names);
-                            catch
-                                selected = selected | startsWith(all_cols, "SC_");
-                            end
+                            % Network catch22 columns carry the plain catch22 names; the
+                            % SC_ prefix marks the single-unit features
+                            names = string(GetAllFeatureNames(true));   % bundled (Toolboxes/catch22)
+                            selected = selected | ismember(all_cols, names);
                         case "NetworkGraph"
                             % Network-level graph columns: suffixed by algorithm (e.g. _CCG)
-                            graph_roots = ["Density","Assortativity","RichClub", ...
+                            graph_roots = ["Density","Assortativity","RichClub","MeanStrength_", ...
                                            "GlobalEfficiency","Modularity","SmallWorldness"];
                             for r = graph_roots
                                 selected = selected | startsWith(all_cols, r);
@@ -712,6 +731,16 @@ classdef FeatureStore < handle
 
     methods (Static, Access = private)
 
+        function mask = recordingRows(T, recording_ids)
+        % Rows of T from the given recordings; tables can be empty without columns
+        % (e.g. RecordingTable when no network features were computed).
+            if ismember('RecordingID', T.Properties.VariableNames)
+                mask = ismember(T.RecordingID, recording_ids);
+            else
+                mask = false(height(T), 1);
+            end
+        end
+
         function tf = isParentGroup(col_name, parent_groups)
         % ISPARENTGROUP  True if col_name belongs to one of the requested parent groups.
         %   Maps column naming conventions to feature group strings.
@@ -782,7 +811,7 @@ classdef FeatureStore < handle
                     parts(:, k) = repmat({'_'}, n, 1);
                 end
             end
-            culture_ids = string(join(parts, '_'));
+            culture_ids = string(join(parts, '_', 2));   % dim 2: with one key, join(parts) would merge all rows
         end
 
     end
@@ -865,52 +894,49 @@ classdef FeatureStore < handle
 
         function T = stackTables(tbl_cells)
         % Vertically concatenate tables that may have different columns.
-        % Missing columns are filled with NaN (numeric) or "" (string/categorical),
-        % with type inferred by peeking at a table that already has the column.
+        % Missing columns are filled with NaN (numeric) or "" (string/categorical).
+        % Column types are inferred once over all tables (majority vote, ties favour
+        % string); inferring them per missing column per table scaled quadratically.
             var_cells = cellfun(@(t) string(t.Properties.VariableNames)', tbl_cells, 'un', 0);
             all_vars  = unique(vertcat(var_cells{:}));
-            padded    = cellfun(@(t) FeatureStore.padTable(t, all_vars, tbl_cells), tbl_cells, 'un', 0);
+            is_str    = FeatureStore.columnIsString(all_vars, tbl_cells);
+            padded    = cellfun(@(t) FeatureStore.padTable(t, all_vars, is_str), tbl_cells, 'un', 0);
             T = vertcat(padded{:});
         end
 
-        function t = padTable(t, all_vars, ref_tables)
-        % Add missing columns to t, with fill value inferred from ref_tables.
-            existing = string(t.Properties.VariableNames);
-            missing  = all_vars(~ismember(all_vars, existing));
-            for i = 1:numel(missing)
-                col_name = missing(i);
-                fill_str = FeatureStore.isStringColumn(col_name, ref_tables);
-                if fill_str
-                    t.(col_name) = repmat("", height(t), 1);
-                else
-                    t.(col_name) = NaN(height(t), 1);
-                end
+        function t = padTable(t, all_vars, is_str)
+        % Add the columns of all_vars missing from t, in one block per fill type.
+            missing = ~ismember(all_vars, string(t.Properties.VariableNames));
+            h = height(t);
+            num_names = all_vars(missing & ~is_str);
+            str_names = all_vars(missing & is_str);
+            if ~isempty(num_names)
+                t = [t, array2table(NaN(h, numel(num_names)), 'VariableNames', cellstr(num_names))];
+            end
+            if ~isempty(str_names)
+                t = [t, array2table(repmat("", h, numel(str_names)), 'VariableNames', cellstr(str_names))];
             end
         end
 
-        function tf = isStringColumn(col_name, tables)
-        % Return true if col_name holds string/char/categorical data in any ref table.
-        % Checks ALL tables to avoid type mismatch from first-table-wins heuristic.
-            n_string  = 0;
-            n_numeric = 0;
+        function is_str = columnIsString(all_vars, tables)
+        % True for columns holding string/char/categorical data in the majority of the
+        % tables that have them (checks all tables, not just the first one found).
+            n_string  = zeros(numel(all_vars), 1);
+            n_numeric = zeros(numel(all_vars), 1);
             for k = 1:numel(tables)
-                tbl = tables{k};
-                if ismember(col_name, string(tbl.Properties.VariableNames))
-                    col = tbl.(col_name);
+                tbl   = tables{k};
+                names = string(tbl.Properties.VariableNames);
+                [~, idx] = ismember(names, all_vars);
+                for j = 1:numel(names)
+                    col = tbl.(names(j));
                     if isstring(col) || ischar(col) || iscell(col) || iscategorical(col)
-                        n_string = n_string + 1;
+                        n_string(idx(j)) = n_string(idx(j)) + 1;
                     else
-                        n_numeric = n_numeric + 1;
+                        n_numeric(idx(j)) = n_numeric(idx(j)) + 1;
                     end
                 end
             end
-            if n_string + n_numeric == 0
-                % Column not found in any table — fall back to name heuristic
-                tf = endsWith(col_name, "ID") || ismember(col_name, ...
-                    ["Mutation","Genotype","Label","Type","Name","Date","Group","Condition"]);
-            else
-                tf = n_string >= n_numeric;  % majority vote; ties favour string
-            end
+            is_str = n_string >= n_numeric & n_string > 0;
         end
 
         function meta_row = metadataStructToRow(meta_struct)

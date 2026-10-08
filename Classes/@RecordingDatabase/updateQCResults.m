@@ -9,10 +9,11 @@ function updateQCResults(db, mearec)
 
     arguments
         db RecordingDatabase
-        mearec MEArecording
+        mearec   % MEArecording or RecordingProcessor
     end
 
     if ~db.IsConnected; return; end
+    mearec = RecordingDatabase.recordingView(mearec);
 
     try
         db.ensureConnected();
@@ -24,7 +25,7 @@ function updateQCResults(db, mearec)
         qc = mearec.Parameters.QC;
         qc_hash = paramHash(qc);
         qc_json = jsonencode(qc);
-        esc = @(s) strrep(char(string(s)), '''', '''''');
+        esc = @(s) strrep(char(fillmissing(string(s), 'constant', "")), '''', '''''');   % missing -> ''
 
         % Count templates and units
         n_total = 0;

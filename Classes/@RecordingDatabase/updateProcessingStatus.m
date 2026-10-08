@@ -10,7 +10,7 @@ function updateProcessingStatus(db, mearec, analysis_name, status, duration_s, e
 
     arguments
         db RecordingDatabase
-        mearec MEArecording
+        mearec   % MEArecording or RecordingProcessor
         analysis_name string
         status string {mustBeMember(status, ["pending","running","completed","failed"])}
         duration_s (1,1) double = 0
@@ -18,6 +18,7 @@ function updateProcessingStatus(db, mearec, analysis_name, status, duration_s, e
     end
 
     if ~db.IsConnected; return; end
+    mearec = RecordingDatabase.recordingView(mearec);
 
     try
         db.ensureConnected();
@@ -28,7 +29,7 @@ function updateProcessingStatus(db, mearec, analysis_name, status, duration_s, e
         param_hash = paramHash(mearec.Parameters);
 
         now_str = char(datetime('now', 'Format', 'yyyy-MM-dd HH:mm:ss'));
-        esc = @(s) strrep(char(string(s)), '''', '''''');
+        esc = @(s) strrep(char(fillmissing(string(s), 'constant', "")), '''', '''''');   % missing -> ''
 
         if status == "running"
             sql = sprintf([...

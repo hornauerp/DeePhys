@@ -35,12 +35,12 @@ function obj = loadobj(s)
     % Each block upgrades from version N-1 to N.
     % Legacy objects without ClassVersion are treated as version 0.
 
-    % Version 1: backfill StableID on Units that lack it
+    % Version 2: (re)generate every StableID. The ID includes the sorting
+    % identity (units of separately sorted days no longer collide); the ID is a deterministic
+    % function of stored fields, so stored IDs of the old scheme are simply replaced.
     if ~isempty(obj.Units)
         for u = 1:length(obj.Units)
-            if isempty(obj.Units(u).StableID)
-                obj.Units(u).generateStableID();
-            end
+            obj.Units(u).generateStableID();
         end
     end
 

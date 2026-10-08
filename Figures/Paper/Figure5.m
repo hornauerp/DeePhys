@@ -1,8 +1,9 @@
-addpath(genpath("/home/phornauer/Git/DeePhys"))
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+addpath(genpath(deephys_root))
 set(0,'defaultFigureRenderer','painters')
 
 %% LOAD DATA
-save_root = "/home/phornauer/Git/DeePhys/Data/Figure5";
+save_root = fullfile(deephys_root, "Data", "Figure5");
 load(fullfile(save_root,'activity_prediction.mat'))
 load(fullfile(save_root,'waveform_prediction.mat'))
 load(fullfile(save_root,'combined_prediction.mat'))
@@ -226,7 +227,7 @@ set(ax(4),'XTick',[],'YTick',[],'Box','on','XLim',[0.95 1.2],'YLim',[-0.6 0.2],'
 r = rectangle(nt(11),'Position',[0.95 -0.6 0.25 0.85],'EdgeColor',[0.5 0.5 0.5]);
 
 %%
-exportgraphics(f5,'/home/phornauer/Git/DeePhys/Plots/Figure5.tif','Resolution',300)
+exportgraphics(f5,fullfile(deephys_root, 'Plots', 'Figure5.tif'),'Resolution',300)
 
 %%
 figure('Color','w','Position',[800 800 200 250]);

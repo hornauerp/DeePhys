@@ -50,12 +50,14 @@ classdef test_FeatureStore < matlab.unittest.TestCase
             fs = test_FeatureStore.makeMinimalFS();
             [X_all, ~] = fs.unitMatrix('all');
             warnState  = warning('off', 'FeatureStore:unitMatrix');
-            [X_filt, ids_f] = fs.unitMatrix('all', string.empty, MinFiringRate=2.0);
+            [X_filt, ids_f, row_idx] = fs.unitMatrix('all', string.empty, MinFiringRate=2.0);
             warning(warnState);
             tc.verifyLessThan(height(X_filt), height(X_all));
-            % All remaining units should have FiringRate >= 2
-            fr = fs.UnitTable.FiringRate(ismember(fs.UnitTable.UnitID, ids_f));
-            tc.verifyTrue(all(fr >= 2.0));
+            % All remaining units should have FiringRate >= 2, and row_idx must align
+            % X rows with UnitTable rows (UnitIDs repeat across recordings).
+            tc.verifyEqual(numel(row_idx), height(X_filt));
+            tc.verifyEqual(fs.UnitTable.UnitID(row_idx), ids_f);
+            tc.verifyTrue(all(fs.UnitTable.FiringRate(row_idx) >= 2.0));
         end
 
         function testRecordingMatrixRowsMatchMetadata(tc)
@@ -85,6 +87,42 @@ classdef test_FeatureStore < matlab.unittest.TestCase
             cids = FeatureStore.buildCultureIDs(meta, ["ChipID","PlatingDate"]);
             tc.verifyEqual(cids(1), cids(2));  % same ChipID+PlatingDate
             tc.verifyNotEqual(cids(1), cids(3));
+        end
+
+        function testNetworkSelectorsMatchStoredNames(tc)
+            % Network regularity is stored as NetworkRegularity*, network catch22 under the
+            % plain catch22 names (SC_ marks single-unit catch22).
+            fs = test_FeatureStore.makeMinimalFS();
+            fs.RecordingTable.NetworkRegularityFrequency = [1; 2];
+            fs.RecordingTable.NetworkRegularityMagnitude = [3; 4];
+            fs.RecordingTable.NetworkRegularityFit       = [5; 6];
+            fs.RecordingTable.DN_HistogramMode_5         = [7; 8];
+            fs.RecordingTable.CO_f1ecac                  = [9; 10];
+            X = fs.recordingMatrix('NetworkRegularity');
+            tc.verifyEqual(size(X, 2), 3);
+            X = fs.recordingMatrix('NetworkCatch22');
+            tc.verifyEqual(size(X, 2), 2);
+        end
+
+        function testACGColumnsAndParentSubstitution(tc)
+            fs = test_FeatureStore.makeMinimalFS();
+            n = height(fs.UnitTable);
+            fs.UnitTable.ACG1 = ones(n, 1);         fs.UnitTable.ACG2 = 2 * ones(n, 1);
+            fs.UnitTable.Parent_ACG1 = 10 * ones(n, 1); fs.UnitTable.Parent_ACG2 = 20 * ones(n, 1);
+            X_child = fs.unitMatrix('ACG');
+            tc.verifyEqual(X_child{:, :}, repmat([1 2], n, 1));
+            X_parent = fs.unitMatrix('ACG', 'ACG');
+            tc.verifyEqual(X_parent{:, :}, repmat([10 20], n, 1));
+            tc.verifyEqual(string(X_parent.Properties.VariableNames), ["ACG1", "ACG2"]);
+        end
+
+        function testWithoutRecordingFeatures(tc)
+            % Processors without network features give an empty RecordingTable (no columns).
+            fs = test_FeatureStore.makeMinimalFS();
+            fs.RecordingTable = table();
+            fs2 = fs.subset("r1");
+            tc.verifyEqual(height(fs2.UnitTable), 3);
+            tc.verifyError(@() fs.recordingMatrix('all'), 'FeatureStore:noRecordingFeatures');
         end
 
         function testSubsetOnEmptyResultIsHandled(tc)

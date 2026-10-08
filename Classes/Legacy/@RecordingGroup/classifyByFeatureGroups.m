@@ -25,7 +25,8 @@ function result = classifyByFeatureGroups(rg, level, alg, classification_var, po
             if isempty(grouping_var) %Get group indices for stratification
                 if level == "Unit"
                     object_group = [rg.Units];
-                    input_table = [rg.Recordings].getUnitFeatures(unit_features);
+                    recordings = [rg.Recordings];
+                    input_table = recordings.getUnitFeatures(unit_features);
                     [Y, group_labels_comb] = combineMetadataIndices(rg, object_group, classification_var, pooling_vals);
                     group_idx = Y;
                 elseif level == "Recording"

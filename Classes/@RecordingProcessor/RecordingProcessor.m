@@ -36,7 +36,7 @@ classdef RecordingProcessor < handle
         Parameters          struct      % Analysis parameters (merged with defaults)
         UnitFeatureTable    table       % (N_units x F) per-unit feature table
         NetworkFeatureTable table       % (1 x F) network-level feature table
-        Connectivity        struct      % CCG / STTC / DDC connectivity results
+        Connectivity        struct = struct()   % CCG / STTC / DDC connectivity results (fields added per method)
         Bursts              struct      % Burst detection results
         CellTypeLabels      double      % (1 x N_units) 1=exc, 2=inh, NaN=unclassified
         Status              struct      % Tracks which analyses have been run
@@ -107,7 +107,16 @@ classdef RecordingProcessor < handle
             if isempty(p.QC.GoodUnits)
                 bad_power = RecordingProcessor.checkPower(norm_wf, p.QC.PowerCutoff);
                 bad_amp   = RecordingProcessor.checkAmplitude(max_amps, p.QC.Amplitude);
-                bad_fr    = RecordingProcessor.checkFiringRate(firing_rates, p.QC.FiringRate);
+                if N > 0 && all(bad_amp) && all(max_amps(:) < p.QC.Amplitude(1))
+                    % Kilosort writes whitened templates; without whitening_mat_inv.npy
+                    % their scale is not in ADC units, so a microvolt range rejects everything.
+                    warning('RecordingProcessor:amplitudeScale', ['%s: all %d template amplitudes are below ' ...
+                        'QC.Amplitude(1) = %g (max %.3g); the templates are probably whitened, so the ' ...
+                        'amplitude criterion is skipped. Set QC.Amplitude = [] to silence this.'], ...
+                        sd.InputPath, N, p.QC.Amplitude(1), max(max_amps));
+                    bad_amp(:) = false;
+                end
+                bad_fr    = RecordingProcessor.checkFiringRate(firing_rates(:), p.QC.FiringRate);   % column: a row broadcasts to an N x N mask
                 bad_rpv   = RecordingProcessor.checkRPV(unit_spike_times, p.QC.RPV, p.QC.RefractoryPeriod);
                 [is_axon, is_noisy] = RecordingProcessor.checkWaveform(norm_wf, p.QC.Axon, p.QC.Noise, p.QC.NoiseCutout, sd.SamplingRate);
                 spike_counts = cellfun(@numel, unit_spike_times);
@@ -119,40 +128,65 @@ classdef RecordingProcessor < handle
             end
             fprintf('RecordingProcessor QC: %d/%d units passed\n', sum(good), N);
 
-            % Optional KS label filter
+            % Optional Kilosort / Bombcell label filters. Labels are stored per sorter
+            % cluster; segment templates can be a re-indexed subset of those clusters.
             use_ks = isfield(p.QC, 'KSLabel') && p.QC.KSLabel.Enable;
+            use_bc = isfield(p.QC, 'Bombcell') && p.QC.Bombcell.Enable;
+            ks_label = strings(N, 1);
+            bc_type  = nan(N, 1);
+            if use_ks || use_bc
+                cluster_ids = RecordingProcessor.templateClusterIds(sd.InputPath, N);
+            end
             if use_ks
                 try
-                    [ks_labels, ks_ids] = RecordingProcessor.loadKSLabels(sd.InputPath);
-                    ks_pass = false(N, 1);
-                    accepted = string(p.QC.KSLabel.AcceptedLabels);
-                    for k = 1:numel(ks_ids)
-                        tid = ks_ids(k) + 1;
-                        if tid >= 1 && tid <= N
-                            ks_pass(tid) = ismember(ks_labels(k), accepted);
-                        end
-                    end
-                    good = good & ks_pass;
+                    T = RecordingProcessor.readClusterTable(sd.InputPath, 'cluster_KSLabel.tsv');
+                    [hit, loc] = ismember(cluster_ids, T.cluster_id);
+                    ks_label(hit) = string(T.KSLabel(loc(hit)));
+                    good = good(:) & ismember(ks_label, string(p.QC.KSLabel.AcceptedLabels));
                 catch ME
                     warning('RecordingProcessor:ksLabel', '%s', ME.message);
                 end
+            end
+            if use_bc
+                try
+                    T = RecordingProcessor.readClusterTable(sd.InputPath, 'cluster_bc_unitType.tsv');
+                    [hit, loc] = ismember(cluster_ids, T.cluster_id);
+                    bc_type(hit) = RecordingProcessor.bombcellTypeCode(T.bc_unitType(loc(hit)));
+                    if p.QC.Bombcell.FilterUnits
+                        accepted = RecordingProcessor.bombcellTypeCode(p.QC.Bombcell.AcceptedTypes);   % names ("GOOD") or codes
+                        good = good(:) & ismember(bc_type, accepted);
+                    end
+                catch ME
+                    warning('RecordingProcessor:bombcell', '%s', ME.message);
+                end
+            end
+            if use_ks || use_bc
+                fprintf('RecordingProcessor QC after label filters: %d/%d units passed\n', sum(good), N);
+            end
+
+            % Recordings with fewer than QC.N_Units good units are dropped (no units)
+            if isfield(p.QC, 'N_Units') && sum(good) < p.QC.N_Units
+                warning('RecordingProcessor:tooFewUnits', ['%s: %d units passed QC, fewer than ' ...
+                    'QC.N_Units = %d; the recording is dropped (no units).'], ...
+                    sd.InputPath, sum(good), p.QC.N_Units);
+                good(:) = false;
             end
 
             % Build UnitData array for passing units
             good_idx = find(good);
             rec_id   = sd.RecordingID;
-            ud(numel(good_idx)) = UnitData();
+            sorting_id = sd.SortingID;   % processors saved before SortingID existed: resolve now
+            if isempty(sorting_id) || strlength(sorting_id) == 0
+                sorting_id = SpikeData.resolveSortingID(sd.InputPath, sd.ParentPath, sd.RecordingID);
+            end
+            ud = UnitData.empty(1, 0);   % ud(0) = ... errors when no unit passes QC
             for u = 1:numel(good_idx)
                 tid = good_idx(u);
                 ud(u) = UnitData(tid, ref_elec(tid), unit_spike_times{tid}, ...
                                  norm_wf(:, tid), rec_id, sd.SamplingRate, sd.Duration);
-                ud(u).UnitID = RecordingProcessor.computeStableID(sd.Metadata, tid, ref_elec(tid));
-                if use_ks
-                    match = find(ks_ids == (tid - 1), 1);
-                    if ~isempty(match)
-                        ud(u).KSLabel = ks_labels(match);
-                    end
-                end
+                ud(u).UnitID = RecordingProcessor.computeStableID(sd.Metadata, tid, ref_elec(tid), sorting_id);
+                if use_ks, ud(u).KSLabel = ks_label(tid); end
+                if use_bc, ud(u).BombcellType = bc_type(tid); end
             end
             proc.Units  = ud;
             proc.Status.QC = "done";
@@ -177,7 +211,7 @@ classdef RecordingProcessor < handle
             end
 
             if isscalar(feature_groups) && feature_groups == "all"
-                feat_groups = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22"];
+                feat_groups = ["ActivityFeatures","WaveformFeatures","RegularityFeatures","Catch22","ACG"];
             else
                 feat_groups = feature_groups;
             end
@@ -230,6 +264,22 @@ classdef RecordingProcessor < handle
             var_names = "Waveform" + (1:size(aligned_wf, 1));
             feature_tables{end+1} = array2table(aligned_wf', "VariableNames", var_names);
 
+            % Autocorrelograms of this recording (ACG1..N). Same grid and peak
+            % normalisation as Parent_ACG1..N, so FeatureStore can substitute the
+            % parent version column by column (ParentFeatures = "ACG").
+            if any(feat_groups == "ACG")
+                acg_p = RecordingProcessor.acgParameters(proc.Parameters);
+                n_bins = round(acg_p.Lag / acg_p.BinSize) * 2 + 1;
+                acgs = zeros(n_bins, n_units);
+                for u = 1:n_units
+                    a = CellTypeClassifier.computeACG(proc.Units(u).SpikeTimes(:), ...
+                        acg_p.BinSize, acg_p.Lag, sr);
+                    if max(a) > 0, a = a / max(a); end
+                    acgs(:, u) = a;
+                end
+                feature_tables{end+1} = array2table(acgs', "VariableNames", "ACG" + (1:n_bins));
+            end
+
             proc.UnitFeatureTable = [feature_tables{:}];
             proc.Status.UnitFeatures = "done";
         end
@@ -260,10 +310,8 @@ classdef RecordingProcessor < handle
                 proc.runQC();
             end
 
-            % Resolve ACG parameters (match CellTypeClassifier defaults)
-            defaults.BinSize = 0.0005;
-            defaults.Lag     = 0.1;
-            p = parseStructParameters(defaults, acg_params);
+            % ACG grid: Parameters.ACG (same as the ACG1..N columns), overridable per call
+            p = parseStructParameters(RecordingProcessor.acgParameters(proc.Parameters), acg_params);
 
             parent_path = proc.SpikeData.ParentPath;
             if parent_path == "" || ~isfolder(parent_path)
@@ -308,6 +356,9 @@ classdef RecordingProcessor < handle
                     full_acgs(:, u) = acg_map(tid_key);
                 end
                 % If not found: column stays NaN (unit QC-rejected in parent or missing)
+                % Provenance, so consumers (CellTypeClassifier) can adapt or recompute.
+                proc.Units(u).FullACGBinSize = p.BinSize;
+                proc.Units(u).FullACGLag     = p.Lag;
             end
 
             % Build table with Parent_ prefix columns (storage-only convention)
@@ -339,7 +390,11 @@ classdef RecordingProcessor < handle
                 return
             end
 
-            spike_times = proc.SpikeData.SpikeTimes;
+            if proc.Status.QC ~= "done"
+                proc.runQC();
+            end
+            % Network analyses use QC-passing units only; spike_units are indices into proc.Units.
+            [spike_times, spike_units] = RecordingProcessor.qcSpikes(proc);
             duration    = proc.SpikeData.Duration;
             net_struct  = struct();
 
@@ -379,13 +434,22 @@ classdef RecordingProcessor < handle
                     if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'MergeFactor')
                         burst_params.MergeFactor = proc.Parameters.Bursts.MergeFactor;
                     end
+                    if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'TonicMethod')
+                        burst_params.TonicMethod = proc.Parameters.Bursts.TonicMethod;
+                    end
+                    if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'ShapeLevel')
+                        burst_params.ShapeLevel = proc.Parameters.Bursts.ShapeLevel;
+                    end
+                    if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'TonicMinRate')
+                        burst_params.TonicMinRate = proc.Parameters.Bursts.TonicMinRate;
+                    end
                     burst_params.Outlier = proc.Parameters.Outlier;
-                    burst_params.Binning = 0.01;
+                    burst_params.Binning = proc.Parameters.Bursts.Binning;
 
                     fr  = proc.UnitFeatureTable.FiringRate;
                     cv  = proc.UnitFeatureTable.CVInterSpikeInterval;
                     [bursts, burst_features] = computeBursts(spike_times, ...
-                        proc.SpikeData.SpikeUnits, fr, cv, ...
+                        spike_units, fr, cv, ...
                         numel(proc.Units), duration, burst_params);
                     proc.Bursts = bursts;
                     net_struct.BurstFeatures = burst_features;
@@ -398,7 +462,7 @@ classdef RecordingProcessor < handle
                             in_burst = in_burst | (spike_times >= bursts.T_start(b) & spike_times <= bursts.T_end(b));
                         end
                         for u = 1:n_units
-                            mask = proc.SpikeData.SpikeUnits == proc.Units(u).TemplateID;
+                            mask = spike_units == u;
                             n_spikes = sum(mask);
                             if n_spikes > 0
                                 burst_frac(u) = sum(mask & in_burst) / n_spikes;
@@ -437,8 +501,7 @@ classdef RecordingProcessor < handle
                 proc.runQC();
             end
 
-            st  = proc.SpikeData.SpikeTimes;
-            su  = proc.SpikeData.SpikeUnits;
+            [st, su] = RecordingProcessor.qcSpikes(proc);   % QC units only, su = index into proc.Units (matrices are n x n)
             sr  = proc.SpikeData.SamplingRate;
             n   = numel(proc.Units);
             dur = proc.SpikeData.Duration;
@@ -469,8 +532,8 @@ classdef RecordingProcessor < handle
             if ~isempty(proc.Connectivity) && ~isempty(fieldnames(proc.Connectivity))
                 try
                     gp = struct();
-                    if isfield(proc.Parameters, 'GraphFeatures') && isfield(proc.Parameters.GraphFeatures, 'SmallWorldnessIterations')
-                        gp.SmallWorldnessIterations = proc.Parameters.GraphFeatures.SmallWorldnessIterations;
+                    if isfield(proc.Parameters, 'GraphFeatures')
+                        gp = proc.Parameters.GraphFeatures;   % SmallWorldnessIterations, Types
                     end
                     [nw_graph, unit_graph] = computeGraphFeatures(proc.Connectivity, gp);
                     if ~isempty(proc.NetworkFeatureTable)
@@ -833,13 +896,20 @@ classdef RecordingProcessor < handle
         end
 
         function procs = loadMany(file_paths)
-        % LOADMANY  Load multiple processors in parallel.
+        % LOADMANY  Load multiple processors; in parallel only if a pool is already open.
+        %   Starting a pool just for loading costs more than it saves, and concurrent MATLAB
+        %   jobs that each auto-start a pool collide in the shared local cluster folder.
             if ischar(file_paths) || isstring(file_paths)
                 file_paths = cellstr(file_paths);
             end
             N = numel(file_paths);
             procs(N) = RecordingProcessor();
-            parfor i = 1:N
+            n_workers = 0;
+            if exist('gcp', 'file') == 2
+                pool = gcp('nocreate');
+                if ~isempty(pool), n_workers = pool.NumWorkers; end
+            end
+            parfor (i = 1:N, n_workers)
                 try
                     procs(i) = RecordingProcessor.load(string(file_paths{i}));
                 catch ME
@@ -892,6 +962,14 @@ classdef RecordingProcessor < handle
             if ~isempty(obj.Units)
                 proc.Units = UnitData.fromLegacyUnitArray(obj.Units, sd.RecordingID);
                 proc.Status.QC = "done";
+                % After QC, MEArecording.updateSpikeTimes stores the spike owners as compact
+                % unit indices (1..numel(Units)); the new pipeline identifies spikes by
+                % TemplateID (qcSpikes, burst and spatial features), so translate them.
+                su = proc.SpikeData.SpikeUnits;
+                if ~isempty(su) && all(su >= 1 & su <= numel(proc.Units) & su == round(su))
+                    tids = [proc.Units.TemplateID];
+                    proc.SpikeData.SpikeUnits = reshape(tids(su), size(su));
+                end
             end
 
             % Extract unit feature table
@@ -933,7 +1011,10 @@ classdef RecordingProcessor < handle
             params.Analyses.Regularity   = true;
             params.Analyses.Bursts       = true;
             params.Analyses.Connectivity = ["CCG","STTC"];
-            params.Analyses.Catch22      = true;
+            % catch22 needs the compiled feature MEX files (run mexAll in
+            % Toolboxes/catch22/wrap_Matlab); default on only if they are present.
+            % catch22_all itself is an .m wrapper, so test one compiled feature.
+            params.Analyses.Catch22      = exist('catch22_DN_HistogramMode_5', 'file') == 3;
 
             params.Outlier.Method          = "median";
             params.Outlier.ThresholdFactor = 5;
@@ -960,25 +1041,26 @@ classdef RecordingProcessor < handle
 
             params.Activity.FanoBinWidth = 0.1;
 
+            params.Bursts.Method      = "ISIN";      % legacy; "ISINJoint" = detectNetworkBursts, "logISI"
+            params.Bursts.TonicMethod = "gini";      % "ISINJoint": unit removal before detection (with TonicMinRate)
+            params.Bursts.ShapeLevel  = 0.25;        % burst onset / offset at this fraction of the peak (burstShape)
+            params.Bursts.TonicMinRate = "median";   % "ISINJoint": units below this rate (Hz or "median") are never removed
             params.Bursts.MergeFactor = 0.5;
             params.Bursts.Binning     = 0.1;
 
             params.Regularity.Binning = 0.1;
             params.Regularity.N_peaks = 20;
 
+            % Unit autocorrelograms (ACG1..N, and Parent_ACG1..N from the parent sorting):
+            % same grid as CellTypeClassifier.Harmonization, peak-normalised.
+            params.ACG.BinSize = 0.0005;
+            params.ACG.Lag     = 0.1;
+
             params.CCG.BinSize  = 0.001;
             params.CCG.Duration = 0.1;
             params.CCG.Conv_w   = 0.010 / params.CCG.BinSize;
             params.CCG.Alpha    = 0.001;
-
-            params.GLM.binsize      = 1;
-            params.GLM.interval     = 100;
-            params.GLM.tau0         = 0.8;
-            params.GLM.eta_w        = 5;
-            params.GLM.eta_tau      = 20;
-            params.GLM.eta_dt_coeff = 2;
-            params.GLM.min_spikes   = 100;
-            params.GLM.threshold    = 5.09;
+            params.CCG.InhibitoryCriterion = "strict";   % or "cellexplorer" (CellExplorer / previous behaviour; see computeConnectivityCCG)
 
             params.DDC.BinSize     = 0.001;
             params.DDC.Threshold   = 0;
@@ -991,6 +1073,10 @@ classdef RecordingProcessor < handle
             params.STTC.Percentile      = 95;
 
             params.GraphFeatures.SmallWorldnessIterations = 100;
+            % Types: "binary" (default), "weighted", or ["binary","weighted"]. Weighted
+            % graphs use the link weights of the significant links (DDC: |coefficient|,
+            % STTC: tiling coefficient); CCG has binary links only.
+            params.GraphFeatures.Types = "binary";
 
             params.Catch22.BinSize = 0.1;
 
@@ -1009,22 +1095,30 @@ classdef RecordingProcessor < handle
 
         function applyLabelsFromClassifier(proc_array, ctc)
         % APPLYLABELSFROMCLASSIFIER  Copy UnitLabels from a CellTypeClassifier to processors.
-        %   Maps labels by UnitID matching. Resets CellTypeFeatures status to "pending".
+        %   Maps labels by UnitID within the same culture (ctc.Parameters.CultureKeys): a unit
+        %   keeps its label in every recording of its culture (e.g. all doses), while UnitIDs
+        %   that collide across cultures/sortings cannot pick up another unit's label.
+        %   Resets CellTypeFeatures and SpatialFeatures to "pending" (both depend on labels).
             arguments
                 proc_array RecordingProcessor
                 ctc        CellTypeClassifier
             end
-            ctc_unit_ids = string(ctc.FeatureStore.UnitTable.UnitID);
+            ut           = ctc.FeatureStore.UnitTable;
+            keys_fn      = ctc.Parameters.CultureKeys;
+            ctc_cultures = FeatureStore.getCultureIDsForUnits(ut.RecordingID, ctc.FeatureStore.MetadataTable, keys_fn);
+            ctc_keys     = string(ut.UnitID) + "|" + ctc_cultures;
             ctc_labels   = ctc.UnitLabels;
             for i = 1:numel(proc_array)
                 p = proc_array(i);
                 if isempty(p.Units), continue; end
-                proc_ids = string({p.Units.UnitID});
-                labels   = NaN(1, numel(p.Units));
-                [found, loc] = ismember(proc_ids, ctc_unit_ids);
+                proc_culture = FeatureStore.buildCultureIDs(struct2table(p.SpikeData.Metadata, 'AsArray', true), keys_fn);
+                proc_keys    = string({p.Units.UnitID}) + "|" + proc_culture;
+                labels       = NaN(1, numel(p.Units));
+                [found, loc] = ismember(proc_keys, ctc_keys);
                 labels(found) = ctc_labels(loc(found));
                 p.CellTypeLabels = labels;
                 p.Status.CellTypeFeatures = "pending";
+                p.Status.SpatialFeatures  = "pending";
             end
         end
 
@@ -1034,6 +1128,15 @@ classdef RecordingProcessor < handle
     % Private helpers
     % =====================================================================
     methods (Static, Access = private)
+
+        function [st, su] = qcSpikes(proc)
+        % QCSPIKES  Spike times of QC-passing units, with unit labels 1..numel(proc.Units).
+        %   SpikeData holds every template; network and connectivity analyses must not see
+        %   rejected templates, and their matrices are indexed by position in proc.Units.
+            [keep, su] = ismember(proc.SpikeData.SpikeUnits, [proc.Units.TemplateID]);
+            st = proc.SpikeData.SpikeTimes(keep);
+            su = su(keep);
+        end
 
         function s = emptyStatus()
             s.QC               = "pending";
@@ -1073,32 +1176,63 @@ classdef RecordingProcessor < handle
             end
         end
 
-        function uid = computeStableID(metadata, template_id, ref_electrode)
+        function uid = computeStableID(metadata, template_id, ref_electrode, sorting_id)
         % Compute deterministic StableID from recording metadata + unit identity.
+        %   The sorting identity (SpikeData.SortingID) keeps units of separately sorted
+        %   recordings of the same culture apart (template k of one day's sorting is unrelated
+        %   to template k of another day's), while segments of one sorting share their IDs.
+            if nargin < 4, sorting_id = ''; end
             chip_id     = '';
             plating_date = '';
             if isfield(metadata, 'ChipID'),      chip_id     = char(string(metadata.ChipID));     end
             if isfield(metadata, 'PlatingDate'), plating_date = char(string(metadata.PlatingDate)); end
             uid = paramHash(struct('ChipID', chip_id, 'PlatingDate', plating_date, ...
+                'SortingID', char(string(sorting_id)), ...
                 'TemplateID', template_id, 'ReferenceElectrode', ref_electrode));
         end
 
-        function [labels, ids] = loadKSLabels(input_path)
-            candidates = { fullfile(input_path, 'cluster_KSLabel.tsv'), ...
-                           fullfile(fileparts(input_path), 'cluster_KSLabel.tsv') };
-            path = '';
-            for c = 1:numel(candidates)
-                if exist(candidates{c}, 'file') == 2
-                    path = candidates{c};
-                    break
-                end
+        function T = readClusterTable(input_path, file_name)
+        % READCLUSTERTABLE  Per-cluster TSV (phy/Bombcell) from the segment or its sorter folder.
+            candidates = { fullfile(input_path, file_name), ...
+                           fullfile(fileparts(input_path), file_name) };
+            found = candidates(cellfun(@(f) exist(f, 'file') == 2, candidates));
+            if isempty(found)
+                error('DeePhys:noClusterTable', '%s not found in %s or its parent folder', file_name, input_path);
             end
-            if isempty(path)
-                error('DeePhys:noKSLabels', 'cluster_KSLabel.tsv not found in %s', input_path);
+            T = readtable(found{1}, 'FileType', 'text', 'Delimiter', '\t');
+        end
+
+        function ids = templateClusterIds(input_path, n_templates)
+        % TEMPLATECLUSTERIDS  Sorter cluster ID of each template (1..n_templates).
+        %   Segmented recordings store a re-indexed subset of the sorter's clusters; the
+        %   mapping is qc_output/phy_ids.npy. Without it, template k is cluster k-1.
+            ids = (0:n_templates - 1)';
+            candidates = { fullfile(input_path, 'phy_ids.npy'), ...
+                           fullfile(fileparts(input_path), 'qc_output', 'phy_ids.npy'), ...
+                           fullfile(input_path, 'qc_output', 'phy_ids.npy') };
+            found = candidates(cellfun(@isfile, candidates));
+            if isempty(found), return; end
+            phy = double(readNPY(found{1}));
+            if numel(phy) == n_templates
+                ids = phy(:);
+            else
+                warning('RecordingProcessor:phyIds', ...
+                    '%s has %d entries but the recording has %d templates; assuming template k = cluster k-1.', ...
+                    found{1}, numel(phy), n_templates);
             end
-            T      = readtable(path, 'FileType', 'text', 'Delimiter', '\t');
-            ids    = T.cluster_id;
-            labels = string(T.KSLabel);
+        end
+
+        function codes = bombcellTypeCode(types)
+        % BOMBCELLTYPECODE  Bombcell unit types as codes (0 noise, 1 good, 2 MUA,
+        %   3 non-somatic good, 4 non-somatic MUA); numeric input is passed through.
+            if isnumeric(types), codes = double(types(:)); return; end
+            names = upper(strtrim(string(types(:))));
+            codes = nan(size(names));
+            codes(names == "NOISE")         = 0;
+            codes(names == "GOOD")          = 1;
+            codes(names == "MUA")           = 2;
+            codes(names == "NON-SOMA" | names == "NON-SOMA GOOD") = 3;
+            codes(names == "NON-SOMA MUA")  = 4;
         end
 
         % ---- QC checks (ported from MEArecording) ----
@@ -1169,10 +1303,22 @@ classdef RecordingProcessor < handle
                     end
                     bad_peak = peak_idx < cutout(1) | peak_idx > cutout(end);
                     n_changes = sum(abs(diff(diff(norm_wf(cutout, :)) > 0)))';
-                    is_noisy  = n_changes > noise_thresh | bad_peak';
+                    % The window is fixed in ms, so the number of samples (and of possible
+                    % slope changes) grows with the sampling rate; the threshold is defined
+                    % for 10 kHz (MaxWell) and scaled accordingly.
+                    is_noisy  = n_changes > noise_thresh * SAMPLES_PER_MS / 10 | bad_peak';
                 end
             end
             fprintf('QC noisy: %d\n', sum(is_noisy));
+        end
+
+        function p = acgParameters(params)
+        % ACG grid (BinSize, Lag in s) from Parameters.ACG; defaults for processors saved
+        % before the field existed.
+            p = struct('BinSize', 0.0005, 'Lag', 0.1);
+            if isfield(params, 'ACG')
+                p = parseStructParameters(p, params.ACG);
+            end
         end
 
         function T = structToOneRowTable(s)

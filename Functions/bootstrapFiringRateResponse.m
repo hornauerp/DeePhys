@@ -46,7 +46,7 @@ arguments
     opts.NetworkCorrection   (1,1) logical = false
 end
 
-assert(size(pre_mat, 2) == size(post_mat, 2), ...
+assert(size(pre_mat, 2) == size(post_mat, 2), 'bootstrapFiringRateResponse:binMismatch', ...
     'pre_mat and post_mat must have the same number of time bins');
 
 n_units  = size(pre_mat, 1);

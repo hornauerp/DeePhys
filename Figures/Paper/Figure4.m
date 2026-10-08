@@ -1,4 +1,5 @@
-addpath(genpath("/home/phornauer/Git/DeePhys"))
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+addpath(genpath(deephys_root))
 
 %% Set some parameters
 greens = othercolor('Greens9',100); %greens = greens(30:end,:);
@@ -24,7 +25,7 @@ example_idx = [11 + 3, 11 + 1,6,3]; %Descending for right plotting order
 example_labels = ["nRF [Hz]","nPMW","CVI","sEAF"];
 
 %% Load data
-save_root = "/home/phornauer/Git/DeePhys/Data/Figure4";
+save_root = fullfile(deephys_root, "Data", "Figure4");
 load(fullfile(save_root,'lna_accuracy.mat'))
 load(fullfile(save_root,'FRET_results.mat'))
 load(fullfile(save_root,'lna_comparisons.mat'))
@@ -263,7 +264,7 @@ RecordingGroup.plot_cluster_outlines(comb_reduction, comb_true_idx, umap_comb, p
 title('Combined features','FontWeight','normal')
 
 setAllFontSizes(gcf,fontsz)
-exportgraphics(f4,'/home/phornauer/Git/DeePhys/Plots/Figure4a.tif','Resolution',300)
+exportgraphics(f4,fullfile(deephys_root, 'Plots', 'Figure4a.tif'),'Resolution',300)
 
 %% Second part
 acc_boxsz = 0.03;
@@ -327,5 +328,5 @@ set(age_pred,'FontSize',fontsz)
 leg = legend("WT + LNA", "A53T + LNA",'Box','off','Location','northwest'); leg.ItemTokenSize = [5 5];
 setAllFontSizes(gcf,6.5)
 
-exportgraphics(f4b,'/home/phornauer/Git/DeePhys/Plots/Figure4b.tif','Resolution',300)
+exportgraphics(f4b,fullfile(deephys_root, 'Plots', 'Figure4b.tif'),'Resolution',300)
 

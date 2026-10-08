@@ -10,10 +10,11 @@ function registerRecording(db, mearec)
 
     arguments
         db RecordingDatabase
-        mearec MEArecording
+        mearec   % MEArecording or RecordingProcessor
     end
 
     if ~db.IsConnected; return; end
+    mearec = RecordingDatabase.recordingView(mearec);
 
     try
         db.ensureConnected();
@@ -60,7 +61,7 @@ function registerRecording(db, mearec)
         end
 
         % Escape single quotes for SQL
-        esc = @(s) strrep(char(string(s)), '''', '''''');
+        esc = @(s) strrep(char(fillmissing(string(s), 'constant', "")), '''', '''''');   % missing -> ''
 
         sql = sprintf([...
             'INSERT INTO recordings ' ...

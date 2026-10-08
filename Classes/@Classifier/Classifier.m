@@ -15,7 +15,7 @@ classdef Classifier
 %
 %   result = Classifier.classify(X, Y, opts);
 %   result = Classifier.classifyByGroups(X, Y, feature_group_defs, opts);
-%   [Y_pred, scores] = Classifier.predict(result(k).Mdl, X);
+%   [Y_pred, scores] = Classifier.predict(result(k), X_new);   % replays fold preprocessing
 
     methods (Static)
 
@@ -37,6 +37,8 @@ classdef Classifier
         %     .PoolingValues     - cell array to merge label values
         %     .GroupLabels       - (optional) string array of class label names
         %     .Prior             - 'empirical' (default) or 'uniform' (equal class weight)
+        %     .ComputeImportance - RF OOB permutation importance per fold (default true;
+        %                          the slowest step, switch off when only accuracy is needed)
         %
         % OUTPUTS:
         %   result - (1 x K) ClassificationResult array, one per fold
@@ -57,7 +59,7 @@ classdef Classifier
             % Warn if class distribution is severely imbalanced (>3:1 ratio).
             Classifier.checkClassBalance(Y);
 
-            norm_groups = Classifier.resolveGroups(opts.NormalizationGroups, height(X));
+            norm_groups = MLUtils.groupLabels(opts.NormalizationGroups, height(X));   % keep names: fitted stats are keyed by them
             cv_groups   = Classifier.resolveGroups(opts.CVGroups, height(X));
 
             % Build CV partition
@@ -88,7 +90,7 @@ classdef Classifier
                 Y_train = Y(train_idx);
                 Y_test  = Y(test_idx);
 
-                [X_train, X_test, feat_names] = Classifier.normalizeFeatures( ...
+                [X_train, X_test, feat_names, prep] = Classifier.normalizeFeatures( ...
                     X, train_idx, test_idx, norm_groups, opts.NormalizationPipeline, opts.CovariateLabels);
 
                 if isempty(X_test)
@@ -103,7 +105,7 @@ classdef Classifier
                 [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, opts.Algorithm, opts.NHyper, clf_params);
                 [Y_pred, scores] = predict(clf, X_test);
 
-                if opts.Algorithm == "rf"
+                if opts.Algorithm == "rf" && opts.ComputeImportance
                     predImp = oobPermutedPredictorImportance(clf, 'Options', statset('UseParallel', true));
                 else
                     predImp = [];
@@ -119,6 +121,7 @@ classdef Classifier
                     'predImp',     predImp, ...
                     'GroupLabels', group_labels, ...
                     'Features',    feat_names, ...
+                    'Preprocessing', prep, ...
                     'Parameters',  struct( ...
                         'algorithm',        opts.Algorithm, ...
                         'normalization_var', opts.NormalizationVar, ...
@@ -139,8 +142,17 @@ classdef Classifier
         % PERMUTATIONTEST  Estimate classification significance via label permutation.
         %
         % Shuffles class labels n_permutations times and runs classify() each time,
-        % building a null distribution of accuracies. Returns a one-sided p-value:
-        %   P(null_accuracy >= observed_accuracy)
+        % building a null distribution of balanced accuracies (pooled out-of-fold mean
+        % per-class recall). Returns a one-sided p-value with the +1 correction of
+        % Phipson & Smyth (2010), so it is never exactly 0:
+        %   (1 + #{null >= observed}) / (1 + n_permutations)
+        %
+        % Exchangeability: when opts.CVGroups is set and Y is constant within every group
+        % (e.g. genotype or treatment per culture), labels are permuted between groups,
+        % not between observations. Unit-level shuffling would mix labels inside each
+        % culture, giving a far too narrow null (effective n = units instead of cultures)
+        % and anti-conservative p-values. If Y varies within groups, observations are
+        % shuffled within each group, which keeps group composition intact.
         %
         % INPUTS:
         %   X              - (N x F) feature table
@@ -149,9 +161,9 @@ classdef Classifier
         %   n_permutations - number of permutations (default 100)
         %
         % OUTPUTS:
-        %   p_value   - fraction of null runs with accuracy >= observed
-        %   null_accs - (n_permutations x 1) null accuracy distribution
-        %   obs_acc   - observed mean accuracy from unpermuted classify()
+        %   p_value   - permutation p-value (see above)
+        %   null_accs - (n_permutations x 1) null balanced-accuracy distribution
+        %   obs_acc   - observed balanced accuracy from unpermuted classify()
         %
         % EXAMPLE:
         %   [p, null, obs] = Classifier.permutationTest(X, Y, opts, 500);
@@ -162,41 +174,45 @@ classdef Classifier
                 opts           struct = struct()
                 n_permutations (1,1) double = 100
             end
+            opts = Classifier.defaultOpts(opts);
 
-            % Observed accuracy
+            % Observed balanced accuracy
             obs_result = Classifier.classify(X, Y, opts);
             obs_summary = ClassificationResult.summarizeFolds(obs_result);
-            obs_acc = obs_summary.mean_accuracy;
+            obs_acc = obs_summary.balanced_accuracy;
+
+            % Choose the permutation scheme from the label/group structure
+            Y = Y(:);
+            groups = Classifier.resolveGroups(opts.CVGroups, numel(Y));
+            [permute_fn, scheme] = MLUtils.labelPermuter(Y, groups);
 
             % Permutation null distribution — suppress imbalance warning during shuffles.
             % Each permutation uses a unique derived seed so both the Y-shuffle and the CV
-            % partition vary across runs in a reproducible way. Shuffling is done at the
-            % observation level; when CVGroups are set, group structure is preserved in the
-            % CV partition but not in the label assignment (valid for testing Y→X information).
+            % partition vary across runs in a reproducible way. Importance is not needed
+            % for null runs and dominates RF run time.
             null_accs = zeros(n_permutations, 1);
             perm_opts = opts;
+            perm_opts.ComputeImportance = false;
             base_seed = opts.Seed;
             w = warning('off', 'Classifier:imbalanced');
-            try
-                for p = 1:n_permutations
-                    if ~isempty(base_seed)
-                        perm_opts.Seed = base_seed + p;
-                        rng(base_seed + p);  % seed the Y-shuffle too, not just the CV partition inside classify()
-                    end
-                    Y_perm = Y(randperm(numel(Y)));
-                    perm_result = Classifier.classify(X, Y_perm, perm_opts);
-                    perm_summary = ClassificationResult.summarizeFolds(perm_result);
-                    null_accs(p) = perm_summary.mean_accuracy;
+            restore_warning = onCleanup(@() warning(w));   % also on error; try/finally is not in older releases
+            for p = 1:n_permutations
+                if ~isempty(base_seed)
+                    perm_opts.Seed = base_seed + p;
+                    rng(base_seed + p);  % seed the Y-shuffle too, not just the CV partition inside classify()
                 end
-            finally
-                warning(w);
+                Y_perm = permute_fn();
+                perm_result = Classifier.classify(X, Y_perm, perm_opts);
+                perm_summary = ClassificationResult.summarizeFolds(perm_result);
+                null_accs(p) = perm_summary.balanced_accuracy;
             end
+            clear restore_warning
 
-            p_value = mean(null_accs >= obs_acc);
+            p_value = (1 + sum(null_accs >= obs_acc)) / (1 + n_permutations);
 
             AnalysisLog.instance().add('Classifier.permutationTest', ...
-                struct('n_permutations', n_permutations, 'opts', opts), ...
-                sprintf('obs=%.3f p=%.4f (n=%d)', obs_acc, p_value, n_permutations), 0);
+                struct('n_permutations', n_permutations, 'scheme', scheme, 'opts', opts), ...
+                sprintf('obs=%.3f p=%.4f (n=%d, %s permutation)', obs_acc, p_value, n_permutations, scheme), 0);
         end
 
         function results = classifyByGroups(X, Y, feature_group_defs, opts)
@@ -231,12 +247,38 @@ classdef Classifier
             end
         end
 
-        function [Y_pred, scores] = predict(trained_model, X)
-        % PREDICT  Apply a trained MATLAB classifier to new data.
+        function [Y_pred, scores] = predict(trained_model, X, norm_groups)
+        % PREDICT  Apply a trained classifier to new data.
         %
-        %   trained_model - raw MATLAB classifier (from Classifier.classify result.Mdl)
-        %   X             - (N x F) table of feature values
-            [Y_pred, scores] = predict(trained_model, X.Variables);
+        %   [Y_pred, scores] = Classifier.predict(result(k), X)              % recommended
+        %   [Y_pred, scores] = Classifier.predict(result(k), X, norm_groups) % group-normalised models
+        %
+        %   trained_model - ClassificationResult from Classifier.classify (its fitted imputation,
+        %                   normalisation and column mask are replayed on X), or a raw MATLAB
+        %                   classifier, which is applied to X.Variables unchanged (X must then
+        %                   already be preprocessed exactly like the training data)
+        %   X             - (N x F) table of raw feature values (columns matched by name)
+        %   norm_groups   - (N x 1) normalisation groups of X; required when the model was
+        %                   trained with NormalizationGroups or ComBat
+        %
+        % Y_pred is returned in the original label space (result.GroupLabels).
+            if nargin < 3, norm_groups = []; end
+            if isa(trained_model, 'ClassificationResult')
+                r = trained_model;
+                assert(isscalar(r), 'Classifier:predict', 'Pass a single fold result, e.g. result(1).');
+                if isempty(r.Preprocessing)
+                    error('Classifier:predict', 'Result has no stored preprocessing (created before it was recorded); retrain.');
+                end
+                X_mat = MLUtils.applyPreprocessing(r.Preprocessing, X, norm_groups);
+                [Y_idx, scores] = predict(r.Mdl, X_mat);
+                if ~isempty(r.GroupLabels) && isnumeric(Y_idx)
+                    Y_pred = r.GroupLabels(Y_idx);
+                else
+                    Y_pred = Y_idx;
+                end
+            else
+                [Y_pred, scores] = predict(trained_model, X.Variables);
+            end
         end
 
     end
@@ -259,6 +301,7 @@ classdef Classifier
             if ~isfield(opts, 'PoolingValues'),      opts.PoolingValues = {};     end
             if ~isfield(opts, 'Prior'),              opts.Prior = 'empirical';    end
             if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
+            if ~isfield(opts, 'ComputeImportance'),  opts.ComputeImportance = true; end
         end
 
         function checkClassBalance(Y)
@@ -283,10 +326,10 @@ classdef Classifier
             g = MLUtils.resolveGroups(groups_input, N);
         end
 
-        function [X_train, X_test, feat_names] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
+        function [X_train, X_test, feat_names, prep] = normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels)
             if nargin < 5, pipeline_type = ""; end
             if nargin < 6, covariate_labels = []; end
-            [X_train, X_test, feat_names] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels);
+            [X_train, X_test, feat_names, prep] = MLUtils.normalizeFeatures(X, train_idx, test_idx, norm_groups, pipeline_type, covariate_labels);
         end
 
     end

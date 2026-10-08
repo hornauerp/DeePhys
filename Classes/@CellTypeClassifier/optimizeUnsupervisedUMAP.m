@@ -101,11 +101,6 @@ if p_umap.FeatureSelection && size(X_all, 2) > 1
     feat_names = feat_names(sel_mask);
 end
 
-% Feature group masks
-is_acg = startsWith(feat_names, "FullACG") | startsWith(feat_names, "ACG");
-is_wf  = startsWith(feat_names, "Waveform") | startsWith(feat_names, "ReferenceWaveform");
-n_acg  = sum(is_acg);
-n_wf   = sum(is_wf);
 N_all  = size(X_all, 1);
 
 % Responsive unit flags (global unique-unit indices)
@@ -117,6 +112,12 @@ n_responsive   = sum(resp_unique);
 assert(n_responsive > 0, 'No responsive units found in NormalizedFeatures.');
 
 p_resp = n_responsive / N_all;   % baseline responsive probability (for EnrichmentFactor)
+if p_comm.EnrichmentFactor <= 1
+    warning('CellTypeClassifier:degenerateObjective', ...
+        ['Community.EnrichmentFactor = %g <= 1: a single community holding all units qualifies as ' ...
+         'inhibitory, so community coherence is trivially maximised. Use a value > 1 for BayOpt.'], ...
+        p_comm.EnrichmentFactor);
+end
 
 if opts.Verbose
     fprintf('Phase 1 BayOpt: %d units, %d responsive (p_resp=%.3f), %d features\n', ...
@@ -197,8 +198,7 @@ function loss = objective(x)
 
     % Apply feature group weighting
     X_ev = X_all;
-    if n_acg > 0; X_ev(:, is_acg) = X_ev(:, is_acg) * sqrt(v_acg / n_acg); end
-    if n_wf  > 0; X_ev(:, is_wf)  = X_ev(:, is_wf)  * sqrt(v_wf  / n_wf);  end
+    X_ev = applyFeatureGroupWeights(X_ev, feat_names, struct('ACGWeight', v_acg, 'WaveformWeight', v_wf));
 
     % Run unsupervised UMAP — capture model object for its graph
     rng(rng_seed, 'twister');
@@ -232,7 +232,10 @@ function loss = objective(x)
     W_lou = full(G);   % BCT requires full matrix
     best_Q  = -Inf;
     best_M  = ones(N_all, 1);
+    % Fewer restarts per evaluation keep BayOpt affordable; the final labels use
+    % Community.LouvainRestarts (generateTrainLabels).
     n_restarts = p_comm.LouvainRestarts;
+    if isfield(p_bo, 'LouvainRestarts'), n_restarts = p_bo.LouvainRestarts; end
     for r = 1:n_restarts
         rng(rng_seed + r, 'twister');
         try
@@ -268,7 +271,10 @@ function loss = objective(x)
     inh_mask   = inh_by_rel & inh_by_abs;
 
     % Community coherence: fraction of responsive units in inhibitory communities
-    resp_in_inh = sum(resp_unique & inh_mask(best_M)');
+    % Both operands as columns: indexing the row inh_mask keeps it a row, and row & column
+    % would broadcast to an N x N matrix (vector objective -> bayesopt error).
+    unit_in_inh = reshape(inh_mask(best_M), [], 1);
+    resp_in_inh = sum(resp_unique(:) & unit_in_inh);
     coherence   = resp_in_inh / n_responsive;
     loss        = -coherence;
 
@@ -332,8 +338,7 @@ if opts.Verbose
 end
 % Feature weighting for final run
 X_final = X_all;
-if n_acg > 0; X_final(:, is_acg) = X_final(:, is_acg) * sqrt(best_full.ACGWeight  / n_acg); end
-if n_wf  > 0; X_final(:, is_wf)  = X_final(:, is_wf)  * sqrt(best_full.WaveformWeight / n_wf);  end
+X_final = applyFeatureGroupWeights(X_final, feat_names, best_full);
 
 rng(rng_seed, 'twister');
 [reduction_final, umap_model, ~, ~] = run_umap(X_final, ...
@@ -345,6 +350,7 @@ rng(rng_seed, 'twister');
 ctc.UMAP = umap_model;
 if isempty(ctc.Reduction); ctc.Reduction = struct(); end
 ctc.Reduction.Unsupervised = reduction_final;
+ctc.Graph = struct();   % rebuilt with the optimised parameters by generateTrainLabels
 fprintf('Phase 1 complete. Final UMAP stored in ctc.Reduction.Unsupervised.\n');
 
 if ctc.Parameters.Diagnostics.Enable

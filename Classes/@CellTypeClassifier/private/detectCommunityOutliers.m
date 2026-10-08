@@ -16,16 +16,13 @@ function det = detectCommunityOutliers(X_feat, responsive_local, subset_responsi
 %   n_neighbors       - resolved NNeighbors (used for graph k and purity filter)
 %   resp_unique       - (1 x N_all) logical, true = responsive in full population
 %   p_comm            - ctc.Parameters.Community
-%   umap_model        - ctc.UMAP (must have .head/.tail/.weights fields)
+%   umap_model        - unit graph from ctc.graphMatrix() (N_all x N_all, symmetric)
 %   rng_seed          - ctc.Parameters.RNGSeed (for Louvain restarts and k-medoids)
 
-assert(~isempty(umap_model) && ~isempty(umap_model.head), ...
-    ['ctc.UMAP graph data is empty. ' ...
-     'Run optimizeUnsupervisedUMAP() or generateTrainLabels() first, ' ...
-     'or set Parameters.OutlierDetection.Method = "iforest" to skip community detection.']);
-
-G_umap  = sparse(umap_model.head, umap_model.tail, umap_model.weights, N_all, N_all);
-G_umap  = (G_umap + G_umap') / 2;
+% umap_model: the unit graph (CellTypeClassifier.graphMatrix), an N_all x N_all symmetric matrix
+G_umap  = umap_model;
+assert(size(G_umap, 1) == N_all, 'Unit graph size (%d) does not match the number of units (%d).', ...
+    size(G_umap, 1), N_all);
 k_graph = min(n_neighbors, N_all - 1);
 
 % -- Louvain community detection (best of LouvainRestarts runs) ---------------
@@ -71,14 +68,42 @@ frac_resp_in_inh   = sum(resp_global_all & in_inh_comm_global) / max(sum(resp_gl
 fprintf('Responsive units in inhibitory communities: %.1f%%\n', 100*frac_resp_in_inh);
 
 % -- Fallback check -----------------------------------------------------------
-if frac_resp_in_inh < p_comm.CommunityFallbackThreshold
+% "permutation" (default): do responsive units concentrate in enriched communities more than
+% random units would? The partition does not depend on the labels, so the responsive set is
+% redrawn from the training subset and the same community-selection rules are re-applied.
+% An absolute threshold on frac_resp_in_inh is a knife edge: with many false-positive
+% candidates the attainable fraction is itself near 0.5, so the path (and the result) can
+% flip with the seed.
+criterion = "absolute";
+if isfield(p_comm, 'FallbackCriterion'), criterion = lower(string(p_comm.FallbackCriterion)); end
+if criterion == "permutation"
+    n_perm   = p_comm.FallbackPermutations;
+    n_resp   = numel(resp_global_idx_all);
+    comm_n   = accumarray(best_M, 1, [n_comm 1])';
+    rs       = RandStream('twister', 'Seed', rng_seed);
+    null_frac = zeros(n_perm, 1);
+    for b = 1:n_perm
+        pr = false(N_all, 1);
+        pr(subset_global_idx(randperm(rs, numel(subset_global_idx), n_resp))) = true;
+        cf = accumarray(best_M, double(pr), [n_comm 1])' ./ max(comm_n, 1);
+        inh_p = cf >= max(cf) * p_comm.InhibitoryCommunityRelThresh & cf >= p_comm.EnrichmentFactor * p_resp_gen;
+        null_frac(b) = sum(pr & inh_p(best_M)') / n_resp;
+    end
+    p_perm = (1 + sum(null_frac >= frac_resp_in_inh)) / (1 + n_perm);
+    fprintf('Community enrichment permutation test: frac %.3f vs null median %.3f (95th %.3f), p = %.4f\n', ...
+        frac_resp_in_inh, median(null_frac), prctile(null_frac, 95), p_perm);
+    do_fallback = isempty(inh_comm_ids) || p_perm > p_comm.FallbackAlpha;
+else
+    do_fallback = frac_resp_in_inh < p_comm.CommunityFallbackThreshold;
+end
+if do_fallback
     warning('CellTypeClassifier:communityFallback', ...
-        ['Only %.0f%% of responsive units in inhibitory communities ' ...
-         '(threshold %.0f%%).\nFalling back to iforest path.\n' ...
+        ['%.0f%% of responsive units in inhibitory communities (criterion: %s).\n' ...
+         'Falling back to iforest path.\n' ...
          'Consider re-running optimizeUnsupervisedUMAP(), adjusting ' ...
          'Parameters.Community settings, or setting ' ...
          'Parameters.OutlierDetection.Method = "iforest".'], ...
-        100*frac_resp_in_inh, 100*p_comm.CommunityFallbackThreshold);
+        100*frac_resp_in_inh, criterion);
     det = emptyDet(responsive_local);
     det.community_ids = community_ids;
     det.inh_comm_ids  = inh_comm_ids(:)';

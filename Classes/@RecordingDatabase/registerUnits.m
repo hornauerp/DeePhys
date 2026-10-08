@@ -9,10 +9,11 @@ function registerUnits(db, mearec)
 
     arguments
         db RecordingDatabase
-        mearec MEArecording
+        mearec   % MEArecording or RecordingProcessor
     end
 
     if ~db.IsConnected; return; end
+    mearec = RecordingDatabase.recordingView(mearec);
 
     try
         db.ensureConnected();
@@ -26,7 +27,7 @@ function registerUnits(db, mearec)
 
         if isempty(mearec.Units); return; end
 
-        esc = @(s) strrep(char(string(s)), '''', '''''');
+        esc = @(s) strrep(char(fillmissing(string(s), 'constant', "")), '''', '''''');   % missing -> ''
 
         % Build a single batched INSERT with all unit rows
         value_rows = cell(1, length(mearec.Units));
@@ -39,23 +40,23 @@ function registerUnits(db, mearec)
             end
 
             template_id = 0;
-            if isprop(unit, 'TemplateID') && ~isempty(unit.TemplateID)
+            if (isprop(unit, 'TemplateID') || isfield(unit, 'TemplateID')) && ~isempty(unit.TemplateID)
                 template_id = unit.TemplateID;
             end
 
             ref_elec = 0;
-            if isprop(unit, 'ReferenceElectrode') && ~isempty(unit.ReferenceElectrode)
+            if (isprop(unit, 'ReferenceElectrode') || isfield(unit, 'ReferenceElectrode')) && ~isempty(unit.ReferenceElectrode)
                 ref_elec = unit.ReferenceElectrode;
             end
 
             ks_label = '';
-            if isprop(unit, 'KSLabel') && ~isempty(unit.KSLabel)
+            if (isprop(unit, 'KSLabel') || isfield(unit, 'KSLabel')) && ~isempty(unit.KSLabel)
                 ks_label = char(unit.KSLabel);
             end
 
             bc_type = '';
-            if isprop(unit, 'BombcellType') && ~isempty(unit.BombcellType)
-                bc_type = char(string(unit.BombcellType));
+            if (isprop(unit, 'BombcellType') || isfield(unit, 'BombcellType')) && ~isempty(unit.BombcellType)
+                bc_type = char(fillmissing(string(unit.BombcellType), "constant", ""));   % NaN = not run
             end
 
             value_rows{u} = sprintf( ...

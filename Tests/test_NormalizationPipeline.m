@@ -22,12 +22,17 @@ classdef test_NormalizationPipeline < matlab.unittest.TestCase
             labels_train = repmat([1;2;3], 10, 1);
             labels_test  = repmat([1;2], 5, 1);
             np = NormalizationPipeline.globalOnly();
-            [~, np_fit] = np.fit_transform(X_train, labels_train);
+            [X_fit, np_fit] = np.fit_transform(X_train, labels_train);
             X_out1 = np_fit.transform(X_train, labels_train);
             X_out2 = np_fit.transform(X_test,  labels_test);
-            % Output must be bounded by clip range (±5 before max-abs scaling)
+            % transform() reproduces the fitted mapping on the training data ...
+            tc.verifyEqual(X_out1, X_fit, 'AbsTol', 1e-12);
             tc.verifyLessThanOrEqual(max(abs(X_out1(:))), 1 + 1e-10);
-            tc.verifyLessThanOrEqual(max(abs(X_out2(:))), 1 + 1e-10);
+            % ... and applies the same affine map to new data, which may exceed the
+            % training range (max-abs scaling is fitted on the training set only).
+            tc.verifyTrue(all(isfinite(X_out2(:))));
+            ref = np_fit.transform([X_train(1, :); X_test(1, :)], [labels_train(1); labels_test(1)]);
+            tc.verifyEqual(ref(2, :), X_out2(1, :), 'AbsTol', 1e-12);
         end
 
         function testGroupThenGlobalCentersEachGroup(tc)
@@ -115,56 +120,61 @@ classdef test_NormalizationPipeline < matlab.unittest.TestCase
         end
 
         function testComBatPreservesBiologicalSignal(tc)
-            % Two classes separated along feature 1; perfectly confounded with batch
-            % (class A only in batch 1, class B only in batch 2).
-            % ComBat with covariate protection should preserve the class separation.
+            % Class and batch partially confounded (batch 1: 75% class A, batch 2: 25%),
+            % class effect +-3 on feature 1, batch offset +4 on all features. With the
+            % covariate, ComBat must remove the batch offset but keep the class effect.
             rng(7);
-            n = 20; F = 3;
-            X1 = [randn(n,1) + 3, randn(n, F-1)];   % class 1, batch 1, feature 1 mean = 3
-            X2 = [randn(n,1) - 3, randn(n, F-1)];   % class 2, batch 2, feature 1 mean = -3
-            X  = [X1; X2];
+            n = 40; F = 6;
             batch = [ones(n,1); 2*ones(n,1)];
-            covar = [ones(n,1); 2*ones(n,1)];         % class labels
+            covar = [ones(30,1); 2*ones(10,1); ones(10,1); 2*ones(30,1)];
+            X = randn(2*n, F);
+            X(:,1) = X(:,1) + 3 * (covar == 1) - 3 * (covar == 2);
+            X(batch == 2, :) = X(batch == 2, :) + 4;
 
             np = NormalizationPipeline({struct('type','combat','params',struct())});
             [X_out, ~] = np.fit_transform(X, batch, CovariateLabels=covar);
 
-            % Class separation on feature 1 should still be substantial
-            sep = abs(mean(X_out(1:n,1)) - mean(X_out(n+1:end,1)));
-            tc.verifyGreaterThan(sep, 1.0, ...
-                'Biological signal should be preserved with covariate protection');
+            sep = mean(X_out(covar == 1, 1)) - mean(X_out(covar == 2, 1));
+            tc.verifyGreaterThan(sep, 4.5, 'Class effect (6) should be largely preserved');
+            within = @(c, b) mean(X_out(covar == c & batch == b, 2:end), 'all');
+            tc.verifyLessThan(abs(within(1, 1) - within(1, 2)), 0.5, 'Batch offset should be removed');
         end
 
-        function testComBatPartialUnseenBatchWarns(tc)
-            % Some test samples belong to known batches, some to an unseen batch — should warn.
-            rng(3);
-            X_train = randn(20, 3);
-            b_train = [ones(10,1); 2*ones(10,1)];
-            X_test  = randn(8, 3);
-            b_test  = [ones(4,1); 3*ones(4,1)];  % batch 1 (known) + batch 3 (unseen)
-
+        function testComBatConfoundedCovariateWarns(tc)
+            % Class identical to batch: the effects cannot be separated.
+            rng(7);
+            X = [randn(20, 3) + 3; randn(20, 3) - 3];
+            batch = [ones(20,1); 2*ones(20,1)];
             np = NormalizationPipeline({struct('type','combat','params',struct())});
-            [~, np_fit] = np.fit_transform(X_train, b_train);
-
-            tc.verifyWarning( ...
-                @() np_fit.transform(X_test, b_test), ...
-                'NormalizationPipeline:unseenBatch');
+            tc.verifyWarning(@() np.fit_transform(X, batch, CovariateLabels=batch), ...
+                'NormalizationPipeline:combatConfounded');
         end
 
-        function testComBatAllUnseenBatchErrors(tc)
-            % All test samples belong to batches unseen during fit — should error.
-            rng(3);
-            X_train = randn(20, 3);
-            b_train = [ones(10,1); 2*ones(10,1)];
-            X_test  = randn(5, 3);
-            b_test  = 3 * ones(5, 1);  % entirely unseen batch
-
+        function testComBatTransformIsLabelFree(tc)
+            % Labels shape the fit only; transforming the training data again (without
+            % labels) must reproduce fit_transform, and labels passed to transform are ignored.
+            rng(5);
+            X = [randn(30, 4); randn(30, 4) + 2];
+            batch = [ones(30,1); 2*ones(30,1)];
+            covar = repmat([1; 2], 30, 1);
             np = NormalizationPipeline({struct('type','combat','params',struct())});
-            [~, np_fit] = np.fit_transform(X_train, b_train);
+            [X_fit, np_fit] = np.fit_transform(X, batch, CovariateLabels=covar);
+            tc.verifyEqual(np_fit.transform(X, batch), X_fit, 'AbsTol', 1e-10);
+            tc.verifyEqual(np_fit.transform(X, batch, CovariateLabels=3 - covar), X_fit, 'AbsTol', 1e-10);
+        end
 
-            tc.verifyError( ...
-                @() np_fit.transform(X_test, b_test), ...
-                'NormalizationPipeline:allBatchesUnseen');
+        function testComBatUnseenBatchIsCorrected(tc)
+            % Grouped CV: the held-out batch was not seen during fit. Its offset must still be
+            % removed (location/scale estimated from its own samples, without labels).
+            rng(3);
+            X_train = [randn(20, 5); randn(20, 5) + 3];
+            b_train = [ones(20,1); 2*ones(20,1)];
+            X_test  = randn(15, 5) + 8;
+            b_test  = 3 * ones(15, 1);
+            np = NormalizationPipeline({struct('type','combat','params',struct())});
+            [X_tr, np_fit] = np.fit_transform(X_train, b_train);
+            X_te = np_fit.transform(X_test, b_test);
+            tc.verifyLessThan(abs(mean(X_te, 'all') - mean(X_tr, 'all')), 0.5);
         end
 
         function testComBatSingleBatchIsApproxIdentity(tc)

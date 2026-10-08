@@ -99,7 +99,9 @@ classdef ClassificationResult < MLResult
         function summary = summarizeFolds(result_array)
         % SUMMARIZEFOLDS  Compute per-fold and aggregate classification metrics.
         %
-        % Returns struct with: per_fold (table), mean_accuracy, std_accuracy, mean_F1.
+        % Returns struct with: per_fold (table), mean_accuracy, std_accuracy, mean_F1, and
+        % balanced_accuracy (mean per-class recall over the pooled out-of-fold predictions,
+        % robust to class imbalance and to unequal grouped-CV fold sizes).
             n_folds = length(result_array);
             accs = zeros(n_folds, 1);
             f1s  = zeros(n_folds, 1);
@@ -114,6 +116,11 @@ classdef ClassificationResult < MLResult
             summary.std_accuracy  = std(accs);
             summary.mean_F1       = mean(f1s);
             summary.std_F1        = std(f1s);
+            y_true = cell2mat(arrayfun(@(r) r.Y_test(:), result_array(:), 'UniformOutput', false));
+            y_pred = cell2mat(arrayfun(@(r) r.Y_pred(:), result_array(:), 'UniformOutput', false));
+            classes = unique(y_true);
+            recall = arrayfun(@(c) mean(y_pred(y_true == c) == c), classes);
+            summary.balanced_accuracy = mean(recall);
         end
 
     end

@@ -1,3 +1,4 @@
+deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
 rg_params.Selection.Inclusion = {{'Mutation',"WT"}};
 rg_WT = RecordingGroup(fcdi_array,rg_params);
 rg_params.Selection.Inclusion = {{'Mutation',"A53T"}};
@@ -15,7 +16,7 @@ nt(2) = nexttile(tl,6);
 rg_A53T.Recordings(end).PlotNetworkScatter(time_cutout,red)
 %title('A53T','Color',red)
 setAllFontSizes(f3a, fontsz)
-exportgraphics(f3a,'/home/phornauer/Git/DeePhys/Plots/Figure3a.tif','Resolution',300)
+exportgraphics(f3a,fullfile(deephys_root, 'Plots', 'Figure3a.tif'),'Resolution',300)
 
 %% SET PARAMETERS
 TAKE_N_BEST = 15; %Number of features with highest accuracy to include
@@ -52,7 +53,7 @@ greys = greys(6:15,:);
 heatmap_colormap = othercolor('RdBu9',N_groups*20); heatmap_colormap((size(heatmap_colormap,1)/2)-2:size(heatmap_colormap,1)/2+2,:) = [];
 
 %% LOAD DATA
-save_path = "/home/phornauer/Git/DeePhys/Data/Figure3";
+save_path = fullfile(deephys_root, "Data", "Figure3");
 load(fullfile(save_path,'network_p_vals.mat'))
 load(fullfile(save_path,'network_heatmap.mat'))
 load(fullfile(save_path,'network_values.mat'))
@@ -357,4 +358,4 @@ text(xtips,ytips,[wt_preds, a53t_preds],'HorizontalAlignment','left',...
 setAllFontSizes(f3b,fontsz)
 
 %%
-exportgraphics(f3b,'/home/phornauer/Git/DeePhys/Plots/Figure3b.tif','Resolution',300)
+exportgraphics(f3b,fullfile(deephys_root, 'Plots', 'Figure3b.tif'),'Resolution',300)
