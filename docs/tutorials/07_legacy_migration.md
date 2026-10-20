@@ -1,6 +1,6 @@
 # Tutorial 7 — Legacy Migration
 
-**Source:** [`Tutorials/7_LegacyMigration/LegacyMigration.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/7_LegacyMigration/LegacyMigration.m)
+**Source:** [`Tutorials/7_LegacyMigration/LegacyMigration.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/7_LegacyMigration/LegacyMigration.m)
 
 ## What this tutorial covers
 

@@ -1,5 +1,5 @@
 site_name: DeePhys
-site_url: https://deephys.readthedocs.io
+site_url: https://deephys-hd-mea.readthedocs.io/en/latest/
 repo_url: https://github.com/hornauerp/DeePhys
 repo_name: hornauerp/DeePhys
 
@@ -44,6 +44,8 @@ nav:
           - Classifier: api/Classifier.md
           - Regressor: api/Regressor.md
           - DimReducer: api/DimReducer.md
+          - CellTypeClassifier: api/CellTypeClassifier.md
+          - EIAnalyzer: api/EIAnalyzer.md
       - Results:
           - ClassificationResult: api/ClassificationResult.md
           - RegressionResult: api/RegressionResult.md

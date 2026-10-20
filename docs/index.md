@@ -14,7 +14,8 @@ Starting from spike-sorted data in the [phy format](https://github.com/cortex-la
 - **Identify** condition-predictive biomarkers
 - **Evaluate** treatment effects
 - **Dissect** heterogeneous cell populations at single-cell resolution
-- **Label** excitatory and inhibitory neurons without patch-clamp
+- **Label** excitatory and inhibitory neurons without patch-clamp ([`CellTypeClassifier`](api/CellTypeClassifier.md): tuning-free graph label propagation, per-culture composition estimates, confident labels and quality checks)
+- **Detect** network bursts and quantify E/I activity around them against rate-matched nulls ([`EIAnalyzer`](api/EIAnalyzer.md))
 
 ## Quick start
 

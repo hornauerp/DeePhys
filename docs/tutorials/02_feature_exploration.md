@@ -1,6 +1,6 @@
 # Tutorial 2 — Feature Exploration
 
-**Source:** [`Tutorials/2_FeatureExploration/FeatureExploration.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/2_FeatureExploration/FeatureExploration.m)
+**Source:** [`Tutorials/2_FeatureExploration/FeatureExploration.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/2_FeatureExploration/FeatureExploration.m)
 
 ## What this tutorial covers
 

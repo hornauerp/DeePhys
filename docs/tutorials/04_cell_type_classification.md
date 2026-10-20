@@ -1,6 +1,6 @@
 # Tutorial 4 — Cell Type Classification
 
-**Source:** [`Tutorials/4_CellTypeClassification/CellTypeClassification.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/4_CellTypeClassification/CellTypeClassification.m)
+**Source:** [`Tutorials/4_CellTypeClassification/CellTypeClassification.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/4_CellTypeClassification/CellTypeClassification.m)
 
 ## What this tutorial covers
 

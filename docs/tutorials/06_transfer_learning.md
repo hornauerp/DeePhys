@@ -1,6 +1,6 @@
 # Tutorial 6 — Transfer Learning
 
-**Source:** [`Tutorials/6_TransferLearning/TransferLearning.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/6_TransferLearning/TransferLearning.m)
+**Source:** [`Tutorials/6_TransferLearning/TransferLearning.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/6_TransferLearning/TransferLearning.m)
 
 ## What this tutorial covers
 

@@ -2,9 +2,17 @@
 
 ## Requirements
 
-- MATLAB R2019b or later
+- MATLAB R2021b or newer (name=value call syntax, `iforest`; tested on R2026b)
 - A spike-sorted dataset in the [phy format](https://github.com/cortex-lab/phy) (produced by [Kilosort](https://github.com/MouseLand/Kilosort) or compatible sorters via [SpikeInterface](https://spikeinterface.readthedocs.io))
-- **Statistics and Machine Learning Toolbox** — required for classification (`fitcensemble`, `fitcsvm`, `fitcknn`, `fitcnb`), regression (`fitrensemble`, `fitrsvm`), and statistical tests (`lillietest`)
+- **Statistics and Machine Learning Toolbox**: classification (`fitcensemble`, `fitcsvm`, `fitcknn`, `fitcnb`), regression (`fitrensemble`, `fitrsvm`), statistical tests (`lillietest`), `tsne`, `fitgmdist`, `bayesopt`, `iforest`
+- **Signal Processing Toolbox**: `findpeaks`, `xcorr` (bursts, regularity, E/I analysis)
+- **Curve Fitting Toolbox**: `fit` (regularity features)
+- **Econometrics Toolbox**: `parcorr` (activity features)
+- Optional:
+    - Parallel Computing Toolbox: `RecordingProcessor.loadMany` loads in parallel; without it, the loop runs serially
+    - Database Toolbox: the `RecordingDatabase` registry (MATLAB's SQLite interface; no JDBC driver needed)
+- A Java runtime for the bundled UMAP toolbox (embeddings and plots). Recent MATLAB releases ship without one: install e.g. OpenJDK 8 and register it once with `jenv("<path to JRE>")`
+- A C compiler (`mex -setup C`) for the catch22 features (run `mexAll` in `Toolboxes/catch22/wrap_Matlab`; catch22 stays off until compiled) and, on Linux/macOS, for `CCGHeart`, which is built automatically on first use (a Windows binary is included)
 
 All third-party dependencies (readNPY, CCG, othercolor, catch22, BCT, UMAP) are bundled in `Functions/` and `Toolboxes/` and added to the path by `startup.m`. No separate installation is required.
 

@@ -1,6 +1,6 @@
 # Tutorial 3 — Phenotype Analysis
 
-**Source:** [`Tutorials/3_PhenotypeAnalysis/PhenotypeAnalysis.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/3_PhenotypeAnalysis/PhenotypeAnalysis.m)
+**Source:** [`Tutorials/3_PhenotypeAnalysis/PhenotypeAnalysis.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/3_PhenotypeAnalysis/PhenotypeAnalysis.m)
 
 ## What this tutorial covers
 

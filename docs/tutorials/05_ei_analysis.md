@@ -1,6 +1,6 @@
 # Tutorial 5 — E/I Analysis
 
-**Source:** [`Tutorials/5_EIAnalysis/EIAnalysis.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/5_EIAnalysis/EIAnalysis.m)
+**Source:** [`Tutorials/5_EIAnalysis/EIAnalysis.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/5_EIAnalysis/EIAnalysis.m)
 
 ## What this tutorial covers
 

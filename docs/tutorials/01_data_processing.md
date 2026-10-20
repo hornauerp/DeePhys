@@ -1,6 +1,6 @@
 # Tutorial 1 — Data Processing
 
-**Source:** [`Tutorials/1_DataProcessing/DataProcessing.m`](https://github.com/hornauerp/DeePhys/blob/dev/Tutorials/1_DataProcessing/DataProcessing.m)
+**Source:** [`Tutorials/1_DataProcessing/DataProcessing.m`](https://github.com/hornauerp/DeePhys/blob/main/Tutorials/1_DataProcessing/DataProcessing.m)
 
 ## What this tutorial covers
 

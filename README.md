@@ -5,7 +5,7 @@ The package for **Deep electrophysiological phenotype characterization**:
 
 Created with [BioRender](https://www.biorender.com)
 
-**[Full documentation](https://deephys.readthedocs.io)**
+**[Full documentation](https://deephys-hd-mea.readthedocs.io/en/latest/)**
 
 ## Overview
 *DeePhys* was created to facilitate the analysis of extracellular recordings of neuronal cultures using high-density microelectrode arrays (HD-MEAs). *DeePhys* allows users to easily:
@@ -15,9 +15,8 @@ Created with [BioRender](https://www.biorender.com)
 - Obtain biomarkers predictive of the respective condition
 - Evaluate the effect of treatments
 - Dissect heterogeneous cell populations/cultures on the single-cell level
-
-## Requirements
-Currently *DeePhys* is only available on MATLAB, so a recent MATLAB installation (>2019b) is required.
+- Label excitatory and inhibitory units without patch-clamp (graph label propagation with a tuning-free default pipeline, per-culture composition estimates, confident labels and quality checks)
+- Detect network bursts and quantify E/I activity around them, tested against rate-matched nulls
 
 ## Installation
 The package is ready-to-use right after cloning. Run `startup.m` from the repo root to add all paths.
