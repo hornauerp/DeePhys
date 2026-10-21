@@ -8,7 +8,7 @@ Classification, dimensionality reduction, and regression at unit, recording, and
 
 1. Build an `Experiment` from saved `RecordingProcessor` files
 2. Run unit-level classification (e.g., WT vs. mutant)
-3. Run recording-level regression (e.g., predict DIV)
+3. Run culture-level regression (e.g., predict the drug concentration)
 4. Run UMAP dimensionality reduction
 5. Inspect `ClassificationResult` and `RegressionResult` objects
 6. Extract feature importances

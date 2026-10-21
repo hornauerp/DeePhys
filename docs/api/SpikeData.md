@@ -26,7 +26,8 @@ fprintf('Duration: %.1f s, N units: %d\n', sd.Duration, ...
 
 | Name | Type | Description |
 |---|---|---|
-| `RecordingID` | string | Deterministic hash of `InputPath` |
+| `RecordingID` | string | Deterministic hash of the spike data (the same on every machine and mount point); legacy objects: hash of `InputPath` |
+| `SortingID` | string | Sorting the recording belongs to: segments of one sorting (`segment_N` folders, `split_sortings` windows, or an explicit `ParentInputPath`) share it |
 | `InputPath` | string | Absolute path to the Kilosort output directory |
 | `ParentPath` | string | Path to the parent (concatenated) Kilosort directory; `""` if none |
 | `Metadata` | struct | Recording metadata (ChipID, PlatingDate, DIV, Mutation, …) |
@@ -39,6 +40,6 @@ fprintf('Duration: %.1f s, N units: %d\n', sd.Duration, ...
 
 ## Notes
 
-- `RecordingID` is derived from `InputPath` so it is stable across sessions.
+- `RecordingID` is derived from the spike data, so it is stable across sessions and paths; units of segments with one `SortingID` get the same `UnitID`.
 - `DIV` is computed automatically from `PlatingDate` + `RecordingDate` if not provided in metadata.
 - If a sibling `qc_output/` folder exists alongside `InputPath`, it is auto-detected as `ParentPath` (split-recording support).

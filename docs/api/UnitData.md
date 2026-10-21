@@ -32,7 +32,7 @@ All arguments are optional — call with no arguments for array pre-allocation.
 
 | Name | Type | Description |
 |---|---|---|
-| `UnitID` | string | Stable deterministic ID (hash of ChipID + PlatingDate + TemplateID + RefElectrode) |
+| `UnitID` | string | Stable deterministic ID (hash of ChipID + PlatingDate + SortingID + TemplateID + RefElectrode) |
 | `RecordingID` | string | Links to parent `SpikeData.RecordingID` |
 | `TemplateID` | double | 1-indexed template number from Kilosort |
 | `ReferenceElectrode` | double | Channel index of the peak-amplitude electrode |
@@ -41,7 +41,7 @@ All arguments are optional — call with no arguments for array pre-allocation.
 | `SamplingRate` | double | Copied from parent recording |
 | `RecordingDuration` | double | Copied from parent recording (seconds) |
 | `KSLabel` | string | Kilosort label (`"good"` / `"mua"`); `""` if not available |
-| `BombcellType` | double | BC classification: 0=noise, 1=good, 2=MUA, `NaN`=not run |
+| `BombcellType` | double | BC classification: 0=noise, 1=good, 2=MUA, 3=non-somatic good, 4=non-somatic MUA, `NaN`=not run |
 | `FullACG` | double | Full-recording autocorrelogram |
 | `FullACGBinSize` | double | Bin size (s) of `FullACG` |
 | `FullACGLag` | double | One-sided lag (s) of `FullACG` |

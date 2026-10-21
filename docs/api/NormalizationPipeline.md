@@ -66,7 +66,7 @@ ComBat fits batch-specific additive (γ) and multiplicative (δ) effects using p
 
 - Pass `CovariateLabels` to prevent removal of biological signal correlated with batch.
 - Singleton batches (only one sample) trigger a warning and fall back to global z-score.
-- Unseen batches at transform time trigger an error (batch must be seen during fit).
+- Batches unseen during fit (e.g. the held-out culture in grouped CV) get their location and scale estimated from their own samples (label-free); a single-sample unseen batch is left uncorrected with a warning.
 - Fitted parameters are stored in `np.FitParams.combat` for inspection and serialization.
 
 ## Properties

@@ -107,7 +107,7 @@ All fields are optional. Unspecified fields use the defaults shown.
 
 | Field | Default | Description |
 |---|---|---|
-| `CVLevel` | `"recording"` | `"recording"` or `"culture"` — keeps all units from the same group in the same fold |
+| `CVLevel` | `"culture"` | `"recording"` or `"culture"` — keeps all units from the same group in the same fold |
 
 ### Normalization
 
@@ -143,7 +143,7 @@ All fields are optional. Unspecified fields use the defaults shown.
 
 ## Notes
 
-- `classify` at the `"Unit"` level automatically groups CV folds by `RecordingID` (or by culture when `CVLevel = "culture"`), so units from the same recording/culture never appear in both train and test.
+- `classify` and `regress` at the `"Unit"` and `"Recording"` levels group CV folds by culture (`CVLevel = "culture"`, default; `IdentityKeys`) or by `RecordingID` (`CVLevel = "recording"`), so rows of one culture/recording never appear in both train and test.
 - `classify` at `"Culture"` level requires `IdentityKeys`, `GroupingVar`, and `GroupingValues`. Cultures missing any required time point are dropped.
 - Results are stored in `exp.Results` and also returned directly, so you can use either pattern.
 - Calling `classify` twice for the same `classification_var` overwrites the previous result (with a warning).

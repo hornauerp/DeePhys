@@ -36,7 +36,7 @@ Both methods embed DeePhys and external units jointly in a single unsupervised U
 ctc = CellTypeClassifier(fs, ud, params);
 
 % Then classify using external labels as training ground truth
-ctc.classifyUnitsWithExternalTrain(external_features, external_labels);
+ctc.classifyUnitsWithExternalTrain(wf_ext, acg_ext, y_ext, sr_ext);   % waveforms, ACGs, labels (1/2), sampling rate
 ```
 
 ## Next step

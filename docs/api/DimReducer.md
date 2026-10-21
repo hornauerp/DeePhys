@@ -14,7 +14,7 @@ opts.NormalizationGroups = fs.UnitTable.PlatingDate;
 result = DimReducer.reduce(X, opts);
 
 % Access embedding
-coords = result.Embedding;   % (N x 2) 2D coordinates
+coords = result.Reduction;   % (N x 2) 2D coordinates
 scatter(coords(:,1), coords(:,2));
 
 % PCA
@@ -59,16 +59,15 @@ Auto parameters (`NNeighbors = "auto"`, `Perplexity = "auto"`) are resolved at r
 
 | Property | Description |
 |---|---|
-| `Embedding` | (N × NDims) embedding coordinates |
+| `Reduction` | (N × NDims) embedding coordinates |
 | `Graph` | UMAP k-NN graph (sparse matrix); `[]` for PCA/tSNE |
 | `Method` | String: `"UMAP"`, `"PCA"`, or `"tSNE"` |
 | `Parameters` | Struct of all resolved options used |
-| `Features` | Feature names used (string array) |
-| `ElapsedTime` | Wall-clock time (seconds) |
+| `UnitFeatures` / `NetworkFeatures` | Feature groups used (string arrays) |
 
 ## Notes
 
 - UMAP requires the bundled `run_umap` function in `Toolboxes/umap/`.
 - PCA and t-SNE use MATLAB built-ins (`pca`, `tsne`) from the Statistics and Machine Learning Toolbox.
-- NaN values are imputed with the column mean before reduction (no train/test split — full dataset normalization).
+- NaN values are imputed with the column median before reduction (no train/test split — full dataset normalization).
 - For joint embedding of DeePhys + external data (transfer learning), see [Tutorial 6](../tutorials/06_transfer_learning.md).

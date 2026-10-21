@@ -26,7 +26,7 @@ Converts old `MEArecording` / `RecordingGroup` objects saved from DeePhys v1 to 
 ```matlab
 % Path A: single recording
 proc = RecordingProcessor.fromLegacyMat('/path/to/MEArecording.mat');
-proc.save('/path/to/save');
+proc.save('/path/to/RecordingProcessor.mat');
 
 % Path C: batch feature-only migration
 fs = FeatureStore.fromLegacyRecordings(mearec_array);

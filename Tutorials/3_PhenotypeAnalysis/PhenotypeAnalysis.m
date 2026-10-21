@@ -134,8 +134,10 @@ disp(r);
 [X, unit_ids] = exp.FeatureStore.unitMatrix('all');
 Y = exp.FeatureStore.UnitTable.Mutation;
 
-% Hierarchy-aware CV: units from the same recording stay together
-rec_ids  = exp.FeatureStore.UnitTable.RecordingID;
+% Hierarchy-aware CV: units of the same culture stay together (recordings of one culture
+% share their neurons, so grouping by RecordingID would still leak)
+rec_ids  = FeatureStore.getCultureIDsForUnits(exp.FeatureStore.UnitTable.RecordingID, ...
+    exp.FeatureStore.MetadataTable, ["ChipID", "PlatingDate"]);
 cv_folds = GroupedCV.byGroups(rec_ids, 5, Y);
 
 % Standalone classification
@@ -220,7 +222,8 @@ end
 
 %% 15  Feature importance across folds
 %
-% Aggregates OOB permutation importance across all CV folds (RF only).
+% Aggregates permutation importance across all CV folds (RF only; held-out-fold importance
+% with grouped CV, see ImportanceMethod in Classifier.classify).
 % Provides mean ± std per feature — more reliable than single-fold importance.
 
 T_imp = ClassificationResult.summarizeImportance(result_unit);
@@ -246,7 +249,7 @@ fprintf('Accuracy (FR≥0.1 Hz): %.2f ± %.2f\n', summary_filt.mean_accuracy, su
 % with small sample sizes or mild batch effects.
 
 opts_perm = struct('Algorithm', 'rf', 'KFold', 5);
-opts_perm.CVGroups = exp.FeatureStore.UnitTable.RecordingID;
+opts_perm.CVGroups = rec_ids;   % culture IDs (section 10)
 [p_val, null_accs, obs_acc] = Classifier.permutationTest( ...
     exp.FeatureStore.unitMatrix('all'), exp.FeatureStore.UnitTable.Mutation, ...
     opts_perm, 100);

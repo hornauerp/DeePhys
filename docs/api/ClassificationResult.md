@@ -43,7 +43,7 @@ Returns a struct with per-fold classification metrics:
 | `F1_score` | Macro-averaged F1 score |
 | `ConfusionMatrix` | (C × C) confusion matrix |
 
-For binary classification, Precision/Recall/F1 are for the first class. For multi-class, they are macro-averaged.
+Precision/Recall/F1 are always macro-averaged over the classes present in the fold (also for two classes), so fold values of binary and multi-class problems are the same metric. `summarizeFolds` also returns `macro_F1` over the pooled out-of-fold predictions. `train_acc` is optimistic when rows of a group (units of a culture) are correlated; report the held-out `balanced_accuracy`.
 
 ## Static methods
 

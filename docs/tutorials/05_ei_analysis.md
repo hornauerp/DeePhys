@@ -10,7 +10,6 @@ Network-level E/I analysis using labels from a trained `CellTypeClassifier`:
 2. Compute excitatory and inhibitory population firing-rate traces
 3. Detect burst episodes and extract aligned burst cutouts
 4. Quantify unit–population correlations
-5. Compare E/I dynamics across conditions
 
 ## Prerequisites
 

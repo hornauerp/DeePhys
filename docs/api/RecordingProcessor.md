@@ -119,6 +119,7 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `CCG.Alpha` | `0.001` | Significance threshold for edge detection |
 | `CCG.InhibitoryCriterion` | `"strict"` | Inhibitory links: `"strict"` (causal trough below the pre-spike mean and the slow 10 ms-to-edge flank; no reverse artefact of strong excitation) or `"cellexplorer"` (CellExplorer `ce_MonoSynConvClick`, the previous DeePhys default; many false positives) |
 | `STTC.MaxLag` | `0.05` | Synchrony window (s) |
+| `STTC.JitterSD` | `0.1` | SD (s) of the spike jitter of the surrogates; must exceed `MaxLag` (2 × `MaxLag`) |
 | `STTC.N_Surrogates` | `100` | Surrogate count for significance |
 | `STTC.Percentile` | `95` | Significance percentile |
 | `DDC.BinSize` | `0.001` | Bin width (s) |
@@ -140,7 +141,7 @@ Weighted graph features use the absolute weights of the significant links, norma
 ## Notes
 
 - `proc.save(path)` serialises to plain MATLAB types — no handle-object hacks needed.
-- All `compute*` methods are idempotent: calling them a second time is a no-op.
+- All `compute*` methods are idempotent: calling them a second time is a no-op. Exceptions: a step whose sub-analysis failed is marked `"failed"` and re-runs on the next call (its own columns are replaced, those of other steps kept); `computeConnectivity(methods)` adds methods not computed before; `computeUnitFeatures(groups)` / `computeParentFeatures(params)` on a finished step warn that the arguments are ignored (set the `Status` field to `"pending"` to recompute).
 - Override parameters by passing a nested struct, e.g.: `RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])))`.
 - Default connectivity methods are `["CCG","STTC"]`. DDC and FullCCG are available but not enabled by default.
 - `Status` tracks each analysis step with tri-state values: `"pending"`, `"done"`, or `"failed"`.

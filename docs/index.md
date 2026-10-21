@@ -31,7 +31,7 @@ proc = RecordingProcessor(sd);
 proc.runQC();
 proc.computeUnitFeatures();
 proc.computeNetworkFeatures();
-proc.save('/path/to/save');
+proc.save('/path/to/RecordingProcessor.mat');
 
 % Assemble multi-recording feature store
 fs = FeatureStore.fromProcessors([proc1, proc2, proc3]);

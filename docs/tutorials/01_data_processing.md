@@ -44,7 +44,7 @@ proc = RecordingProcessor(sd);
 proc.runQC();
 proc.computeUnitFeatures();
 proc.computeNetworkFeatures();
-proc.save('/path/to/save');
+proc.save('/path/to/RecordingProcessor.mat');
 
 fs = FeatureStore.fromProcessors([proc1, proc2]);
 fs.save('experiment.mat');
