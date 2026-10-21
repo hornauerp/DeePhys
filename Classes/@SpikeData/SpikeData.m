@@ -131,15 +131,18 @@ classdef SpikeData
 
         function id = resolveSortingID(input_path, parent_path, own_id)
         % RESOLVESORTINGID  Sorting identity of a recording (see the SortingID property).
-        %   A segment of a longer sorting (explicit/derived ParentPath, or a "segment_N"
-        %   folder inside a sorter output) gets the fingerprint of that parent sorting, so
+        %   A segment of a longer sorting (explicit/derived ParentPath, or a "segment_N" or
+        %   split_sortings window folder inside a sorter output) gets the fingerprint of that
+        %   parent sorting, so
         %   all its segments share it; any other recording is its own sorting (own_id).
             src = "";
             if strlength(string(parent_path)) > 0 && isfolder(parent_path)
                 src = string(parent_path);
             else
                 [up, leaf] = fileparts(char(input_path));
-                if ~isempty(regexp(leaf, '^segment_\d+$', 'once')) && isfile(fullfile(up, 'spike_times.npy'))
+                is_window = ~isempty(regexp(leaf, '^segment_\d+$', 'once')) || ...
+                    isfile(fullfile(char(input_path), 'split_window.txt'));   % written by split_sortings
+                if is_window && isfile(fullfile(up, 'spike_times.npy'))
                     src = string(up);
                 end
             end

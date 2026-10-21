@@ -78,8 +78,9 @@ classdef RecordingProcessor < handle
             p  = proc.Parameters;
 
             % Template waveform matrix + reference electrodes
+            % (templates x samples x channels). Zero-padded channels need no removal: they never
+            % hold the trough, and dropping columns would break the electrode index of ref_elec.
             tmpl = sd.TemplateWaveforms;
-            tmpl = tmpl(:, sum(tmpl, [1,3], 'omitnan') ~= 0, :);  % remove zero-padded channels
             [max_amps, max_idx] = min(tmpl, [], [2,3], 'linear');
             max_amps = abs(max_amps * p.QC.LSB);
             [~, ~, ref_elec] = ind2sub(size(tmpl), max_idx);
@@ -100,7 +101,7 @@ classdef RecordingProcessor < handle
             st  = sd.SpikeTimes;
             su  = sd.SpikeUnits;
             N   = size(tmpl, 1);
-            unit_spike_times = arrayfun(@(x) st(su == x), 1:N, 'un', 0);
+            unit_spike_times = RecordingProcessor.splitByUnit(st, su, N);
             firing_rates     = cellfun(@numel, unit_spike_times) / sd.Duration;
 
             % QC checks
@@ -199,6 +200,10 @@ classdef RecordingProcessor < handle
                 feature_groups string = "all"
             end
             if proc.Status.UnitFeatures == "done"
+                if nargin > 1
+                    warning('RecordingProcessor:alreadyComputed', ['Unit features were already computed; ' ...
+                        'the requested groups are ignored. Set proc.Status.UnitFeatures = "pending" to recompute.']);
+                end
                 return
             end
             if proc.Status.QC ~= "done"
@@ -304,6 +309,10 @@ classdef RecordingProcessor < handle
                 acg_params struct = struct()
             end
             if proc.Status.ParentFeatures == "done"
+                if nargin > 1
+                    warning('RecordingProcessor:alreadyComputed', ['Parent features were already computed; ' ...
+                        'the ACG parameters are ignored. Set proc.Status.ParentFeatures = "pending" to recompute.']);
+                end
                 return
             end
             if proc.Status.QC ~= "done"
@@ -397,6 +406,7 @@ classdef RecordingProcessor < handle
             [spike_times, spike_units] = RecordingProcessor.qcSpikes(proc);
             duration    = proc.SpikeData.Duration;
             net_struct  = struct();
+            n_failed = 0;
 
             if proc.Parameters.Analyses.Regularity
                 try
@@ -410,6 +420,7 @@ classdef RecordingProcessor < handle
                         'NetworkRegularityMagnitude', mag, ...
                         'NetworkRegularityFit', fit_coeff));
                 catch ME
+                    n_failed = n_failed + 1;
                     warning('RecordingProcessor:networkFeatures', 'Regularity failed: %s', ME.message);
                 end
             end
@@ -418,6 +429,7 @@ classdef RecordingProcessor < handle
                 try
                     net_struct.Catch22 = computeCatch22(spike_times, duration, proc.Parameters.Catch22.BinSize);
                 catch ME
+                    n_failed = n_failed + 1;
                     warning('RecordingProcessor:networkFeatures', 'Catch22 failed: %s', ME.message);
                 end
             end
@@ -456,32 +468,38 @@ classdef RecordingProcessor < handle
 
                     if ~isempty(bursts.T_start)
                         n_units = numel(proc.Units);
-                        burst_frac = NaN(n_units, 1);
-                        in_burst = false(size(spike_times));
-                        for b = 1:length(bursts.T_start)
-                            in_burst = in_burst | (spike_times >= bursts.T_start(b) & spike_times <= bursts.T_end(b));
-                        end
-                        for u = 1:n_units
-                            mask = spike_units == u;
-                            n_spikes = sum(mask);
-                            if n_spikes > 0
-                                burst_frac(u) = sum(mask & in_burst) / n_spikes;
+                        edges = reshape([bursts.T_start(:)'; bursts.T_end(:)'], 1, []);
+                        if issorted(edges)
+                            % disjoint bursts: odd histogram bins lie inside [T_start, T_end]
+                            [~, ~, bin] = histcounts(spike_times, edges);
+                            in_burst = mod(bin, 2) == 1 | ismember(spike_times, bursts.T_end);
+                        else
+                            in_burst = false(size(spike_times));
+                            for b = 1:length(bursts.T_start)
+                                in_burst = in_burst | (spike_times >= bursts.T_start(b) & spike_times <= bursts.T_end(b));
                             end
                         end
+                        n_spk = accumarray(spike_units(:), 1, [n_units 1]);
+                        n_in  = accumarray(spike_units(:), double(in_burst(:)), [n_units 1]);
+                        burst_frac = n_in ./ n_spk;
+                        burst_frac(n_spk == 0) = NaN;
                         proc.UnitFeatureTable.BurstFractionSpikes = burst_frac;
                     end
                 catch ME
+                    n_failed = n_failed + 1;
                     warning('RecordingProcessor:networkFeatures', 'Bursts failed: %s', ME.message);
                 end
             end
 
-            % Flatten struct to a one-row table
+            % Flatten struct to a one-row table; on a re-run (after a failure) the columns of
+            % later steps (graph, cell-type, spatial) are kept
             if ~isempty(fieldnames(net_struct))
-                proc.NetworkFeatureTable = RecordingProcessor.structToOneRowTable(net_struct);
-            else
+                proc.NetworkFeatureTable = RecordingProcessor.mergeColumns(proc.NetworkFeatureTable, ...
+                    RecordingProcessor.structToOneRowTable(net_struct));
+            elseif isempty(proc.NetworkFeatureTable)
                 proc.NetworkFeatureTable = table();
             end
-            proc.Status.NetworkFeatures = "done";
+            proc.Status.NetworkFeatures = RecordingProcessor.stepStatus(n_failed);
         end
 
         function computeConnectivity(proc, methods)
@@ -490,12 +508,19 @@ classdef RecordingProcessor < handle
                 proc
                 methods string = proc.Parameters.Analyses.Connectivity
             end
-            if proc.Status.Connectivity == "done"
-                return
-            end
             if isempty(methods)
                 proc.Status.Connectivity = "done";
                 return
+            end
+            if proc.Status.Connectivity == "done"
+                % Methods requested now that an earlier call did not compute (e.g. "DDC" after
+                % runAll) are added; the graph features are then recomputed over all of them.
+                if isempty(proc.Connectivity), have = false(size(methods));
+                else, have = isfield(proc.Connectivity, cellstr(methods)); end
+                methods = methods(~have);
+                if isempty(methods)
+                    return
+                end
             end
             if proc.Status.QC ~= "done"
                 proc.runQC();
@@ -506,6 +531,7 @@ classdef RecordingProcessor < handle
             n   = numel(proc.Units);
             dur = proc.SpikeData.Duration;
 
+            n_failed = 0;
             for a = 1:numel(methods)
                 try
                     switch methods(a)
@@ -524,6 +550,7 @@ classdef RecordingProcessor < handle
                             proc.Connectivity.DDC = computeConnectivityDDC(st, su, n, dur, proc.Parameters.DDC);
                     end
                 catch ME
+                    n_failed = n_failed + 1;
                     warning('RecordingProcessor:connectivity', '%s: %s', methods(a), ME.message);
                 end
             end
@@ -536,19 +563,16 @@ classdef RecordingProcessor < handle
                         gp = proc.Parameters.GraphFeatures;   % SmallWorldnessIterations, Types
                     end
                     [nw_graph, unit_graph] = computeGraphFeatures(proc.Connectivity, gp);
-                    if ~isempty(proc.NetworkFeatureTable)
-                        proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_graph];
-                    else
-                        proc.NetworkFeatureTable = nw_graph;
-                    end
+                    proc.NetworkFeatureTable = RecordingProcessor.mergeColumns(proc.NetworkFeatureTable, nw_graph);
                     if ~isempty(unit_graph) && ~isempty(proc.UnitFeatureTable)
-                        proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_graph];
+                        proc.UnitFeatureTable = RecordingProcessor.mergeColumns(proc.UnitFeatureTable, unit_graph);
                     end
                 catch ME
+                    n_failed = n_failed + 1;
                     warning('RecordingProcessor:graphFeatures', '%s', ME.message);
                 end
             end
-            proc.Status.Connectivity = "done";
+            proc.Status.Connectivity = RecordingProcessor.stepStatus(n_failed);
         end
 
         function computeCellTypeFeatures(proc)
@@ -570,6 +594,7 @@ classdef RecordingProcessor < handle
             end
 
             labels   = proc.CellTypeLabels;
+            n_failed = 0;
             exc_mask = labels == 1;
             inh_mask = labels == 2;
 
@@ -594,6 +619,7 @@ classdef RecordingProcessor < handle
                     proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_ct];
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:cellTypeFeatures', ...
                     'Cell-type graph features failed: %s', ME.message);
             end
@@ -623,6 +649,7 @@ classdef RecordingProcessor < handle
                     proc.NetworkFeatureTable = bal_tbl;
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:cellTypeFeatures', ...
                     'E/I balance features failed: %s', ME.message);
             end
@@ -652,6 +679,7 @@ classdef RecordingProcessor < handle
                     proc.NetworkFeatureTable = [proc.NetworkFeatureTable, act_tbl];
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:cellTypeFeatures', ...
                     'Cell-type activity summaries failed: %s', ME.message);
             end
@@ -670,6 +698,7 @@ classdef RecordingProcessor < handle
                     end
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:cellTypeFeatures', ...
                     'Cell-type burst features failed: %s', ME.message);
             end
@@ -687,11 +716,12 @@ classdef RecordingProcessor < handle
                     end
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:cellTypeFeatures', ...
                     'E/I correlation features failed: %s', ME.message);
             end
 
-            proc.Status.CellTypeFeatures = "done";
+            proc.Status.CellTypeFeatures = RecordingProcessor.stepStatus(n_failed);
         end
 
         function computeSpatialAnalysis(proc)
@@ -715,6 +745,7 @@ classdef RecordingProcessor < handle
             end
 
             ec     = proc.SpikeData.ElectrodeCoordinates;
+            n_failed = 0;
             labels = proc.CellTypeLabels;
             sp     = proc.Parameters;
 
@@ -733,6 +764,7 @@ classdef RecordingProcessor < handle
                     ec, proc.Units, labels, proc.UnitFeatureTable, sp_params);
                 RecordingProcessor.appendFeatures(proc, nw_sp, unit_sp);
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:spatialAnalysis', ...
                     'Core spatial features failed: %s', ME.message);
             end
@@ -745,6 +777,7 @@ classdef RecordingProcessor < handle
                     RecordingProcessor.appendFeatures(proc, nw_conn, unit_conn);
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:spatialAnalysis', ...
                     'Spatial connectivity features failed: %s', ME.message);
             end
@@ -757,6 +790,7 @@ classdef RecordingProcessor < handle
                     RecordingProcessor.appendFeatures(proc, nw_ei, table());
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:spatialAnalysis', ...
                     'Spatial E/I balance failed: %s', ME.message);
             end
@@ -772,11 +806,12 @@ classdef RecordingProcessor < handle
                     RecordingProcessor.appendFeatures(proc, nw_burst, table());
                 end
             catch ME
+                n_failed = n_failed + 1;
                 warning('RecordingProcessor:spatialAnalysis', ...
                     'Spatial burst features failed: %s', ME.message);
             end
 
-            proc.Status.SpatialFeatures = "done";
+            proc.Status.SpatialFeatures = RecordingProcessor.stepStatus(n_failed);
         end
 
         function runAll(proc)
@@ -1136,6 +1171,40 @@ classdef RecordingProcessor < handle
             [keep, su] = ismember(proc.SpikeData.SpikeUnits, [proc.Units.TemplateID]);
             st = proc.SpikeData.SpikeTimes(keep);
             su = su(keep);
+        end
+
+        function c = splitByUnit(st, su, N)
+        % SPLITBYUNIT  {1 x N} spike times per unit label 1..N (one sort instead of N scans).
+            st = st(:); su = su(:);
+            keep = su >= 1 & su <= N & su == round(su);
+            if N == 0, c = cell(1, 0); return, end
+            [s, o] = sort(su(keep));            % stable: spike order within a unit is kept
+            t = st(keep);
+            c = mat2cell(t(o), accumarray(s, 1, [N 1]), 1)';
+        end
+
+        function T = mergeColumns(T, new)
+        % MERGECOLUMNS  Append the columns of new to T, replacing columns of the same name
+        %   (a re-run step overwrites its own columns and keeps those of the other steps).
+            if isempty(new) || width(new) == 0
+                return
+            end
+            if isempty(T) || width(T) == 0
+                T = new;
+                return
+            end
+            T(:, ismember(T.Properties.VariableNames, new.Properties.VariableNames)) = [];
+            T = [T, new];
+        end
+
+        function s = stepStatus(n_failed)
+        % STEPSTATUS  "done", or "failed" when a sub-analysis of the step raised an error (the
+        %   step is then re-run by the next call and FeatureStore reports it).
+            if n_failed > 0
+                s = "failed";
+            else
+                s = "done";
+            end
         end
 
         function s = emptyStatus()

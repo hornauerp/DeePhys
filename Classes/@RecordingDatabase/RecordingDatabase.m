@@ -292,6 +292,14 @@ classdef RecordingDatabase < handle
                         exist('sqlite', 'class') == 8;
         end
 
+        function n = templateCount(sd)
+        % TEMPLATECOUNT  Templates of the sorting (silent ones included, for the QC pass rate).
+            n = size(sd.TemplateWaveforms, 1);
+            if n == 0
+                n = numel(unique(sd.SpikeUnits));
+            end
+        end
+
         function rec = recordingView(rec)
         % RECORDINGVIEW  Present a RecordingProcessor with the fields the registry reads
         % from an MEArecording (Metadata.InputPath, RecordingInfo, Units, Parameters).
@@ -315,7 +323,7 @@ classdef RecordingDatabase < handle
             end
             rec = struct('Metadata', md, 'Units', units, 'Parameters', rec.Parameters, ...
                 'RecordingInfo', struct('SamplingRate', sd.SamplingRate, ...
-                    'Duration', sd.Duration, 'N_templates', numel(unique(sd.SpikeUnits))));
+                    'Duration', sd.Duration, 'N_templates', RecordingDatabase.templateCount(sd)));
         end
 
     end

@@ -676,21 +676,21 @@ classdef FeatureStore < handle
             % Apply feature set filter (post-group selection).
             % "full" → no filter. "core" → intersect with core whitelist.
             % For NetworkGraph, core names are roots — apply prefix matching.
+            % ("full" is the only set whose empty name list means "no filter"; an empty custom
+            % set selects no columns.)
             if feature_set ~= "full"
                 whitelist = FeatureCatalog.features("all", feature_set);
-                if ~isempty(whitelist)
-                    % Exact match OR prefix match (for algorithm-suffixed columns)
-                    keep = false(1, numel(cols));
-                    for k = 1:numel(cols)
-                        if ismember(cols(k), whitelist)
-                            keep(k) = true;
-                        else
-                            % prefix match: any whitelist entry is a leading substring
-                            keep(k) = any(startsWith(cols(k), whitelist));
-                        end
+                % Exact match OR prefix match (for algorithm-suffixed columns)
+                keep = false(1, numel(cols));
+                for k = 1:numel(cols)
+                    if ismember(cols(k), whitelist)
+                        keep(k) = true;
+                    elseif ~isempty(whitelist)
+                        % prefix match: any whitelist entry is a leading substring
+                        keep(k) = any(startsWith(cols(k), whitelist));
                     end
-                    cols = cols(keep);
                 end
+                cols = cols(keep);
             end
         end
 
@@ -699,7 +699,9 @@ classdef FeatureStore < handle
         %
         % Output always has child column names (ACG1, not Parent_ACG1) so feature
         % matrices from datasets with and without parent features are compatible.
-        % Fallback: if Parent_X doesn't exist, child X is used silently.
+        % Fallback: if Parent_X doesn't exist, child X is used silently; rows without a
+        % parent value (recordings stacked with others that have parent features) keep their
+        % child value.
         %
         %   out_tbl = fs.resolveParentFeatures(tbl, cols, ["ACG"])
         %   out_tbl = fs.resolveParentFeatures(tbl, cols, "all")
@@ -714,7 +716,12 @@ classdef FeatureStore < handle
                     && (any(parent_features == "all") || ...
                         FeatureStore.isParentGroup(col, parent_features));
                 if use_parent
-                    out_tbl.(col) = tbl.(parent_col);
+                    v = tbl.(parent_col);
+                    if ismember(col, all_cols) && isnumeric(v)
+                        no_parent = isnan(v);
+                        v(no_parent) = tbl.(col)(no_parent);
+                    end
+                    out_tbl.(col) = v;
                 else
                     out_tbl.(col) = tbl.(col);
                 end
@@ -898,7 +905,10 @@ classdef FeatureStore < handle
         % Column types are inferred once over all tables (majority vote, ties favour
         % string); inferring them per missing column per table scaled quadratically.
             var_cells = cellfun(@(t) string(t.Properties.VariableNames)', tbl_cells, 'un', 0);
-            all_vars  = unique(vertcat(var_cells{:}));
+            % Order of first appearance: vertcat keeps the first table's column order, so a
+            % sorted union would put numbered columns missing from it (Parent_ACG1..N) in
+            % lexicographic order (1, 10, 100, ...) and scramble the bins.
+            all_vars  = unique(vertcat(var_cells{:}), 'stable');
             is_str    = FeatureStore.columnIsString(all_vars, tbl_cells);
             padded    = cellfun(@(t) FeatureStore.padTable(t, all_vars, is_str), tbl_cells, 'un', 0);
             T = vertcat(padded{:});

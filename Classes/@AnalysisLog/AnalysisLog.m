@@ -26,7 +26,10 @@ classdef AnalysisLog < handle
 
         function al = AnalysisLog()
         % Constructor. Creates a new log with a unique session ID.
-            al.SessionID = string(dec2hex(randi(2^32), 8));
+            % Own generator seeded from the clock: the global RNG must stay untouched, since
+            % creating a log would otherwise change every later seeded analysis.
+            rs = RandStream('mt19937ar', 'Seed', mod(floor(posixtime(datetime('now')) * 1e6), 2^32));
+            al.SessionID = string(dec2hex(randi(rs, 2^32), 8));
             al.StartTime = datetime('now');
         end
 
@@ -133,7 +136,9 @@ classdef AnalysisLog < handle
         function hash = getGitHash()
         % GETGITHASH  Return the current git commit hash (short), or "" if not in a repo.
             try
-                [status, result] = system('git rev-parse --short HEAD');
+                % The DeePhys checkout (three levels above this file), not the current folder
+                repo = fileparts(fileparts(fileparts(mfilename('fullpath'))));
+                [status, result] = system(sprintf('git -C "%s" rev-parse --short HEAD', repo));
                 if status == 0
                     hash = strtrim(string(result));
                 else

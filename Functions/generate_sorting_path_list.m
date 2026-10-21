@@ -4,8 +4,16 @@ arguments
     path_logic cell = {'*','*','w*'} %Expression describing the subfolder structure
     split_prefix string = []% only use if a concatenated sorting was previously split by the split_sortings() function
 end
-sorted_dirs = dir(fullfile(root_path, path_logic{:}));
-sorted_dirs = string(unique({sorted_dirs.folder}));
+% dir() returns the matched entries for a wildcard last element, but the CONTENTS of the
+% matched folders for a literal one (e.g. 'sorter_output'); the "." entry marks the latter.
+entries = dir(fullfile(root_path, path_logic{:}));
+is_dot = ismember({entries.name}, {'.', '..'});
+listed = unique(string({entries(strcmp({entries.name}, '.')).folder}));   % literal last element
+rest = entries(~is_dot & ~ismember(string({entries.folder}), listed));    % wildcard matches
+matched = string(arrayfun(@(e) fullfile(e.folder, e.name), rest(:), 'UniformOutput', false));
+matched_dirs = matched([rest.isdir]);
+matched_files = string({rest(~[rest.isdir]).folder});                     % a file pattern: its folder
+sorted_dirs = unique([listed(:); matched_dirs(:); matched_files(:)])';
 sorting_path_list = [];
 if isempty(split_prefix)
     sorting_path_list = sorted_dirs;

@@ -256,9 +256,22 @@ classdef CellTypeClassifier < handle
             N     = numel(unit_data);
             cache = ctc.CachedExtraction;
 
+            % Unit identity in the ORDER of unit_data (the columns of wf / acg follow it), with
+            % the recording of each row (which segment represents a unit) and the inputs that
+            % change the ACG: parent spike trains and stored parent ACG columns.
+            unit_keys = strjoin(string({unit_data.UnitID}) + "@" + string({unit_data.RecordingID}), '|');
+            n_orig    = numel(ctc.OriginalUnitDataArray);
+            n_parent  = 0;
+            if ~isempty(ctc.FeatureStore) && ~isempty(ctc.FeatureStore.UnitTable)
+                n_parent = sum(startsWith(string(ctc.FeatureStore.UnitTable.Properties.VariableNames), ...
+                    ["Parent_ACG", "FullACG"]));
+            end
+            uid_hash = string(paramHash(sprintf('%s#%d#%d', unit_keys, n_orig, n_parent)));
+
             % -- Level 1: in-memory cache -----------------------------------------
             if ~isempty(cache) ...
                     && cache.N == N ...
+                    && isfield(cache, 'UnitIDHash') && cache.UnitIDHash == uid_hash ...
                     && abs(cache.ACGBinSize - ph.ACGBinSize) < 1e-12 ...
                     && abs(cache.ACGLag - ph.ACGLag) < 1e-12 ...
                     && cache.ACGSource == ph.ACGSource
@@ -269,9 +282,6 @@ classdef CellTypeClassifier < handle
             end
 
             % -- Level 2: disk cache ----------------------------------------------
-            % Unit identity encoded as a compact hash of sorted IDs (avoids
-            % hashing a large cell array for datasets with many units).
-            uid_hash   = paramHash(strjoin(sort(string({unit_data.UnitID})), '|'));
             key_struct = struct('ACGBinSize', ph.ACGBinSize, 'ACGLag', ph.ACGLag, ...
                 'ACGSource', ph.ACGSource, 'N', N, 'UnitIDHash', uid_hash);
             cache_file = CacheManager.instance().get(paramHash(key_struct));
@@ -318,7 +328,7 @@ classdef CellTypeClassifier < handle
             % -- Update in-memory cache -------------------------------------------
             ctc.CachedExtraction = struct('wf', wf, 'acg', acg, 'sr', sr, ...
                 'N', N, 'ACGBinSize', ph.ACGBinSize, 'ACGLag', ph.ACGLag, ...
-                'ACGSource', ph.ACGSource);
+                'ACGSource', ph.ACGSource, 'UnitIDHash', uid_hash);
         end
 
         function acg = resolveACG(ctc, unit_data, ph)
@@ -332,6 +342,10 @@ classdef CellTypeClassifier < handle
                 % Accept both legacy "FullACG*" and newer "Parent_ACG*" naming
                 parent_acg_cols = all_cols(startsWith(all_cols, "Parent_ACG") | ...
                                            startsWith(all_cols, "FullACG"));
+                % Bin order from the column number, not the table order (tables stacked
+                % before the column-order fix can hold the bins in lexicographic order)
+                [~, bin_order]  = sort(str2double(regexp(parent_acg_cols, '\d+$', 'match', 'once')));
+                parent_acg_cols = parent_acg_cols(bin_order);
                 if ~isempty(parent_acg_cols)
                     % Map unit_data order to FeatureStore row order by (UnitID, RecordingID)
                     % compound key. UnitID alone is ambiguous in dose-response data where
