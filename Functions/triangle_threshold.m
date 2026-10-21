@@ -129,11 +129,7 @@ try
 		end
 		distances(startBin:end) = 0;
 		% Zero out bins to the left of the left-most point of the hypoteneuse.
-		startBin = lastNonZeroBin - 1;
-		if startBin < 1
-			startBin = 1;
-		end
-		distances(startBin:end) = 0;
+		distances(1:firstNonZeroBin-1) = 0;
 	end
 	
 	% Find the max distance.  Because we set bins above the hypoteneuse to -inf, they won't be found.

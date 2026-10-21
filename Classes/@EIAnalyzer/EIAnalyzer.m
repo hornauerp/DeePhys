@@ -170,6 +170,11 @@ classdef EIAnalyzer < handle
             defaultParams.Activity.SecCutout        = [0, 1200];  % analysis window (s)
             defaultParams.Activity.SmoothWindow     = 5;      % movmean window (bins)
             defaultParams.Activity.RateType         = "mean"; % "mean" (per-unit average) | "sum" (total spikes)
+            % RatioMethod: "smoothed" (default) = movmean(I) ./ movmean(E), NaN where the window
+            %   holds no E spike; "perbin" = movmean of the per-bin I/E over bins with E > 0 (the
+            %   published method; with sparse 10 ms counts it is biased by count noise: inflated
+            %   where counts are high, deflated where they are low, even at a constant true I/E).
+            defaultParams.Activity.RatioMethod      = "smoothed";
 
             defaultParams.BurstDetection.MaxIERatio         = 2;    % burst when I/E ratio < this
             defaultParams.BurstDetection.NoiseFloorPercentile = 5;  % percentile of positive E values as noise floor

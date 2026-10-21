@@ -12,8 +12,8 @@ function R = burstEIMetrics(spike_times, spike_units, labels, bursts, duration, 
 %     Post    PostWindow after each offset (outside every burst and every Pre window)
 %     Between outside [Onset - Margin, Offset + Margin] of every burst (the interburst reference)
 %   burst-aligned mean rates (Hz, BinSize bins over Window) aligned at Onset, T_peak and Offset.
-% Population rates are means over units, I / E ratios are taken after averaging (bins without E
-% spikes are not dropped), and folds are relative to the population's own Between rate.
+% Population rates are means over units, I / E ratios are taken after averaging (NaN only where
+% the population's mean E is 0), and folds are relative to the population's own Between rate.
 %
 % Metrics (R.Metrics, one row each):
 %   IFoldIn, EFoldIn, IEContrastIn     In / Between of I and of E, and their ratio (I/E lower
@@ -186,12 +186,14 @@ fI = dv(rI(1:3), rI(4)); fE = dv(rE(1:3), rE(4));            % NaN without a Bet
 sm = @(x) movmean(x, P.sm);
 for f = ["Onset", "Peak", "Offset"]
     I.(f) = sm(mean(tr.(f)(isI, :), 1)); E.(f) = sm(mean(tr.(f)(isE, :), 1));
-    ie.(f) = I.(f) ./ max(E.(f), eps);
+    ie.(f) = dv(I.(f), E.(f));   % NaN without E activity (I ./ eps made any such bin the maximum)
 end
 t = P.time;
 [~, k] = max(I.Onset .* P.lead - ~P.lead); lead = t(k);
-[~, k] = max(ie.Onset .* P.lead - ~P.lead); iemax = t(k);
-x = ie.Peak; x(~P.minw) = inf; [~, k] = min(x); iemin = t(k);
+x = ie.Onset; x(~P.lead) = NaN; [~, k] = max(x); iemax = t(k);
+if all(isnan(x)), iemax = NaN; end
+x = ie.Peak; x(~P.minw) = NaN; [~, k] = min(x); iemin = t(k);
+if all(isnan(x)), iemin = NaN; end
 term = max(I.Offset(P.term));
 [ia, ta] = afterPeak(I.Peak, P); ea = afterPeak(E.Peak, P);
 anti = NaN;

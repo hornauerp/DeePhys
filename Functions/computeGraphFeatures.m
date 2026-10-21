@@ -53,7 +53,7 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
             density = density_dir(con_mat);
             clustering_coef = clustering_coef_bd(con_mat);
             assortativity = assortativity_bin(con_mat, 1);
-            rich_club = rich_club_bd(con_mat, min(5, max(sum(con_mat ~= 0))));
+            rich_club = richClubLevels(@rich_club_bd, con_mat, max(sum(con_mat ~= 0)));
             nw_feat = ["Density","Assortativity","RichClub" + (1:length(rich_club))];
             nw_val = [density, assortativity, rich_club];
             is_directed = true;
@@ -63,7 +63,7 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
             density = density_und(con_mat);
             clustering_coef = clustering_coef_bu(con_mat);
             assortativity = assortativity_bin(con_mat, 0);
-            rich_club = rich_club_bu(con_mat, min(5, max(sum(con_mat))));
+            rich_club = richClubLevels(@rich_club_bu, con_mat, max(sum(con_mat)));
             nw_feat = ["Density","Assortativity","RichClub" + (1:length(rich_club))];
             nw_val = [density, assortativity, rich_club];
             is_directed = false;
@@ -211,6 +211,18 @@ function [nw_table, unit_table] = weightedGraphFeatures(c, name)
     unit_val(isinf(unit_val)) = NaN;
     nw_table   = array2table(nw_val, 'VariableNames', nw_names);
     unit_table = array2table(unit_val, 'VariableNames', unit_names);
+end
+
+function rc = richClubLevels(rc_fn, C, max_degree)
+% Rich-club coefficients at degree levels 1..5, NaN above the maximum degree: a fixed set of
+% columns, so recordings with different maximum degrees stack into one table.
+    n_levels = 5;
+    rc = nan(1, n_levels);
+    k = min(n_levels, max_degree);
+    if k >= 1
+        v = rc_fn(C, k);
+        rc(1:numel(v)) = v;
+    end
 end
 
 function tf = hasDisjointEdgePair(C)

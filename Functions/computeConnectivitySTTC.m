@@ -12,7 +12,8 @@ function connectivity = computeConnectivitySTTC(unit_spike_times_cell, spike_tim
 %   n_units               - (1 x 1) double, number of units
 %   duration              - (1 x 1) double, recording duration in seconds
 %   sampling_rate         - (1 x 1) double, sampling rate in Hz
-%   sttc_params           - struct: .MaxLag, .SurrogateMethod, .N_Surrogates, .Percentile
+%   sttc_params           - struct: .MaxLag, .SurrogateMethod, .N_Surrogates, .Percentile,
+%                           .JitterSD (s, 'jitter' surrogates; default 2 x MaxLag)
 %
 % OUTPUTS:
 %   connectivity - struct with .wu (weighted undirected), .bu (binary undirected), .threshold
@@ -53,8 +54,19 @@ function connectivity = computeConnectivitySTTC(unit_spike_times_cell, spike_tim
     end
     spks_data.nchannels = length(spks_data.raster);
 
+    % Jitter width of the surrogates: it must exceed the coincidence window MaxLag, or the
+    % jittered spikes keep their +-MaxLag coincidences and the null equals the data (the former
+    % fixed 10 ms jitter left almost no pair significant at MaxLag = 50 ms).
+    jitter_sd = 2 * sttc_params.MaxLag;
+    if isfield(sttc_params, 'JitterSD') && ~isempty(sttc_params.JitterSD)
+        jitter_sd = sttc_params.JitterSD;
+    end
+    rand_args = {};
+    if strcmp(sttc_params.SurrogateMethod, 'jitter')
+        rand_args = {'stdtime', jitter_sd * 1000};   % randomizeasdf2 takes ms
+    end
     for s = 1:sttc_params.N_Surrogates
-        spks_rand = randomizeasdf2(spks_data, sttc_params.SurrogateMethod);
+        spks_rand = randomizeasdf2(spks_data, sttc_params.SurrogateMethod, rand_args{:});
         surrogate_sttc = zeros(spks_data.nchannels);
         for i = 1:(spks_data.nchannels - 1)
             spike_times_1 = double(spks_rand.raster{i}) / sampling_rate;

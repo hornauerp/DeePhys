@@ -19,6 +19,7 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
 
     interpolation_factor = 10;
     ms_conversion = round(sampling_rate / 1000 * interpolation_factor);   % interpolated samples per ms (was hard-coded for 10 kHz)
+    dt_ms = 1 / ms_conversion;   % AUC_* in amplitude x ms, the same at every sampling rate
     x = 1:size(norm_wf_matrix,1);
     xq = 1:(1/interpolation_factor):size(norm_wf_matrix,1);
     interp_wf_matrix = double(interp1(x(:), norm_wf_matrix, xq(:), 'pchip'));
@@ -41,7 +42,9 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
         p1_start = max(1, unit_trough_idx(u) - ms_conversion);
         p1_end   = unit_trough_idx(u);
         p2_start = unit_trough_idx(u);
-        p2_end   = min(size(interp_wf_matrix,1), unit_trough_idx(u) + ms_conversion);
+        % Repolarisation peak searched up to 2 ms after the trough: broad units peak later
+        % than 1 ms, and a 1 ms cap returned a point on the rising phase.
+        p2_end   = min(size(interp_wf_matrix,1), unit_trough_idx(u) + 2 * ms_conversion);
 
         peak_1_cutout = interp_wf_matrix(p1_start:p1_end, u);
         peak_2_cutout = interp_wf_matrix(p2_start:p2_end, u);
@@ -67,16 +70,16 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
         zc = [1 unit_zero_crossings{u} length(xq)];
         [~,zc_pre_trough] = max(zc(zc<unit_trough_idx(u)));
         zc_pre_trough = max([zc_pre_trough 2]);
-        unit_features.AUC_peak_1 = trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough), u));
+        unit_features.AUC_peak_1 = dt_ms * trapz(interp_wf_matrix(zc(zc_pre_trough - 1):zc(zc_pre_trough), u));
         if zc_pre_trough + 1 > length(zc)
             unit_features.AUC_trough = NaN;
             unit_features.AUC_peak_2 = NaN;
         else
-            unit_features.AUC_trough = abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1), u)));
+            unit_features.AUC_trough = dt_ms * abs(trapz(interp_wf_matrix(zc(zc_pre_trough):zc(zc_pre_trough + 1), u)));
             if length(zc(zc_pre_trough:end)) > 3
-                unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2), u));
+                unit_features.AUC_peak_2 = dt_ms * trapz(interp_wf_matrix(zc(zc_pre_trough + 1):zc(zc_pre_trough + 2), u));
             else
-                unit_features.AUC_peak_2 = trapz(interp_wf_matrix(zc(zc_pre_trough + 1):size(interp_wf_matrix,1), u));
+                unit_features.AUC_peak_2 = dt_ms * trapz(interp_wf_matrix(zc(zc_pre_trough + 1):size(interp_wf_matrix,1), u));
             end
         end
 
@@ -94,12 +97,18 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
             unit_features.Decay = NaN;
         end
 
+        % Width of the trough at half its amplitude: the contiguous run below half-amplitude
+        % that contains the trough (not the first and last such samples anywhere, which a
+        % later negative deflection would join)
         half_amp = unit_trough_value(u) / 2;
         wf = interp_wf_matrix(:, u);
         above_half = wf < half_amp;
-        if any(above_half)
-            half_start = find(above_half, 1, 'first');
-            half_end = find(above_half, 1, 'last');
+        ti = unit_trough_idx(u);
+        if above_half(ti)
+            half_start = find(~above_half(1:ti), 1, 'last') + 1;
+            if isempty(half_start), half_start = 1; end
+            half_end = ti - 1 + find(~above_half(ti:end), 1, 'first') - 1;
+            if isempty(half_end), half_end = numel(wf); end
             unit_features.HalfWidth = (half_end - half_start) / (sampling_rate * interpolation_factor / 1000);
         else
             unit_features.HalfWidth = NaN;

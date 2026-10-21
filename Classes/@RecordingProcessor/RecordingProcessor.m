@@ -1104,6 +1104,7 @@ classdef RecordingProcessor < handle
 
             params.STTC.MaxLag          = 0.05;
             params.STTC.SurrogateMethod = 'jitter';
+            params.STTC.JitterSD        = 0.1;     % s, surrogate jitter SD; must exceed MaxLag (default 2 x MaxLag)
             params.STTC.N_Surrogates    = 100;
             params.STTC.Percentile      = 95;
 

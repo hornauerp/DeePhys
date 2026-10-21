@@ -15,8 +15,9 @@ function computeActivity(eia)
 % The raw per-unit binned matrix is stored in Activity.binned_mat for reuse by
 % computeCorrelations (avoids redundant spike binning).
 %
-% Ratio: the stored ratio is movmean(I_raw ./ E_raw, 'omitnan') over bins with
-% E_raw > 0 only (bins without excitatory spikes are excluded, see below).
+% Ratio: the stored ratio is the smoothed I trace over the smoothed E trace (NaN without E
+% spikes in the window); Parameters.Activity.RatioMethod = "perbin" gives the per-bin ratio
+% over bins with E_raw > 0 of the published method (see below).
 %
 % Clears BurstState, BurstCutouts, NormalizedCutouts, and Correlations to
 % prevent stale downstream results after re-running with new parameters.
@@ -91,14 +92,21 @@ for c = 1:n_cultures
     E_fr     = movmean(E_raw,    sw);
     total_fr = movmean(total_raw, sw);
 
-    % I/E ratio per bin, excluding bins with E = 0 (as in the published method), then
-    % smoothed over the remaining bins. Previously Inf (E = 0, I > 0) was capped at the
-    % culture's largest ratio and 0/0 was set to 0, so silent bins looked
-    % excitation-dominated and both artefacts were smeared into neighbouring bins.
-    % NaN where no bin in the window has E > 0 (never a burst bin).
-    ratio    = I_raw ./ E_raw;
-    ratio(E_raw <= 0) = NaN;
-    ratio    = movmean(ratio, sw, 'omitnan');
+    % I/E ratio (Parameters.Activity.RatioMethod). NaN where no bin in the window has E > 0
+    % (never a burst bin).
+    %   "smoothed": ratio of the smoothed traces. A mean of per-bin ratios is dominated by
+    %               count noise in sparse 10 ms bins.
+    %   "perbin":   per-bin I/E over bins with E > 0, then smoothed (the published method).
+    ratio_method = "smoothed";
+    if isfield(p, 'RatioMethod'), ratio_method = lower(string(p.RatioMethod)); end
+    if ratio_method == "perbin"
+        ratio    = I_raw ./ E_raw;
+        ratio(E_raw <= 0) = NaN;
+        ratio    = movmean(ratio, sw, 'omitnan');
+    else
+        ratio    = I_fr ./ E_fr;
+        ratio(E_fr <= 0) = NaN;
+    end
 
     activity(c) = struct( ...
         'I',          I_fr, ...

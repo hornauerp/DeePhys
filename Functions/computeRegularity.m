@@ -13,7 +13,8 @@ function [frequency, magnitude, fit_coeff] = computeRegularity(binned_signal, bi
 %
 % OUTPUTS:
 %   frequency     - Dominant frequency [Hz]
-%   magnitude     - FFT magnitude at the dominant frequency
+%   magnitude     - FFT magnitude at the dominant frequency over the mean magnitude of the
+%                   spectrum (independent of recording duration)
 %   fit_coeff     - Exponential decay coefficient (b in fit(f, y, 'exp1'), f in Hz);
 %                   NaN if the fit fails
 
@@ -30,8 +31,11 @@ TEMP = fft(binned_signal, NFFT);
 TEMP(1) = 0;
 freq_domain = abs(TEMP(1:floor(NFFT/2)));
 
-[magnitude, freq_idx] = max(freq_domain);
+[peak_mag, freq_idx] = max(freq_domain);
 frequency = F(freq_idx);
+% Peak over the mean spectral magnitude: the raw FFT magnitude grows with the number of
+% bins, i.e. with recording duration, even for an aperiodic (Poisson) signal.
+magnitude = peak_mag / max(mean(freq_domain), eps);
 
 norm_freq_domain = freq_domain / max(freq_domain);
 [all_pks, all_locs, ~, all_prom] = findpeaks(norm_freq_domain);

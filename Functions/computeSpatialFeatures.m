@@ -247,7 +247,14 @@ function [nw, unit_tbl] = computeNNComposition(xy, labels, exc_idx, inh_idx, k)
             end
         end
         unlike_frac = 1 - like_frac(labeled);
-        nw.SpatialMixingIndex = mean(unlike_frac, 'omitnan');
+        % Relative to random labels: the raw unlike fraction follows the E/I composition
+        % (it rises with the minority share). Expected value for random labels of the same
+        % composition: 2 nE nI / (n (n - 1)). 1 = random, < 1 segregated, > 1 interleaved.
+        n_e = sum(labels == 1); n_i = sum(labels == 2); n_l = n_e + n_i;
+        expected = 2 * n_e * n_i / max(n_l * (n_l - 1), 1);
+        if expected > 0
+            nw.SpatialMixingIndex = mean(unlike_frac, 'omitnan') / expected;
+        end
     end
 
     if ~isempty(exc_idx)

@@ -92,15 +92,15 @@ function [network_table, viz_data] = computeSpatialEIBalance( ...
     valid_vals = exc_fraction(valid_grid);
     nw.SpatialEIVariability = std(valid_vals, 'omitnan');
 
-    % Moran's I on grid values (inverse-distance weights between valid grid points)
-    if sum(valid_grid) >= 4
-        vxy = grid_pts(valid_grid, :);
-        D_grid = squareform(pdist(vxy));
-        D_grid(1:size(D_grid,1)+1:end) = Inf;
-        W_grid = 1 ./ D_grid;
-        W_grid(isinf(W_grid)) = 0;
-        nw.SpatialEIMoransI = moransI(valid_vals, W_grid);
-    end
+    % Moran's I of the unit labels (inhibitory = 1), inverse-distance weights between units
+    % (units on the same electrode excluded). Expectation under random labels -1/(n-1), i.e.
+    % about 0. On the kernel-smoothed grid it was positive by construction for random labels:
+    % neighbouring grid points share the units they average.
+    cls = exc_mask | inh_mask;
+    D_unit = squareform(pdist(xy(cls, :)));
+    W_unit = 1 ./ D_unit;
+    W_unit(~isfinite(W_unit)) = 0;
+    nw.SpatialEIMoransI = moransI(double(inh_mask(cls)), W_unit);
 
     network_table = struct2table(nw);
 
