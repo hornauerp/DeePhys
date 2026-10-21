@@ -116,6 +116,10 @@ disp(proc.NetworkFeatureTable);
 %
 % STTC significance: surrogates jitter each spike with SD proc.Parameters.STTC.JitterSD
 % (default: empty = 2 x MaxLag, so it follows MaxLag; it must exceed the coincidence window).
+% A pair is an edge when its STTC exceeds its surrogates at a false discovery rate of
+% proc.Parameters.STTC.FDR across all pairs (EdgeTest "fdr"). With the default MaxLag of
+% 50 ms, STTC in bursting cultures mostly reflects joint participation in network bursts;
+% set MaxLag to about 0.01 s for spike-level synchrony.
 
 proc.computeConnectivity();
 
@@ -134,7 +138,9 @@ proc.computeConnectivity();
 %   CellTypeGraph       — graph metrics on E-only and I-only sub-networks
 %   CellTypeBalance     — ExcitatoryFraction, MeanFiringRate_E/I, FiringRateRatio_EI
 %   CellTypeActivity    — MeanCV2_E/I, MeanFanoFactor_E/I, MeanLvR_E/I
-%   CellTypeBurst       — burst lead/participation per cell type
+%   CellTypeBurst       — E/I activity around network bursts (folds, I/E contrasts, unit
+%                         latency and participation), each with an _Excess column: the value
+%                         minus random "I" sets matched in firing rate (computeCellTypeBurstEI)
 %   CellTypeCorrelation — MeanSTTC_EE/II/EI, STTCSynchronyIndex
 
 proc.computeCellTypeFeatures();

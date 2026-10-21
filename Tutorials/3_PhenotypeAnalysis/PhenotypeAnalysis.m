@@ -15,8 +15,15 @@ procs = RecordingProcessor.loadMany(proc_paths);
 
 exp = Experiment.fromProcessors(procs);
 
-% Or from a saved FeatureStore directly (skip the processors):
-%   exp = Experiment.fromLegacyGroup(rg);   % from old RecordingGroup
+% Or load the processors and build in one step:
+%   exp = Experiment.fromPaths(proc_paths);
+%
+% Or migrate an old RecordingGroup object:
+%   exp = Experiment.fromLegacyGroup(rg);
+%
+% There is no Experiment factory for a saved FeatureStore alone. To analyse one
+% (FeatureStore.load(path)) without the processors, use the direct API of section 10
+% on fs.unitMatrix(...), fs.UnitTable, etc.
 
 %% 2  Unit-level classification
 %
@@ -116,7 +123,9 @@ opts_reg.KFold          = 5;
 
 result_conc = exp.regress('Culture', 'Concentration', opts_reg);
 summary_conc = RegressionResult.summarizeFolds(result_conc);
-fprintf('Concentration regression R2: %.2f\n', summary_conc.mean_R2);
+% R2_pooled: R^2 over the pooled out-of-fold predictions (mean_R2, the mean of the
+% per-fold R^2, is unstable for small folds)
+fprintf('Concentration regression R2 (pooled out-of-fold): %.2f\n', summary_conc.R2_pooled);
 
 %% 9  Access stored results
 
@@ -243,8 +252,10 @@ fprintf('Accuracy (FR≥0.1 Hz): %.2f ± %.2f\n', summary_filt.mean_accuracy, su
 
 %% 17  Permutation test — significance of classification accuracy
 %
-% Builds a null distribution by shuffling labels 100 times.
-% p-value = fraction of null runs with accuracy >= observed.
+% Builds a null distribution of balanced accuracy by shuffling labels 100 times
+% (with CVGroups and a label that is constant within each group, whole groups are
+% shuffled, not single units).
+% p-value = (1 + #null runs with balanced accuracy >= observed) / (1 + 100).
 % Recommended for confirming that accuracy exceeds chance, especially
 % with small sample sizes or mild batch effects.
 
@@ -253,4 +264,4 @@ opts_perm.CVGroups = rec_ids;   % culture IDs (section 10)
 [p_val, null_accs, obs_acc] = Classifier.permutationTest( ...
     exp.FeatureStore.unitMatrix('all'), exp.FeatureStore.UnitTable.Mutation, ...
     opts_perm, 100);
-fprintf('Observed accuracy: %.3f,  permutation p = %.4f\n', obs_acc, p_val);
+fprintf('Observed balanced accuracy: %.3f,  permutation p = %.4f\n', obs_acc, p_val);

@@ -43,6 +43,8 @@ exp.Results.DimReduction.Unit.UMAP      % DimReductionResult
 | `Experiment.fromLegacyGroup(rg)` | Migrate from an old `RecordingGroup` object |
 | `Experiment.returnDefaultParams()` | Return the default parameter struct |
 
+There is no factory that takes a saved `FeatureStore` alone. To analyse a saved store without the processors, load it with `FeatureStore.load(path)` and call `Classifier` / `Regressor` / `DimReducer` directly on `fs.unitMatrix(...)` etc. (see [Classifier](Classifier.md)).
+
 ## Analysis methods
 
 ### `result = exp.classify(level, classification_var, opts)`
@@ -98,10 +100,12 @@ All fields are optional. Unspecified fields use the defaults shown.
 | Field | Default | Description |
 |---|---|---|
 | `Algorithm` | `"rf"` | `"rf"`, `"svm"`, `"cnb"`, `"knn"` |
-| `KFold` | `5` | Number of CV folds; `-1` = leave-one-group-out |
+| `KFold` | `5` | Number of CV folds; `-1` = leave-one-group-out (uses the CV groups of the `"Unit"`/`"Recording"` levels, see `CVLevel`). At the `"Culture"` level there are no CV groups: `classify` then does leave-one-out, and `regress` errors (`Regressor:kfoldNeedsGroups`) |
 | `NHyper` | `0` | Bayesian hyperparameter optimisation evaluations (0 = skip) |
 | `Prior` | `"empirical"` | `"empirical"` or `"uniform"` (balanced class weighting) |
 | `Seed` | `[]` | RNG seed for reproducible CV splits |
+| `ComputeImportance` | `true` | RF only: compute permutation importance per fold (forwarded to `Classifier` / `Regressor`) |
+| `ImportanceMethod` | `"auto"` | RF only: `"auto"` (held-out-fold importance when CV groups are set, i.e. at the `"Unit"`/`"Recording"` levels; out-of-bag at the `"Culture"` level), `"test"` or `"oob"`. See [Classifier](Classifier.md) |
 
 ### Cross-validation grouping
 

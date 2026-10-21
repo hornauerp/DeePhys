@@ -25,7 +25,8 @@ classdef Regressor
         %   Y    - (N x 1) numeric target vector
         %   opts - struct with optional fields:
         %     .Algorithm         - 'rf' (default), 'svm', 'knn'
-        %     .KFold             - number of folds (default 5)
+        %     .KFold             - number of folds (default 5); -1 = leave-one-group-out,
+        %                          which requires CVGroups (error Regressor:kfoldNeedsGroups)
         %     .NHyper            - Bayesian hyperparam evaluations (default 0)
         %     .Seed              - RNG seed for reproducibility (default [])
         %     .NormalizationGroups - (N x 1) string/numeric for per-group z-score
@@ -33,8 +34,12 @@ classdef Regressor
         %     .CVGroups          - (N x 1) string/numeric for hierarchy-aware CV
         %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
         %     .StratificationVar - (N x 1) for stratified CV splitting (ignored when CVGroups set)
-        %     .ComputeImportance - RF OOB permutation importance per fold (default true;
+        %     .ComputeImportance - RF permutation importance per fold (default true;
         %                          dominates RF run time, off inside permutationTest)
+        %     .ImportanceMethod  - "auto" (default: "test" with CVGroups, else "oob"), "test"
+        %                          (shuffle a feature in the held-out fold) or "oob"
+        %                          (out-of-bag; with grouped data the OOB rows come from the
+        %                          training groups and favour group-identifying features)
         %
         % OUTPUTS:
         %   result - (1 x K) RegressionResult array
@@ -57,6 +62,10 @@ classdef Regressor
 
             % CV partition — prefer hierarchy-aware GroupedCV when CVGroups provided
             K = opts.KFold;
+            if K == -1 && isempty(cv_groups)
+                error('Regressor:kfoldNeedsGroups', ...
+                    'KFold = -1 (leave-one-group-out) requires opts.CVGroups; set CVGroups or use KFold > 1.');
+            end
             if ~isempty(cv_groups)
                 gcv     = GroupedCV.byGroups(cv_groups, K);
                 K       = gcv.NumFolds;

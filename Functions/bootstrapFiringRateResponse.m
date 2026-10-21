@@ -217,6 +217,13 @@ unchanged = [];
 p_values  = nan(1, n_units);
 
 for u = 1:n_units
+    if all(bootstrp_diff(u, :) == bootstrp_diff(u, 1))
+        % Zero-variance null (e.g. a silent unit: every bin identical): there is no evidence
+        % of a change. A degenerate Normal fit would give p = 0, which BH-FDR always passes.
+        p_values(u) = 1;
+        unchanged   = [unchanged, u]; %#ok<AGROW>
+        continue
+    end
     if use_empirical(u)
         % Empirical quantiles — resolution limited to 1/total_iter
         sorted_null = sort(bootstrp_diff(u, :));

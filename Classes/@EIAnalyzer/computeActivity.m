@@ -111,7 +111,8 @@ for c = 1:n_cultures
     %   "smoothed": ratio of the smoothed traces. A mean of per-bin ratios is dominated by
     %               count noise in sparse 10 ms bins.
     %   "perbin":   per-bin I/E over bins with E > 0, then smoothed (the published method).
-    ratio_method = "smoothed";
+    % Parameters saved before RatioMethod existed were computed per bin: keep that for them.
+    ratio_method = "perbin";
     if isfield(p, 'RatioMethod'), ratio_method = lower(string(p.RatioMethod)); end
     if ratio_method == "perbin"
         ratio    = I_raw ./ E_raw;

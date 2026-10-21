@@ -98,7 +98,36 @@ classdef FeatureStore < handle
                 metadata_rows{i} = [id_tbl, meta_row];
             end
 
+            FeatureStore.checkFeatureVersions(proc_array);
             fs = FeatureStore.assembleFromCells(unit_tables, recording_rows, metadata_rows);
+        end
+
+        function checkFeatureVersions(proc_array)
+        % CHECKFEATUREVERSIONS  Warn when processors computed a step under different feature
+        %   definitions (RecordingProcessor.FeatureDefinitionVersion): their columns share names
+        %   but not meaning. Unstamped steps (older processors) count as an unknown version.
+        %   Make it an error with warning('error', 'FeatureStore:mixedFeatureVersions').
+            steps = ["UnitFeatures", "ParentFeatures", "NetworkFeatures", "Connectivity", ...
+                     "CellTypeFeatures", "SpatialFeatures"];
+            for st = steps
+                v = NaN(1, numel(proc_array));
+                done = false(1, numel(proc_array));
+                for i = 1:numel(proc_array)
+                    p = proc_array(i);
+                    done(i) = isstruct(p.Status) && isfield(p.Status, st) && isstring(p.Status.(st)) ...
+                        && p.Status.(st) == "done";
+                    if isfield(p.FeatureVersion, st), v(i) = p.FeatureVersion.(st); end
+                end
+                v = v(done);
+                v(isnan(v)) = -1;                                   % unknown: older than version 2
+                if numel(unique(v)) > 1
+                    vs = string(unique(v)); vs(vs == "-1") = "unstamped";
+                    warning('FeatureStore:mixedFeatureVersions', ...
+                        ['%s was computed under different feature definitions (versions %s). ' ...
+                         'Columns with the same name can differ in meaning; recompute the older ' ...
+                         'processors (set Status.%s = "pending").'], st, strjoin(vs, ', '), st);
+                end
+            end
         end
 
         function fs = fromLegacyRecordings(rec_array, unit_features, network_features)
@@ -589,6 +618,9 @@ classdef FeatureStore < handle
                         case "BombcellMetrics"
                             names = unitFeatureNames("bc");
                             selected = selected | ismember(all_cols, names);
+                        case "BurstParticipation"
+                            names = unitFeatureNames("burst");
+                            selected = selected | ismember(all_cols, names);
                         case {"ReferenceWaveform","Waveform"}
                             selected = selected | (startsWith(all_cols,"Waveform") & ~ismember(all_cols, exclude));
                         case "ACG"
@@ -643,11 +675,8 @@ classdef FeatureStore < handle
                                      "MeanISIBimodality_E","MeanISIBimodality_I"];
                             selected = selected | ismember(all_cols, names);
                         case "CellTypeBurst"
-                            names = ["BurstLeadTime_E","BurstLeadTime_I","BurstLeadFraction", ...
-                                     "MeanBurstFraction_E","MeanBurstFraction_I", ...
-                                     "IntraBurstRate_E","IntraBurstRate_I", ...
-                                     "BurstParticipation_E","BurstParticipation_I", ...
-                                     "BurstParticipationRate"];
+                            [net_names, unit_names] = cellTypeBurstFeatureNames();
+                            names = [net_names, unit_names];
                             selected = selected | ismember(all_cols, names);
                         case "CellTypeCorrelation"
                             names = ["MeanSTTC_EE","MeanSTTC_II","MeanSTTC_EI", ...

@@ -1,13 +1,15 @@
 function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, resp_unique, ...
-        eligible_global, p_comm, rng_seed)
+        eligible_global, p_comm, rng_seed, strata_global)
 % SELECTENRICHMENTSEEDS  Training seeds from communities statistically enriched / depleted in responders.
 %
 % Replaces the community heuristics (EnrichmentFactor, InhibitoryCommunityRelThresh,
 % PuritySigmaThreshold, CommunityFallbackThreshold) and the iforest fallback with one test:
 %   1. Louvain on the fixed graph, LouvainRestarts times.
 %   2. Per community of each restart, a hypergeometric test of its responder count among
-%      eligible units (units in cultures where responders can occur), in both directions;
-%      Benjamini-Hochberg FDR at Community.SeedFDR across communities.
+%      eligible units (units in cultures where responders can occur), in both directions,
+%      stratified by culture (Community.StratifyEnrichment) so that a culture's responder
+%      rate does not make its units' communities look enriched; Benjamini-Hochberg FDR at
+%      Community.SeedFDR across communities.
 %   3. Consensus over restarts (the partitions can be degenerate, i.e. restarts need not
 %      agree): inhibitory seeds are responders in an enriched community in >= half of the
 %      restarts; excitatory seeds come from non-responders in a depleted community in >= half,
@@ -24,9 +26,14 @@ function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, res
 %   eligible_global  - (1 x N_all) logical, unit belongs to a culture where responders occur
 %   p_comm           - Parameters.Community (LouvainResolution, LouvainRestarts, SeedFDR)
 %   rng_seed         - Parameters.RNGSeed
+%   strata_global    - (1 x N_all) culture per unique unit: the strata of the enrichment test
+%                      when p_comm.StratifyEnrichment is true ([] or omitted = one stratum)
     N_all = size(G, 1);
     fdr = 0.05;
     if isfield(p_comm, 'SeedFDR'), fdr = p_comm.SeedFDR; end
+    if nargin < 8 || ~isfield(p_comm, 'StratifyEnrichment') || ~p_comm.StratifyEnrichment
+        strata_global = [];
+    end
 
     algorithm = "louvain";
     if isfield(p_comm, 'Algorithm'), algorithm = p_comm.Algorithm; end
@@ -37,7 +44,7 @@ function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, res
 
     in_subset = false(1, N_all); in_subset(subset_global_idx) = true;
     elig = eligible_global(:)' & in_subset;
-    [T, inh_comm, exc_comm] = communityEnrichmentTest(M, elig, resp_unique(:)', fdr);
+    [T, inh_comm, exc_comm] = communityEnrichmentTest(M, elig, resp_unique(:)', fdr, strata_global);
     tested = T.NEligible' > 0;
     fprintf(['Responder enrichment (%d responders among %d eligible units, FDR %.2f): ' ...
              '%d enriched, %d depleted, %d neutral communities\n'], sum(T.NResponsive), sum(T.NEligible), fdr, ...
@@ -55,7 +62,7 @@ function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, res
     inh_vote = zeros(1, N_all); exc_vote = zeros(1, N_all);
     for r = 1:R
         Mr = parts{r};
-        [~, ic, ec] = communityEnrichmentTest(Mr, elig, resp_unique(:)', fdr);
+        [~, ic, ec] = communityEnrichmentTest(Mr, elig, resp_unique(:)', fdr, strata_global);
         inh_vote = inh_vote + ismember(Mr', ic);
         exc_vote = exc_vote + ismember(Mr', ec);
     end

@@ -13,7 +13,7 @@ classdef MLResult
         Y_test      % True values / labels (test set)
         objects     % Test objects (Unit/MEArecording/Culture array)
         train_acc   % Training accuracy (classification) or R² (regression)
-        predImp     % OOB predictor importance (RF only; [] otherwise)
+        predImp     % RF permutation importance of the fold (test-fold or OOB, see ImportanceMethod; [] otherwise)
         Features    % Feature names used (string array)
         Parameters  % Struct: algorithm, normalization_var, K_fold, N_hyper, seed
         Preprocessing % Struct from MLUtils.normalizeFeatures (training medians, fitted
@@ -41,7 +41,7 @@ classdef MLResult
     methods (Static)
 
         function T = summarizeImportance(result_array)
-        % SUMMARIZEIMPORTANCE  Aggregate OOB predictor importance across CV folds.
+        % SUMMARIZEIMPORTANCE  Aggregate predictor importance (predImp) across CV folds.
         %
         % Works for both ClassificationResult and RegressionResult arrays.
         % Returns a table sorted by mean importance (descending):

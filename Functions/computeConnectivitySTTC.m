@@ -12,11 +12,13 @@ function connectivity = computeConnectivitySTTC(unit_spike_times_cell, spike_tim
 %   n_units               - (1 x 1) double, number of units
 %   duration              - (1 x 1) double, recording duration in seconds
 %   sampling_rate         - (1 x 1) double, sampling rate in Hz
-%   sttc_params           - struct: .MaxLag, .SurrogateMethod, .N_Surrogates, .Percentile,
+%   sttc_params           - struct: .MaxLag, .SurrogateMethod, .N_Surrogates, .EdgeTest
+%                           ("fdr", default, with .FDR; or "percentile" with .Percentile),
 %                           .JitterSD (s, 'jitter' surrogates; default 2 x MaxLag)
 %
 % OUTPUTS:
 %   connectivity - struct with .wu (weighted undirected), .bu (binary undirected), .threshold
+%                  ("fdr" also: .p one-sided surrogate p-values, .q BH-adjusted)
 
     arguments
         unit_spike_times_cell cell
@@ -89,7 +91,44 @@ function connectivity = computeConnectivitySTTC(unit_spike_times_cell, spike_tim
         surrogate_mat(:,:,s) = surrogate_sttc;
     end
 
-    connectivity.threshold = prctile(surrogate_mat, sttc_params.Percentile, 3);
+    % Edge test. Each pair has its own surrogate null; testing every pair at a fixed
+    % percentile leaves (100 - Percentile)% false edges among independent pairs, which then
+    % drive density, clustering and modularity. EdgeTest "fdr" (default) z-scores each pair
+    % against its surrogates (one-sided: positive synchrony) and keeps the pairs that pass
+    % Benjamini-Hochberg control at STTC.FDR across all tested pairs; "percentile" keeps the
+    % former per-pair percentile threshold.
+    edge_test = "fdr";
+    if isfield(sttc_params, 'EdgeTest') && ~isempty(sttc_params.EdgeTest)
+        edge_test = lower(string(sttc_params.EdgeTest));
+    end
+    surr_mu = mean(surrogate_mat, 3, 'omitnan');
+    surr_sd = std(surrogate_mat, 0, 3, 'omitnan');
     connectivity.wu = empirical_sttc;
-    connectivity.bu = connectivity.wu > connectivity.threshold;
+    switch edge_test
+        case "fdr"
+            q_level = 0.05;
+            if isfield(sttc_params, 'FDR') && ~isempty(sttc_params.FDR), q_level = sttc_params.FDR; end
+            z = (empirical_sttc - surr_mu) ./ surr_sd;
+            z(surr_sd == 0 & empirical_sttc > surr_mu) = Inf;    % constant null, data above it
+            z(surr_sd == 0 & empirical_sttc <= surr_mu) = -Inf;
+            p = 1 - normcdf(z);
+            ut = triu(true(n_units), 1) & ~isnan(z);
+            q = NaN(n_units);
+            q(ut) = StatisticalTest.fdrCorrection(p(ut));
+            q = min(q, q.');                                     % symmetric (one value per pair)
+            connectivity.p  = min(p, p.');
+            connectivity.q  = q;
+            connectivity.bu = q <= q_level;
+            % Smallest STTC that would pass for each pair (diagnostic; Inf when no pair passes)
+            p_cut = max([p(ut & q <= q_level); 0]);
+            connectivity.threshold = surr_mu + norminv(1 - p_cut) .* surr_sd;
+            connectivity.threshold(isnan(z)) = NaN;
+        case "percentile"
+            connectivity.threshold = prctile(surrogate_mat, sttc_params.Percentile, 3);
+            connectivity.bu = connectivity.wu > connectivity.threshold;
+        otherwise
+            error('computeConnectivitySTTC:unknownEdgeTest', ...
+                'Unknown STTC.EdgeTest "%s" (use "fdr" or "percentile").', edge_test);
+    end
+    connectivity.bu(1:n_units+1:end) = false;
 end

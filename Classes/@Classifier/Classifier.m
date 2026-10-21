@@ -7,7 +7,7 @@ classdef Classifier
 %
 % USAGE:
 %   opts.Algorithm         = 'rf';          % 'rf', 'svm', 'cnb', 'knn'
-%   opts.KFold             = 5;             % -1 = leave-one-group-out
+%   opts.KFold             = 5;             % -1 = leave-one-group-out (leave-one-out without CVGroups)
 %   opts.NHyper            = 0;             % 0 = no hyperparam search
 %   opts.CVGroups          = fs.UnitTable.RecordingID;   % recording-level CV grouping
 %   opts.NormalizationGroups = fs.UnitTable.PlatingDate; % per-plate normalization
@@ -27,11 +27,11 @@ classdef Classifier
         %   Y    - (N x 1) categorical / string / double label vector
         %   opts - struct with optional fields:
         %     .Algorithm         - 'rf' (default), 'svm', 'cnb', 'knn'
-        %     .KFold             - number of folds; -1 = leave-one-group-out (default 5)
+        %     .KFold             - number of folds (default 5); -1 = leave-one-group-out
+        %                          with CVGroups, leave-one-out without
         %     .NHyper            - hyperparam search evaluations (default 0)
         %     .CVGroups          - (N x 1) string/categorical for hierarchy-aware CV
         %                          (e.g. fs.UnitTable.RecordingID). [] = standard CV.
-        %     .CVLevel           - 'recording' or 'culture' when CVGroups provided
         %     .NormalizationGroups - (N x 1) string/categorical for per-group z-score
         %                           (e.g. fs.UnitTable.PlatingDate). [] = global z-score.
         %     .PoolingValues     - cell array to merge label values
@@ -309,7 +309,6 @@ classdef Classifier
             if ~isfield(opts, 'KFold'),              opts.KFold = 5;              end
             if ~isfield(opts, 'NHyper'),             opts.NHyper = 0;             end
             if ~isfield(opts, 'CVGroups'),           opts.CVGroups = [];          end
-            if ~isfield(opts, 'CVLevel'),            opts.CVLevel = 'recording';  end
             if ~isfield(opts, 'NormalizationGroups'),  opts.NormalizationGroups = [];  end
             if ~isfield(opts, 'NormalizationVar'),    opts.NormalizationVar = '';     end
             if ~isfield(opts, 'NormalizationPipeline'), opts.NormalizationPipeline = ''; end

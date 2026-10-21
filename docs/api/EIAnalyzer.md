@@ -4,7 +4,9 @@ Excitatory / inhibitory population activity of the cultures classified by a `Cel
 
 There are two analysis paths:
 
-- **Legacy path** (`computeActivity` → `detectBursts` → `extractBurstCutouts` → `normalizeBurstCutouts`). These are the published methods and are kept unchanged for reproducibility. `detectBursts` labels burst bins by I/E < `MaxIERatio`, so any statement about the I/E ratio during those bursts is circular.
+- **Legacy path** (`computeActivity` → `detectBursts` → `extractBurstCutouts` → `normalizeBurstCutouts`). These are the published methods. `detectBursts` labels burst bins by I/E < `MaxIERatio`, so any statement about the I/E ratio during those bursts is circular. Two parameters differ from the published version:
+  - `Activity.RatioMethod` (default `"smoothed"`) is the ratio of the smoothed I and E traces. `"perbin"` is the published per-bin I/E averaged over bins with E > 0, which count noise in sparse 10 ms bins inflates or deflates even at a constant true I/E. Parameters saved without the field use `"perbin"`.
+  - `Activity.SecCutout` (default `[0 1200]` s) ends at the recording's end when that comes first; `Inf` uses the whole recording.
 - **Burst-event path.**
   - Bursts come from `detectNetworkBursts`, using all units and ignoring the labels.
   - Every metric is computed per recording and tested against random "I" sets matched in firing rate.

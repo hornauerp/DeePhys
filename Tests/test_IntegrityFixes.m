@@ -73,7 +73,7 @@ classdef test_IntegrityFixes < matlab.unittest.TestCase
         function testSTTCSurrogatesSkipSilentUnits(tc)
             % units 2 and 4 are silent: every other unit must get its own surrogate
             [cells, st, su] = test_IntegrityFixes.poissonUnits([1 3 5], 5, 120);
-            params = struct('MaxLag', 0.05, 'SurrogateMethod', 'jitter', 'JitterSD', [], ...
+            params = struct('MaxLag', 0.05, 'SurrogateMethod', 'jitter', 'JitterSD', [], 'EdgeTest', 'percentile', ...
                 'N_Surrogates', 5, 'Percentile', 95);
             conn = computeConnectivitySTTC(cells, st, su, 5, 120, 20000, params);
             tc.verifyTrue(all(isfinite(conn.threshold([1 3], 5))));

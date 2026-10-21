@@ -14,7 +14,10 @@ function [frequency, magnitude, fit_coeff] = computeRegularity(binned_signal, bi
 % OUTPUTS:
 %   frequency     - Dominant frequency [Hz]
 %   magnitude     - FFT magnitude at the dominant frequency over the mean magnitude of the
-%                   spectrum (independent of recording duration)
+%                   spectrum. Free of the raw magnitude's growth with duration, but as the
+%                   maximum over all frequency bins it still rises slowly with their number:
+%                   aperiodic (Poisson) signals give about 3-4, more in longer recordings.
+%                   Compare recordings of equal duration and binning.
 %   fit_coeff     - Exponential decay coefficient (b in fit(f, y, 'exp1'), f in Hz);
 %                   NaN if the fit fails
 

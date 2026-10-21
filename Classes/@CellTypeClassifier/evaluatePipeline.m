@@ -78,8 +78,14 @@ n_folds = numel(held_out_indices);
 for fi = 1:n_folds
     c = held_out_indices(fi);
 
-    % Hold out culture c: train on all other cultures
-    ctc.Parameters.UMAP.TrainingCultureIdx = setdiff(1:n_cultures, c);
+    % Hold out culture c: train on the other cultures of the original training set (all
+    % cultures when TrainingCultureIdx is empty), so a restricted training set stays restricted
+    if isempty(orig_training_idx)
+        train_pool = 1:n_cultures;
+    else
+        train_pool = orig_training_idx;
+    end
+    ctc.Parameters.UMAP.TrainingCultureIdx = setdiff(train_pool, c);
 
     if opts.Verbose
         fprintf('--- Fold %d/%d: holding out culture %d/%d ---\n', fi, n_folds, c, n_cultures);

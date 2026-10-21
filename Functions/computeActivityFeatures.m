@@ -8,7 +8,8 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
 %   duration    - (1 x 1) double, recording duration in seconds
 %   params      - struct with fields:
 %       .FanoBinWidth      double (default 0.1)
-%       .RefractoryPeriod  double (default 0.002)
+%       .RefractoryPeriod  double (default 0.005): refractory constant R of the revised local
+%                          variation (LvR, Shinomoto et al. 2009)
 %       .Regularity        struct with .Binning, .N_peaks (omit field to skip)
 %       .Catch22           struct with .BinSize (omit field to skip)
 %
@@ -25,7 +26,7 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
 
     p = parseStructParameters(struct( ...
         'FanoBinWidth',    0.1, ...
-        'RefractoryPeriod', 0.002, ...
+        'RefractoryPeriod', 0.005, ...
         'Regularity',      [], ...
         'Catch22',         []), params);
 

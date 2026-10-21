@@ -822,6 +822,10 @@ classdef CellTypeClassifier < handle
             %   ("enrichment" method; replaces EnrichmentFactor, InhibitoryCommunityRelThresh,
             %   PuritySigmaThreshold and the fallback settings above).
             defaultParams.Community.SeedFDR                       = 0.05;
+            % StratifyEnrichment: test each community's responder count within cultures
+            %   (CultureKeys; exact stratified hypergeometric) instead of pooled over cultures,
+            %   so a culture with a high responder rate does not make its communities enriched.
+            defaultParams.Community.StratifyEnrichment            = true;
             % Algorithm: community detection for the enrichment seeds. "leiden" (default;
             %   Traag et al. 2019, leidenCommunities: connected communities, works on the
             %   sparse graph) or "louvain" (BCT community_louvain, needs the full N x N
@@ -1175,20 +1179,24 @@ classdef CellTypeClassifier < handle
             [inc, dec, info] = calibrateCalls(T, is_ctrl, q, alpha, target_fdr);
         end
 
-        function [T, inh_comm, exc_comm] = communityEnrichment(M, eligible, responsive, fdr)
+        function [T, inh_comm, exc_comm] = communityEnrichment(M, eligible, responsive, fdr, strata)
         % COMMUNITYENRICHMENT  Hypergeometric responder enrichment/depletion per community.
-        %   [T, inh, exc] = CellTypeClassifier.communityEnrichment(M, eligible, responsive, fdr)
+        %   [T, inh, exc] = CellTypeClassifier.communityEnrichment(M, eligible, responsive, fdr, strata)
+        %   strata (culture per unit) makes the test stratified; [] or omitted = pooled
         %   (see private/communityEnrichmentTest)
-            [T, inh_comm, exc_comm] = communityEnrichmentTest(M, eligible, responsive, fdr);
+            if nargin < 5, strata = []; end
+            [T, inh_comm, exc_comm] = communityEnrichmentTest(M, eligible, responsive, fdr, strata);
         end
 
-        function [inh_seeds, exc_seeds] = enrichmentSeeds(G, responsive, eligible, p_comm, rng_seed)
+        function [inh_seeds, exc_seeds] = enrichmentSeeds(G, responsive, eligible, p_comm, rng_seed, strata)
         % ENRICHMENTSEEDS  Training seeds of the enrichment test on graph G, all units in the
         %   training subset (see private/selectEnrichmentSeeds). Returns global unit indices.
+        %   strata: culture per unit (used when p_comm.StratifyEnrichment is true).
             if nargin < 5, rng_seed = 1; end
+            if nargin < 6, strata = []; end
             responsive = logical(responsive(:)');
             subset = 1:size(G, 1);
-            [~, det] = evalc('selectEnrichmentSeeds(G, find(responsive), subset, responsive, logical(eligible(:)''), p_comm, rng_seed)');
+            [~, det] = evalc('selectEnrichmentSeeds(G, find(responsive), subset, responsive, logical(eligible(:)''), p_comm, rng_seed, strata)');
             inh_seeds = subset(det.clean_resp_local);
             exc_seeds = subset(det.counterexample_idx_local);
         end

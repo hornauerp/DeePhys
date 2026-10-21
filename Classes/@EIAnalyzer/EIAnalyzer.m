@@ -176,7 +176,11 @@ classdef EIAnalyzer < handle
             %   where counts are high, deflated where they are low, even at a constant true I/E).
             defaultParams.Activity.RatioMethod      = "smoothed";
 
-            defaultParams.BurstDetection.MaxIERatio         = 2;    % burst when I/E ratio < this
+            % MaxIERatio: burst when I/E ratio < this (and E above the noise floor). In
+            %   simulated bursting networks both RatioMethods separate burst bins equally well
+            %   at the same threshold ("smoothed" slightly better); the E noise floor does most of
+            %   the work, and thresholds near the in-burst I/E cut into burst bins.
+            defaultParams.BurstDetection.MaxIERatio         = 2;
             defaultParams.BurstDetection.NoiseFloorPercentile = 5;  % percentile of positive E values as noise floor
             defaultParams.BurstDetection.SmoothWindow       = 9;    % median filter width (bins)
             defaultParams.BurstDetection.PeakCutout         = 150;  % bins +/- burst peak to extract

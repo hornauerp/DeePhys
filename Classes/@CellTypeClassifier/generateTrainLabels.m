@@ -77,10 +77,11 @@ if has_explicit_ce && lower(string(p_outlr.Method)) == "enrichment"
     % units as the eligible pool. Seeds are labelled units whose community is enriched for
     % their own class, so contaminants of the other type in a "pure" culture are left out.
     labelled_fs = ctc.ResponsiveUnitIdx(:) | ctc.CounterexampleUnitIdx(:);
+    [~, cult_unique] = unitCultures(ctc, nf);   % strata of the enrichment test
     eligible_global = false(1, nf.n_unique);
     eligible_global(:) = labelled_fs(nf.unique_to_fs);
     det = selectEnrichmentSeeds(ctc.graphMatrix(), responsive_local, subset_global_idx, ...
-        resp_unique, eligible_global, ctc.Parameters.Community, ctc.Parameters.RNGSeed);
+        resp_unique, eligible_global, ctc.Parameters.Community, ctc.Parameters.RNGSeed, cult_unique);
 elseif has_explicit_ce
     ce_uid_table = unique(unit_ids_table(ctc.CounterexampleUnitIdx));
     ce_subset    = ismember(unique_ud_ids(nf.subset_mask), ce_uid_table);
@@ -94,15 +95,13 @@ else
     if odm == "enrichment"
         % Eligible units: those in cultures where responders occur (e.g. hM3Dq cultures),
         % so the enrichment test is not confounded by culture condition.
-        ut      = ctc.FeatureStore.UnitTable;
-        cult    = FeatureStore.getCultureIDsForUnits(ut.RecordingID, ctc.FeatureStore.MetadataTable, ...
-                      ctc.Parameters.CultureKeys);
-        resp_cultures = unique(cult(ctc.ResponsiveUnitIdx));
-        elig_fs = ismember(cult, resp_cultures);
+        [cult_fs, cult_unique] = unitCultures(ctc, nf);
+        resp_cultures = unique(cult_fs(ctc.ResponsiveUnitIdx));
+        elig_fs = ismember(cult_fs, resp_cultures);
         eligible_global = false(1, nf.n_unique);
         eligible_global(:) = elig_fs(nf.unique_to_fs);
         det = selectEnrichmentSeeds(ctc.graphMatrix(), responsive_local, subset_global_idx, ...
-            resp_unique, eligible_global, ctc.Parameters.Community, ctc.Parameters.RNGSeed);
+            resp_unique, eligible_global, ctc.Parameters.Community, ctc.Parameters.RNGSeed, cult_unique);
     elseif odm == "community"
         det = detectCommunityOutliers(X_feat, responsive_local, subset_responsive, ...
             subset_global_idx, reduction, size(X_all, 1), n_neighbors, resp_unique, ...
@@ -148,4 +147,12 @@ function name = localLabelName(label)
     elseif label == 2; name = 'inhibitory';
     else; name = sprintf('class_%d', label);
     end
+end
+
+function [cult_fs, cult_unique] = unitCultures(ctc, nf)
+% Culture (Parameters.CultureKeys) of each FeatureStore row and of each unique unit.
+    ut = ctc.FeatureStore.UnitTable;
+    cult_fs = FeatureStore.getCultureIDsForUnits(ut.RecordingID, ctc.FeatureStore.MetadataTable, ...
+        ctc.Parameters.CultureKeys);
+    cult_unique = cult_fs(nf.unique_to_fs)';
 end

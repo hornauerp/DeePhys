@@ -18,7 +18,7 @@ classdef UnitData
         TemplateID          double  % 1-indexed template number from Kilosort
         ReferenceElectrode  double  % Channel index of peak-amplitude electrode
         SpikeTimes          double  % (N_spikes x 1) spike times in seconds
-        ReferenceWaveform   double  % (N_samples x 1) peak-channel waveform (raw, not interpolated)
+        ReferenceWaveform   double  % (N_samples x 1) peak-channel waveform, peak-normalised by runQC (not interpolated)
         SamplingRate        double  % Copied from parent recording
         RecordingDuration   double  % Copied from parent recording (seconds)
         KSLabel             string  % Kilosort label ("good" / "mua"), "" if not available

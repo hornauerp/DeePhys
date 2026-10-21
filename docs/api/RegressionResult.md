@@ -9,7 +9,7 @@ result = Regressor.regress(X, Y, opts);
 
 % Aggregate metrics
 summary = RegressionResult.summarizeFolds(result);
-fprintf('R²: %.3f  RMSE: %.3f\n', summary.mean_R2, sqrt(summary.mean_MSE));
+fprintf('R² (pooled out-of-fold): %.3f  RMSE: %.3f\n', summary.R2_pooled, sqrt(summary.mean_MSE));
 
 % Per-fold flat table
 T = RegressionResult.results2table(result);
@@ -39,7 +39,7 @@ Returns a struct with per-fold regression metrics:
 | `R2` | Coefficient of determination (1 − SS_res / SS_tot); `NaN` if target is constant |
 | `Correlation` | Pearson correlation between Y_pred and Y_test |
 | `N` | Number of test objects |
-| `mse_train` | Training MSE (resubstitution) |
+| `mse_train` | Training MSE (OOB for RF, resubstitution otherwise; optimistic for correlated rows) |
 
 ## Static methods
 
@@ -51,8 +51,11 @@ Aggregate metrics across all folds. Returns a struct:
 |---|---|
 | `per_fold` | Table with columns `Fold`, `MSE`, `R2`, `Correlation` |
 | `mean_MSE` | Mean fold MSE |
-| `mean_R2` | Mean fold R² |
-| `mean_Correlation` | Mean fold Pearson correlation |
+| `mean_R2` | Mean fold R² (folds with an undefined R² are skipped) |
+| `mean_Correlation` | Mean fold Pearson correlation (undefined folds skipped) |
+| `R2_pooled` | `1 − SS_res / SS_tot` over the pooled out-of-fold predictions; `NaN` if the pooled target is constant. **The R² to report and to test** (`Regressor.permutationTest` uses it) |
+
+Fold R² compares each fold with its own mean; with grouped CV a fold can hold a single target value (R² undefined) or few rows (unstable), so prefer `R2_pooled` over `mean_R2`.
 
 ### `T = RegressionResult.results2table(result_array)`
 
@@ -60,7 +63,7 @@ Convert to a flat table with one row per test object across all folds. Columns: 
 
 ### `T = RegressionResult.summarizeImportance(result_array)`
 
-Aggregate OOB predictor importance across folds (RF only). Returns a table sorted by `MeanImportance` descending. See [ClassificationResult.summarizeImportance](ClassificationResult.md) for column descriptions.
+Aggregate predictor importance across folds (RF only). With `CVGroups` (default `ImportanceMethod = "auto"`) it is the increase in held-out MSE when a feature is shuffled in the test fold (one shuffle per fold, so noisy for small folds); otherwise out-of-bag permuted-predictor importance. Returns a table sorted by `MeanImportance` descending. See [ClassificationResult.summarizeImportance](ClassificationResult.md) for column descriptions.
 
 ## Properties (inherited from `MLResult`)
 
@@ -70,12 +73,13 @@ Aggregate OOB predictor importance across folds (RF only). Returns a table sorte
 | `Y_pred` | Predicted values (test set) |
 | `Y_test` | True values (test set) |
 | `train_acc` | Training R² (OOB for RF, resubstitution for others) |
-| `predImp` | OOB predictor importance vector (RF only; `[]` otherwise) |
+| `predImp` | Permutation importance vector of this fold (RF only; `[]` otherwise or with `ComputeImportance = false`); held-out-fold or out-of-bag, see `ImportanceMethod` |
 | `Features` | Feature names used (string array) |
-| `Parameters` | Struct with algorithm, K_fold, N_hyper, seed |
+| `Parameters` | Struct with algorithm, normalization_var, K_fold, N_hyper, seed |
+| `Preprocessing` | Fitted imputation, normalisation and column mask of this fold |
 
 ## Properties (RegressionResult-specific)
 
 | Name | Description |
 |---|---|
-| `mse_train` | Training mean squared error |
+| `mse_train` | Training mean squared error (OOB for RF, resubstitution otherwise) |

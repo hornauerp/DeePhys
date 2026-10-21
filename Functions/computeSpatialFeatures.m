@@ -278,12 +278,19 @@ end
 function nw = computeFRGradient(fr, xy, dist_centroid, exc_idx, inh_idx)
     n = numel(fr);
 
-    % Moran's I using inverse-distance weights
+    % Moran's I using inverse-distance weights, on log10 firing rate: rates are roughly
+    % log-normal, and on the raw scale a few fast units dominate the cross-products.
+    % Units on the same reference electrode (distance 0) are the closest pairs; they get
+    % the weight of half the smallest non-zero distance instead of none.
     D = squareform(pdist(xy));
     D(1:n+1:end) = Inf;
+    min_d = min(D(D > 0));
+    if ~isempty(min_d), D(D == 0) = min_d / 2; end
     W = 1 ./ D;
     W(isinf(W)) = 0;
-    nw.SpatialFRMoransI = moransI(fr, W);
+    log_fr = log10(fr);
+    log_fr(~(fr > 0)) = NaN;
+    nw.SpatialFRMoransI = moransI(log_fr, W);
 
     % Center-periphery split (median distance)
     med_dist = median(dist_centroid);

@@ -40,6 +40,24 @@ classdef RecordingProcessor < handle
         Bursts              struct      % Burst detection results
         CellTypeLabels      double      % (1 x N_units) 1=exc, 2=inh, NaN=unclassified
         Status              struct      % Tracks which analyses have been run
+        FeatureVersion      struct = struct()   % FeatureDefinitionVersion each step ran under (missing = unknown, older)
+    end
+
+    properties (Constant)
+        % Version of the feature definitions; raise it whenever a computed feature changes
+        % meaning under the same column name, so FeatureStore.fromProcessors can refuse to mix
+        % them silently.
+        %   (unstamped) definitions before version 2
+        %   2  AUC_* in amplitude x ms; HalfWidth and T2P searched after the trough within 2 ms;
+        %      RegularityMagnitude = spectral peak / mean; SpatialMixingIndex relative to random
+        %      labels; SpatialEIMoransI on unit labels; RichClub with fixed columns;
+        %      BurstFractionSpikes; STTC graph edges by surrogate z-test with BH-FDR;
+        %      RevisedLocalVariation with R = Activity.LvRRefractory (5 ms, was the 2 ms QC
+        %      refractory period); spatial firing-rate Moran's I on log10 rate; cell-type
+        %      burst features from burst onset / offset against a rate-matched null
+        %      (computeCellTypeBurstEI: BurstEI_*, BurstUnit*), replacing BurstLeadTime_*,
+        %      BurstLeadFraction, MeanBurstFraction_*, IntraBurstRate_*, BurstParticipation*
+        FeatureDefinitionVersion = 2
     end
 
     % =====================================================================
@@ -238,7 +256,10 @@ classdef RecordingProcessor < handle
             if isfield(proc.Parameters, 'Activity') && isfield(proc.Parameters.Activity, 'FanoBinWidth')
                 act_params.FanoBinWidth = proc.Parameters.Activity.FanoBinWidth;
             end
-            act_params.RefractoryPeriod = proc.Parameters.QC.RefractoryPeriod;
+            act_params.RefractoryPeriod = 0.005;     % LvR constant R (Shinomoto et al. 2009), not the QC window
+            if isfield(proc.Parameters, 'Activity') && isfield(proc.Parameters.Activity, 'LvRRefractory')
+                act_params.RefractoryPeriod = proc.Parameters.Activity.LvRRefractory;
+            end
             if proc.Parameters.Analyses.Regularity
                 act_params.Regularity = proc.Parameters.Regularity;
             end
@@ -287,6 +308,7 @@ classdef RecordingProcessor < handle
 
             proc.UnitFeatureTable = [feature_tables{:}];
             proc.Status.UnitFeatures = "done";
+            proc.FeatureVersion.UnitFeatures = RecordingProcessor.FeatureDefinitionVersion;
         end
 
         function computeParentFeatures(proc, acg_params)
@@ -391,6 +413,7 @@ classdef RecordingProcessor < handle
                 proc.UnitFeatureTable = parent_tbl;
             end
             proc.Status.ParentFeatures = "done";
+            proc.FeatureVersion.ParentFeatures = RecordingProcessor.FeatureDefinitionVersion;
         end
 
         function computeNetworkFeatures(proc)
@@ -500,6 +523,7 @@ classdef RecordingProcessor < handle
                 proc.NetworkFeatureTable = table();
             end
             proc.Status.NetworkFeatures = RecordingProcessor.stepStatus(n_failed);
+            proc.FeatureVersion.NetworkFeatures = RecordingProcessor.FeatureDefinitionVersion;
         end
 
         function computeConnectivity(proc, methods)
@@ -573,6 +597,7 @@ classdef RecordingProcessor < handle
                 end
             end
             proc.Status.Connectivity = RecordingProcessor.stepStatus(n_failed);
+            proc.FeatureVersion.Connectivity = RecordingProcessor.FeatureDefinitionVersion;
         end
 
         function computeCellTypeFeatures(proc)
@@ -684,18 +709,30 @@ classdef RecordingProcessor < handle
                     'Cell-type activity summaries failed: %s', ME.message);
             end
 
-            % Cell-type burst dynamics
+            % Cell-type burst features: E / I activity around network bursts, timed by burst
+            % onset and offset, each against random "I" sets matched in firing rate
+            % (computeCellTypeBurstEI). Bursts of the "ISINJoint" method carry onsets; for the
+            % other methods they are detected here with detectNetworkBursts.
             try
-                if ~isempty(proc.Bursts) && isfield(proc.Bursts, 'T_start')
-                    [nw_burst, unit_burst] = computeCellTypeBurstFeatures( ...
-                        proc.Bursts, proc.SpikeData.SpikeTimes, proc.SpikeData.SpikeUnits, ...
-                        proc.Units, labels, proc.UnitFeatureTable);
-                    if ~isempty(nw_burst)
-                        proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_burst];
-                    end
-                    if ~isempty(unit_burst) && ~isempty(proc.UnitFeatureTable)
-                        proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_burst];
-                    end
+                [st, su] = RecordingProcessor.qcSpikes(proc);
+                duration = proc.SpikeData.Duration;
+                bursts = proc.Bursts;
+                if isempty(bursts) || ~isfield(bursts, 'Onset')
+                    pb = proc.Parameters.Bursts;
+                    uft = proc.UnitFeatureTable;
+                    fr = NaN(numel(proc.Units), 1); cv = fr;
+                    if ismember('FiringRate', uft.Properties.VariableNames), fr = uft.FiringRate; end
+                    if ismember('CVInterSpikeInterval', uft.Properties.VariableNames), cv = uft.CVInterSpikeInterval; end
+                    bursts = detectNetworkBursts(st, su, duration, TonicMethod=pb.TonicMethod, ...
+                        TonicMinRate=pb.TonicMinRate, FiringRates=fr, CVISI=cv, ShapeLevel=pb.ShapeLevel);
+                end
+                cb = proc.Parameters.CellTypeBursts;
+                [nw_burst, unit_burst] = computeCellTypeBurstEI(st, su, labels, bursts, duration, ...
+                    NNull=cb.NNull, NullStrata=cb.NullStrata, Seed=cb.Seed, ...
+                    MinUnits=cb.MinUnits, MinBursts=cb.MinBursts);
+                proc.NetworkFeatureTable = [proc.NetworkFeatureTable, nw_burst];
+                if ~isempty(proc.UnitFeatureTable)
+                    proc.UnitFeatureTable = [proc.UnitFeatureTable, unit_burst];
                 end
             catch ME
                 n_failed = n_failed + 1;
@@ -722,6 +759,7 @@ classdef RecordingProcessor < handle
             end
 
             proc.Status.CellTypeFeatures = RecordingProcessor.stepStatus(n_failed);
+            proc.FeatureVersion.CellTypeFeatures = RecordingProcessor.FeatureDefinitionVersion;
         end
 
         function computeSpatialAnalysis(proc)
@@ -812,6 +850,7 @@ classdef RecordingProcessor < handle
             end
 
             proc.Status.SpatialFeatures = RecordingProcessor.stepStatus(n_failed);
+            proc.FeatureVersion.SpatialFeatures = RecordingProcessor.FeatureDefinitionVersion;
         end
 
         function runAll(proc)
@@ -851,9 +890,10 @@ classdef RecordingProcessor < handle
             CellTypeLabels        = proc.CellTypeLabels;      %#ok<PROP>
             Parameters            = proc.Parameters;          %#ok<PROP>
             Status                = proc.Status;              %#ok<PROP>
+            FeatureVersion        = proc.FeatureVersion;      %#ok<PROP>
             builtin('save', file_path, 'SpikeDataStruct', 'UnitsStructArray', ...
                 'UnitFeatureTable', 'NetworkFeatureTable', ...
-                'Connectivity', 'Bursts', 'CellTypeLabels', 'Parameters', 'Status');
+                'Connectivity', 'Bursts', 'CellTypeLabels', 'Parameters', 'Status', 'FeatureVersion');
         end
 
     end
@@ -899,6 +939,9 @@ classdef RecordingProcessor < handle
             end
             if isfield(s, 'CellTypeLabels')
                 proc.CellTypeLabels = s.CellTypeLabels;
+            end
+            if isfield(s, 'FeatureVersion')
+                proc.FeatureVersion = s.FeatureVersion;
             end
             if isfield(s, 'Parameters')
                 % Parameters added since the file was saved take their defaults (steps read
@@ -1078,6 +1121,7 @@ classdef RecordingProcessor < handle
             params.QC.Bombcell.Overrides     = struct();
 
             params.Activity.FanoBinWidth = 0.1;
+            params.Activity.LvRRefractory = 0.005;   % s, refractory constant R of the revised local variation (Shinomoto et al. 2009)
 
             params.Bursts.Method      = "ISIN";      % legacy; "ISINJoint" = detectNetworkBursts, "logISI"
             params.Bursts.TonicMethod = "gini";      % "ISINJoint": unit removal before detection (with TonicMinRate)
@@ -1085,6 +1129,14 @@ classdef RecordingProcessor < handle
             params.Bursts.TonicMinRate = "median";   % "ISINJoint": units below this rate (Hz or "median") are never removed
             params.Bursts.MergeFactor = 0.5;
             params.Bursts.Binning     = 0.1;
+
+            % Cell-type burst features (computeCellTypeBurstEI): rate-matched null draws and
+            % the minimum bursts / units per type below which they are NaN
+            params.CellTypeBursts.NNull      = 200;
+            params.CellTypeBursts.NullStrata = 5;
+            params.CellTypeBursts.Seed       = 1;
+            params.CellTypeBursts.MinUnits   = 3;
+            params.CellTypeBursts.MinBursts  = 5;
 
             params.Regularity.Binning = 0.1;
             params.Regularity.N_peaks = 20;
@@ -1109,7 +1161,9 @@ classdef RecordingProcessor < handle
             params.STTC.SurrogateMethod = 'jitter';
             params.STTC.JitterSD        = [];      % s, surrogate jitter SD; empty = 2 x MaxLag (must exceed MaxLag)
             params.STTC.N_Surrogates    = 100;
-            params.STTC.Percentile      = 95;
+            params.STTC.EdgeTest        = "fdr";   % "fdr": z vs surrogates + BH across pairs; "percentile": per-pair
+            params.STTC.FDR             = 0.05;
+            params.STTC.Percentile      = 95;      % EdgeTest "percentile" only
 
             params.GraphFeatures.SmallWorldnessIterations = 100;
             % Types: "binary" (default), "weighted", or ["binary","weighted"]. Weighted
@@ -1474,6 +1528,7 @@ function tbl = removeCellTypeCols(tbl)
         "MeanBurstFraction_E", "MeanBurstFraction_I", ...
         "IntraBurstRate_E", "IntraBurstRate_I", ...
         "BurstParticipation_E", "BurstParticipation_I", "BurstParticipationRate", ...
+        "BurstEI_", "BurstUnit", ...
         "MeanSTTC_EE", "MeanSTTC_II", "MeanSTTC_EI", "STTCSynchronyIndex", ...
         "MeanSTTC_WithinType", "MeanSTTC_CrossType"];
     remove = false(1, numel(cols));

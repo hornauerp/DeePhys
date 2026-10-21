@@ -72,6 +72,6 @@ Remove a previously registered custom set. Built-in sets (`"core"`, `"full"`) ca
 
 ## Notes
 
-- Feature group names correspond to the column prefixes in `FeatureStore.UnitTable` (e.g. `"ActivityFeatures"`, `"WaveformFeatures"`, `"RegularityFeatures"`, `"ACG"`, `"FullACG"`, `"ReferenceWaveform"`, `"Catch22"`; network groups `"NetworkRegularity"`, `"NetworkCatch22"`, `"NetworkGraph"`). Unknown names are matched as column prefixes and may select nothing.
+- Feature group names correspond to the column prefixes in `FeatureStore.UnitTable` (e.g. `"ActivityFeatures"`, `"WaveformFeatures"`, `"RegularityFeatures"`, `"BombcellMetrics"`, `"BurstParticipation"` (fraction of a unit's spikes in network bursts), `"ACG"`, `"FullACG"`, `"ReferenceWaveform"`, `"Catch22"`; network groups `"NetworkRegularity"`, `"NetworkCatch22"`, `"NetworkGraph"`). Unknown names are matched as column prefixes and may select nothing.
 - The `FeatureSet` option in `FeatureStore.unitMatrix()` and `Experiment` opts delegates to `FeatureCatalog.features()` internally.
 - Using `"core"` is recommended for publication-quality results: it removes redundant and unstable features.

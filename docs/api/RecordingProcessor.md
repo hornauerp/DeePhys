@@ -49,7 +49,7 @@ procs = RecordingProcessor.loadMany({path1, path2, path3});
 | `proc.computeParentFeatures()` | Compute ACGs from the parent (concatenated) recording; stores as `Parent_ACG*` columns in `UnitFeatureTable` |
 | `proc.computeNetworkFeatures()` | Extract network-level features into `NetworkFeatureTable` |
 | `proc.computeConnectivity()` | Compute CCG / FullCCG / STTC / DDC connectivity; stores in `proc.Connectivity` |
-| `proc.computeCellTypeFeatures()` | E/I-stratified graph, balance, burst, and correlation features (requires `CellTypeLabels`) |
+| `proc.computeCellTypeFeatures()` | E/I-stratified graph, balance, burst, and correlation features (requires `CellTypeLabels`). Burst features (`BurstEI_*`, `BurstUnit*`, from `computeCellTypeBurstEI`) are timed by burst onset and offset and come with `_Excess` columns relative to random "I" sets matched in firing rate; `params.CellTypeBursts` sets the null (`NNull`, `NullStrata`, `Seed`) and the minimum bursts and units per type |
 | `proc.computeSpatialAnalysis()` | Spatial distribution features for units and cell types |
 | `proc.runAll()` | Convenience: run all enabled analyses in sequence |
 
@@ -98,6 +98,13 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `Bombcell.Enable` | `false` | Filter using Bombcell quality metrics (`cluster_bc_unitType.tsv`; missing table: warning, standard QC only) |
 | `Bombcell.AcceptedTypes` | `[1, 2]` | Bombcell unit types to keep (1=good, 2=MUA) |
 
+### Activity parameters (`params.Activity`)
+
+| Field | Default | Description |
+|---|---|---|
+| `FanoBinWidth` | `0.1` | Bin width (s) of the Fano factor |
+| `LvRRefractory` | `0.005` | Refractory constant R (s) of the revised local variation (Shinomoto et al. 2009); independent of `QC.RefractoryPeriod` |
+
 ### Burst parameters (`params.Bursts`)
 
 | Field | Default | Description |
@@ -118,10 +125,12 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `CCG.Duration` | `0.1` | One-sided lag (s) |
 | `CCG.Alpha` | `0.001` | Significance threshold for edge detection |
 | `CCG.InhibitoryCriterion` | `"strict"` | Inhibitory links: `"strict"` (causal trough below the pre-spike mean and the slow 10 ms-to-edge flank; no reverse artefact of strong excitation) or `"cellexplorer"` (CellExplorer `ce_MonoSynConvClick`, the previous DeePhys default; many false positives) |
-| `STTC.MaxLag` | `0.05` | Synchrony window (s) |
+| `STTC.MaxLag` | `0.05` | Synchrony window (s). In bursting cultures a 50 ms window mostly measures joint participation in network bursts; use about `0.01` for spike-level synchrony (Cutts & Eglen 2014) |
 | `STTC.JitterSD` | `[]` | SD (s) of the spike jitter of the surrogates; empty = 2 × `MaxLag`. It must exceed `MaxLag` |
 | `STTC.N_Surrogates` | `100` | Surrogate count for significance |
-| `STTC.Percentile` | `95` | Significance percentile |
+| `STTC.EdgeTest` | `"fdr"` | Edge test of `.bu`: `"fdr"` z-scores each pair against its surrogates and applies Benjamini-Hochberg control across pairs; `"percentile"` thresholds each pair at its own surrogate percentile (about `100 - Percentile` % false edges among independent pairs) |
+| `STTC.FDR` | `0.05` | False discovery rate of the `"fdr"` edge test |
+| `STTC.Percentile` | `95` | Significance percentile (`EdgeTest = "percentile"` only) |
 | `DDC.BinSize` | `0.001` | Bin width (s) |
 | `DDC.N_Surrogates` | `100` | Surrogate count |
 | `DDC.Percentile` | `95` | Significance percentile |

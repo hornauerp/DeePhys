@@ -1,6 +1,6 @@
 # UnitData
 
-Per-unit raw data container. **Value class**, no back-reference to the parent recording. References its parent by `RecordingID` (a string key), not an object handle — eliminating the circular-reference problem that required `saveobj`/`loadobj` hacks in the old `Unit` ↔ `MEArecording` design.
+Per-unit data container (spike times, peak-normalised reference waveform, ACG). **Value class**, no back-reference to the parent recording. References its parent by `RecordingID` (a string key), not an object handle — eliminating the circular-reference problem that required `saveobj`/`loadobj` hacks in the old `Unit` ↔ `MEArecording` design.
 
 ## Example
 
@@ -37,7 +37,7 @@ All arguments are optional — call with no arguments for array pre-allocation.
 | `TemplateID` | double | 1-indexed template number from Kilosort |
 | `ReferenceElectrode` | double | Channel index of the peak-amplitude electrode |
 | `SpikeTimes` | double | (N_spikes × 1) spike times in seconds |
-| `ReferenceWaveform` | double | (N_samples × 1) peak-channel waveform |
+| `ReferenceWaveform` | double | (N_samples × 1) template waveform on the peak channel, **peak-normalised**: `RecordingProcessor.runQC` divides it by its maximum absolute value, so amplitudes are relative (max abs = 1), not µV; the absolute amplitude is only used for the QC amplitude filter. Not interpolated (native sampling) |
 | `SamplingRate` | double | Copied from parent recording |
 | `RecordingDuration` | double | Copied from parent recording (seconds) |
 | `KSLabel` | string | Kilosort label (`"good"` / `"mua"`); `""` if not available |
