@@ -280,6 +280,74 @@ classdef MLUtils
             feat_names(bad)   = [];
         end
 
+        function [X, Y, opts] = dropMissingTargets(X, Y, opts)
+        % DROPMISSINGTARGETS  Remove rows whose label / target is missing (NaN, <missing>,
+        %   <undefined>, ""), together with the per-row option vectors (CVGroups,
+        %   NormalizationGroups, CovariateLabels, StratificationVar). A missing label would
+        %   otherwise become a class of its own (unique treats every NaN / <missing> apart).
+            if ischar(Y), Y = string(cellstr(Y)); end   % one label per row of a char matrix
+            Y = Y(:);
+            miss = ismissing(Y);
+            if isstring(Y) || iscellstr(Y) || ischar(Y)
+                miss = miss | strlength(string(Y)) == 0;
+            end
+            if ~any(miss)
+                return
+            end
+            warning('MLUtils:missingTargets', '%d of %d rows have no label / target and are left out.', ...
+                sum(miss), numel(Y));
+            n = numel(Y);
+            X = X(~miss, :);
+            Y = Y(~miss);
+            for f = ["CVGroups", "NormalizationGroups", "CovariateLabels", "StratificationVar"]
+                if isfield(opts, f) && ~isempty(opts.(f)) && numel(opts.(f)) == n
+                    v = opts.(f);
+                    opts.(f) = v(~miss);
+                end
+            end
+        end
+
+        function cvp = groupedPartition(groups, k)
+        % GROUPEDPARTITION  cvpartition whose folds keep each group together, for the inner
+        %   cross-validation of hyperparameter searches ([] if no grouping is possible: fewer
+        %   than 2 groups, or a MATLAB release without grouped partitions).
+            cvp = [];
+            groups = groups(:);
+            n_groups = numel(unique(groups));
+            if n_groups < 2
+                return
+            end
+            k = min(k, n_groups);
+            try
+                cvp = cvpartition(groups, 'KFold', k, 'Stratify', false, 'GroupingVariables', groups);
+            catch
+                warning('MLUtils:noGroupedPartition', ['This MATLAB release has no grouped ' ...
+                    'cvpartition; the hyperparameter search uses ungrouped folds.']);
+            end
+        end
+
+        function imp = testPermutationImportance(mdl, X_test, Y_test, is_classification, rs)
+        % TESTPERMUTATIONIMPORTANCE  Permutation importance on the held-out fold: increase of
+        %   the test loss (classification error / MSE) when one feature is shuffled. With
+        %   grouped CV this measures what generalises to unseen groups; out-of-bag importance
+        %   draws its OOB rows from the same groups as the training rows and rewards features
+        %   that only identify a group (culture fingerprints).
+            if nargin < 5, rs = RandStream('twister', 'Seed', 1); end
+            if is_classification
+                loss = @(yp) mean(yp(:) ~= Y_test(:));
+            else
+                loss = @(yp) mean((yp(:) - Y_test(:)).^2);
+            end
+            base = loss(predict(mdl, X_test));
+            n_f = size(X_test, 2);
+            imp = zeros(1, n_f);
+            for f = 1:n_f
+                Xp = X_test;
+                Xp(:, f) = X_test(randperm(rs, size(X_test, 1)), f);
+                imp(f) = loss(predict(mdl, Xp)) - base;
+            end
+        end
+
         function checkClassBalance(Y)
         % CHECKCLASSBALANCE  Warn if majority class is more than 3x larger than minority.
             classes = unique(Y);

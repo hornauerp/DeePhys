@@ -27,7 +27,7 @@ classdef MLPipeline
             params.tSNE = struct();
         end
 
-        function [clf, train_acc] = createClassifier(X_train, Y_train, alg, N_hyper, params)
+        function [clf, train_acc] = createClassifier(X_train, Y_train, alg, N_hyper, params, train_groups)
         % CREATECLASSIFIER  Train a classifier with optional hyperparameter optimization.
         %
         % INPUTS:
@@ -42,16 +42,29 @@ classdef MLPipeline
                 alg string = "rf"
                 N_hyper (1,1) double = 0
                 params struct = MLPipeline.returnDefaultParams()
+                train_groups = []   % CV groups of the training rows: grouped inner CV
             end
 
             if N_hyper > 0
                 opt_opts = struct('AcquisitionFunctionName', 'expected-improvement-plus', ...
                     'MaxObjectiveEvaluations', N_hyper, 'ShowPlots', false, 'Verbose', 0);
+                % Inner folds keep each group (culture) together; random folds reward
+                % hyperparameters that memorise groups
+                if ~isempty(train_groups)
+                    cvp = MLUtils.groupedPartition(train_groups, 5);
+                    if ~isempty(cvp), opt_opts.CVPartition = cvp; end
+                end
                 switch alg
                     case 'svm'
-                        clf = fitcsvm(X_train, Y_train, 'Prior', params.RF.Prior, ...
-                            'OptimizeHyperparameters', 'all', ...
-                            'HyperparameterOptimizationOptions', opt_opts);
+                        if numel(unique(Y_train)) > 2   % fitcsvm is binary-only
+                            clf = fitcecoc(X_train, Y_train, 'Learners', templateSVM(), 'Prior', params.RF.Prior, ...
+                                'OptimizeHyperparameters', 'auto', ...
+                                'HyperparameterOptimizationOptions', opt_opts);
+                        else
+                            clf = fitcsvm(X_train, Y_train, 'Prior', params.RF.Prior, ...
+                                'OptimizeHyperparameters', 'all', ...
+                                'HyperparameterOptimizationOptions', opt_opts);
+                        end
                     case 'cnb'
                         clf = fitcnb(X_train, Y_train, 'Prior', params.RF.Prior, ...
                             'OptimizeHyperparameters', 'all', ...
@@ -92,7 +105,9 @@ classdef MLPipeline
                             'Learners', t, 'Options', statset("UseParallel", true));
                 end
                 if alg == "rf"
-                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classiferror');  % OOB ≈ held-out performance, not true training accuracy
+                    % OOB accuracy: held-out only for exchangeable rows; with grouped rows (units
+                    % of a culture) the OOB rows share groups with the in-bag rows -> optimistic
+                    train_acc = 1 - oobLoss(clf, 'LossFun', 'classiferror');
                 else
                     train_acc = 1 - resubLoss(clf, 'LossFun', 'classiferror');  % resubstitution; optimistic (~1.0 for SVM/KNN)
                 end
@@ -114,7 +129,7 @@ classdef MLPipeline
             end
         end
 
-        function [mdl, train_r2] = createRegressor(X_train, Y_train, alg, N_hyper)
+        function [mdl, train_r2] = createRegressor(X_train, Y_train, alg, N_hyper, train_groups)
         % CREATEREGRESSOR  Train a regression model with optional hyperparameter optimization.
         %
         % INPUTS:
@@ -131,11 +146,16 @@ classdef MLPipeline
                 Y_train {isnumeric}
                 alg     string = "rf"
                 N_hyper (1,1) double = 0
+                train_groups = []   % CV groups of the training rows: grouped inner CV
             end
 
             params = MLPipeline.returnDefaultParams();
             opt_opts = struct('AcquisitionFunctionName', 'expected-improvement-plus', ...
                 'MaxObjectiveEvaluations', N_hyper, 'ShowPlots', false, 'Verbose', 0);
+            if N_hyper > 0 && ~isempty(train_groups)
+                cvp = MLUtils.groupedPartition(train_groups, 5);   % inner folds keep groups together
+                if ~isempty(cvp), opt_opts.CVPartition = cvp; end
+            end
 
             if N_hyper > 0
                 switch alg
@@ -143,9 +163,9 @@ classdef MLPipeline
                         mdl = fitrsvm(X_train, Y_train, ...
                             'OptimizeHyperparameters', 'all', ...
                             'HyperparameterOptimizationOptions', opt_opts);
-                    case 'knn'   % MATLAB has no fitrknn: K chosen by leave-one-out error
+                    case 'knn'   % MATLAB has no fitrknn: K chosen by leave-one-(group-)out error
                         mdl = KNNRegressionModel(X_train, Y_train, ...
-                            KNNRegressionModel.selectK(X_train, Y_train));
+                            KNNRegressionModel.selectK(X_train, Y_train, [], train_groups));
                     case 'rf'
                         hyperparams = {'NumLearningCycles', 'MinLeafSize', 'MaxNumSplits', 'NumVariablesToSample'};
                         t = templateTree('Reproducible', true);

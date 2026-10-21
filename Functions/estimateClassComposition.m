@@ -5,8 +5,8 @@ function [T, post, p, mdl_all] = estimateClassComposition(Z, train_rows, y, grou
 %   [T, post, p] = estimateClassComposition(Z, train_rows, y, groups)
 %
 % 1. Ridge logistic regression on the training units (labels y: 2 = positive class, e.g.
-%    inhibitory). Training units get out-of-fold probabilities (cross-fitting), all others the
-%    model fitted on every training unit.
+%    inhibitory). Training units get out-of-fold probabilities (cross-fitting with folds by
+%    group, i.e. culture), all others the model fitted on every training unit.
 % 2. Per group (culture / well): EM re-estimation of the group's positive fraction and of the
 %    unit posteriors under that fraction (adjustClassPrior; Saerens et al. 2002), with a
 %    bootstrap interval over the group's units.
@@ -54,14 +54,27 @@ prob = @(mdl, rows) localProb(mdl, Z(rows, :));
 p = nan(N, 1);
 mdl_all = fit(train_rows, y);
 p(:) = prob(mdl_all, (1:N)');
-k = min(opts.NFolds, min(sum(y), sum(~y)));
-if k >= 2
-    cv = cvpartition(y, 'KFold', k);
-    for f = 1:k
-        tr = training(cv, f); te = test(cv, f);
-        mdl = fit(train_rows(tr), y(tr));
-        p(train_rows(te)) = prob(mdl, train_rows(te));
+% Folds by group: units of one culture are correlated, so a unit-level split would score each
+% training unit with a model that saw its culture mates (optimistic probabilities).
+[~, ~, gi] = unique(groups(train_rows));
+fold = zeros(numel(train_rows), 1);
+if max(gi) >= 2
+    k = min(opts.NFolds, max(gi));
+    fold_of_group = mod(randperm(max(gi)), k) + 1;
+    fold = fold_of_group(gi);
+    fold = fold(:);
+else
+    k = min(opts.NFolds, min(sum(y), sum(~y)));   % a single group: unit-level folds
+    if k >= 2
+        cv = cvpartition(y, 'KFold', k);
+        for f = 1:k, fold(test(cv, f)) = f; end
     end
+end
+for f = 1:max(fold)
+    te = fold == f; tr = ~te;
+    if ~any(y(tr)) || all(y(tr)), continue, end   % both classes needed; keep the full-model p
+    mdl = fit(train_rows(tr), y(tr));
+    p(train_rows(te)) = prob(mdl, train_rows(te));
 end
 pi_tr = mean(y);
 

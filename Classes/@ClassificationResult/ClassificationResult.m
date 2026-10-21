@@ -28,48 +28,39 @@ classdef ClassificationResult < MLResult
         end
 
         function metrics = computeMetrics(r)
-        % COMPUTEMETRICS  Compute accuracy, F1, precision, recall from predictions.
+        % COMPUTEMETRICS  Accuracy and macro-averaged precision, recall and F1 (over the
+        %   classes present in Y_test or Y_pred). Always macro: the F1 of one arbitrary
+        %   "positive" class for two-class folds made mean_F1 average different metrics when
+        %   grouped folds of a multiclass problem hold two classes only.
             Y_pred = r.Y_pred(:);
             Y_test = r.Y_test(:);
-            classes   = unique([Y_pred; Y_test]);
-            n_classes = length(classes);
-
             metrics.Accuracy  = mean(Y_pred == Y_test);
             metrics.N         = length(Y_test);
             metrics.train_acc = r.train_acc;
-
-            if n_classes == 2
-                pos = classes(1);
-                tp  = sum(Y_pred == pos & Y_test == pos);
-                fp  = sum(Y_pred == pos & Y_test ~= pos);
-                fn  = sum(Y_pred ~= pos & Y_test == pos);
-                precision = tp / max(tp + fp, 1);
-                recall    = tp / max(tp + fn, 1);
-                metrics.Precision = precision;
-                metrics.Recall    = recall;
-                metrics.F1_score  = 2 * precision * recall / max(precision + recall, eps);
-            else
-                prec_sum = 0; rec_sum = 0; f1_sum = 0;
-                for c = 1:n_classes
-                    tp  = sum(Y_pred == classes(c) & Y_test == classes(c));
-                    fp  = sum(Y_pred == classes(c) & Y_test ~= classes(c));
-                    fn  = sum(Y_pred ~= classes(c) & Y_test == classes(c));
-                    P_c = tp / max(tp + fp, 1);
-                    R_c = tp / max(tp + fn, 1);
-                    prec_sum = prec_sum + P_c;
-                    rec_sum  = rec_sum  + R_c;
-                    f1_sum   = f1_sum   + 2 * P_c * R_c / max(P_c + R_c, eps);
-                end
-                metrics.Precision = prec_sum / n_classes;
-                metrics.Recall    = rec_sum  / n_classes;
-                metrics.F1_score  = f1_sum   / n_classes;
-            end
+            [metrics.Precision, metrics.Recall, metrics.F1_score] = ...
+                ClassificationResult.macroScores(Y_pred, Y_test);
             metrics.ConfusionMatrix = confusionmat(Y_test, Y_pred);
         end
 
     end
 
     methods (Static)
+
+        function [P, R, F1] = macroScores(Y_pred, Y_test)
+        % MACROSCORES  Macro-averaged precision, recall and F1 over the classes in Y_test ∪ Y_pred.
+            classes = unique([Y_pred(:); Y_test(:)]);
+            n = numel(classes);
+            Pc = zeros(n, 1); Rc = Pc; Fc = Pc;
+            for c = 1:n
+                tp = sum(Y_pred == classes(c) & Y_test == classes(c));
+                fp = sum(Y_pred == classes(c) & Y_test ~= classes(c));
+                fn = sum(Y_pred ~= classes(c) & Y_test == classes(c));
+                Pc(c) = tp / max(tp + fp, 1);
+                Rc(c) = tp / max(tp + fn, 1);
+                Fc(c) = 2 * Pc(c) * Rc(c) / max(Pc(c) + Rc(c), eps);
+            end
+            P = mean(Pc); R = mean(Rc); F1 = mean(Fc);
+        end
 
         function T = results2table(result_array)
         % RESULTS2TABLE  Convert a ClassificationResult array to a flat table.
@@ -101,7 +92,8 @@ classdef ClassificationResult < MLResult
         %
         % Returns struct with: per_fold (table), mean_accuracy, std_accuracy, mean_F1, and
         % balanced_accuracy (mean per-class recall over the pooled out-of-fold predictions,
-        % robust to class imbalance and to unequal grouped-CV fold sizes).
+        % robust to class imbalance and to unequal grouped-CV fold sizes) and macro_F1 (macro-F1
+        % over the same pooled predictions).
             n_folds = length(result_array);
             accs = zeros(n_folds, 1);
             f1s  = zeros(n_folds, 1);
@@ -121,6 +113,7 @@ classdef ClassificationResult < MLResult
             classes = unique(y_true);
             recall = arrayfun(@(c) mean(y_pred(y_true == c) == c), classes);
             summary.balanced_accuracy = mean(recall);
+            [~, ~, summary.macro_F1] = ClassificationResult.macroScores(y_pred, y_true);   % pooled out-of-fold
         end
 
     end

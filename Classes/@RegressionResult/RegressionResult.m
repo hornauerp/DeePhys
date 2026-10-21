@@ -71,7 +71,11 @@ classdef RegressionResult < MLResult
         function summary = summarizeFolds(result_array)
         % SUMMARIZEFOLDS  Compute per-fold and aggregate regression metrics.
         %
-        % Returns struct with: per_fold (table), mean_MSE, mean_R2, mean_Correlation.
+        % Returns struct with: per_fold (table), mean_MSE, mean_R2, mean_Correlation, and
+        % R2_pooled: 1 - SS_res / SS_tot over the pooled out-of-fold predictions. The fold R²
+        % compares each fold with its own mean; with grouped folds a fold can hold a single
+        % target value (R² undefined) and few rows (unstable), so R2_pooled is the summary
+        % to report and to test (Regressor.permutationTest). mean_R2 skips undefined folds.
             n_folds = length(result_array);
             mses = zeros(n_folds, 1);
             r2s  = zeros(n_folds, 1);
@@ -85,8 +89,16 @@ classdef RegressionResult < MLResult
             summary.per_fold         = table((1:n_folds)', mses, r2s, cors, ...
                 'VariableNames', {'Fold', 'MSE', 'R2', 'Correlation'});
             summary.mean_MSE         = mean(mses);
-            summary.mean_R2          = mean(r2s);
-            summary.mean_Correlation = mean(cors);
+            summary.mean_R2          = mean(r2s, 'omitnan');
+            summary.mean_Correlation = mean(cors, 'omitnan');
+            y_true = cell2mat(arrayfun(@(r) r.Y_test(:), result_array(:), 'UniformOutput', false));
+            y_pred = cell2mat(arrayfun(@(r) r.Y_pred(:), result_array(:), 'UniformOutput', false));
+            ss_tot = sum((y_true - mean(y_true)).^2);
+            if isempty(y_true) || ss_tot == 0
+                summary.R2_pooled = NaN;
+            else
+                summary.R2_pooled = 1 - sum((y_pred - y_true).^2) / ss_tot;
+            end
         end
 
     end

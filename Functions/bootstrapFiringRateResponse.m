@@ -212,10 +212,11 @@ for u = 1:n_units
         lower_idx = max(1, round(alpha/2 * total_iter));
         upper = sorted_null(min(upper_idx, total_iter));
         lower = sorted_null(lower_idx);
-        % Two-tailed empirical p-value
-        p_values(u) = 2 * min( ...
-            mean(bootstrp_diff(u,:) >= emp_diff(u)), ...
-            mean(bootstrp_diff(u,:) <= emp_diff(u)));
+        % Two-tailed empirical p-value with the +1 correction (never exactly 0, which BH-FDR
+        % would always pass); the calls below use the quantile thresholds, not this value
+        p_values(u) = min(1, 2 * min( ...
+            (1 + sum(bootstrp_diff(u,:) >= emp_diff(u))) / (1 + total_iter), ...
+            (1 + sum(bootstrp_diff(u,:) <= emp_diff(u))) / (1 + total_iter)));
     else
         pd    = fitdist(bootstrp_diff(u, :)', 'Normal');
         upper = icdf(pd, 1 - alpha / 2);

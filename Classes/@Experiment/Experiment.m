@@ -145,7 +145,8 @@ classdef Experiment < handle
             end
             opts = Experiment.fillOpts(opts);
 
-            [X, Y, ~, norm_groups] = exp.prepareML(level, regression_var, opts);
+            [X, Y, cv_groups, norm_groups] = exp.prepareML(level, regression_var, opts);
+            opts.CVGroups            = cv_groups;   % as in classify: rows of one culture stay in one fold
             opts.NormalizationGroups = norm_groups;
             if isnumeric(Y)
                 Y_num = Y;

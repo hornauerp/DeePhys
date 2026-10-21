@@ -45,6 +45,7 @@ classdef Regressor
             end
 
             opts = Regressor.defaultOpts(opts);
+            [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);   % NaN targets
 
             % Reproducibility
             if ~isempty(opts.Seed)
@@ -92,17 +93,16 @@ classdef Regressor
                     continue
                 end
 
-                [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, opts.NHyper);
+                train_groups = [];
+                if use_gcv, train_groups = cv_groups(train_idx); end
+                [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, ...
+                    opts.NHyper, train_groups);
                 Y_pred = predict(mdl, X_test);
 
-                if opts.Algorithm == "rf" && opts.ComputeImportance
-                    predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
-                else
-                    predImp = [];
-                end
+                predImp = Regressor.importance(mdl, X_test, Y_test, opts);
 
                 if opts.Algorithm == "rf"
-                    mse_train_val = oobLoss(mdl);       % OOB ≈ held-out performance, not true training MSE
+                    mse_train_val = oobLoss(mdl);       % OOB MSE; optimistic when rows of a group are correlated
                 else
                     mse_train_val = resubLoss(mdl);     % resubstitution; optimistic (~0 for SVM/KNN)
                 end
@@ -147,9 +147,10 @@ classdef Regressor
         %   n_permutations - number of permutations (default 100)
         %
         % OUTPUTS:
-        %   p_value   - fraction of null runs with R² >= observed
+        %   p_value   - fraction of null runs with R² >= observed (undefined null R² counted)
         %   null_r2s  - (n_permutations x 1) null R² distribution
-        %   obs_r2    - observed mean R² from unpermuted regress()
+        %   obs_r2    - observed pooled out-of-fold R² (summarizeFolds .R2_pooled) of the
+        %               unpermuted regress(); rows with a NaN target are left out
             arguments
                 X              table
                 Y              {isnumeric}
@@ -157,9 +158,13 @@ classdef Regressor
                 n_permutations (1,1) double = 100
             end
 
+            [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);   % before shuffling targets
             obs_result  = Regressor.regress(X, Y, opts);
             obs_summary = RegressionResult.summarizeFolds(obs_result);
-            obs_r2      = obs_summary.mean_R2;
+            obs_r2      = obs_summary.R2_pooled;
+            % A NaN statistic would compare as never exceeded and return the smallest p
+            assert(~isnan(obs_r2), 'Regressor:undefinedR2', ...
+                'The observed out-of-fold R² is undefined (constant target).');
 
             Y = Y(:);
             groups = Regressor.resolveGroups(Regressor.defaultOpts(opts).CVGroups, numel(Y));
@@ -177,10 +182,11 @@ classdef Regressor
                 Y_perm = permute_fn();
                 perm_result  = Regressor.regress(X, Y_perm, perm_opts);
                 perm_summary = RegressionResult.summarizeFolds(perm_result);
-                null_r2s(p)  = perm_summary.mean_R2;
+                null_r2s(p)  = perm_summary.R2_pooled;
             end
 
-            p_value = (1 + sum(null_r2s >= obs_r2)) / (1 + n_permutations);
+            % Undefined null runs count as reaching the observed value (conservative)
+            p_value = (1 + sum(null_r2s >= obs_r2 | isnan(null_r2s))) / (1 + n_permutations);
 
             AnalysisLog.instance().add('Regressor.permutationTest', ...
                 struct('n_permutations', n_permutations, 'scheme', scheme, 'opts', opts), ...
@@ -237,6 +243,25 @@ classdef Regressor
             if ~isfield(opts, 'CVGroups'),            opts.CVGroups = [];          end
             if ~isfield(opts, 'StratificationVar'),   opts.StratificationVar = []; end
             if ~isfield(opts, 'ComputeImportance'),   opts.ComputeImportance = true; end
+            if ~isfield(opts, 'ImportanceMethod'),    opts.ImportanceMethod = "auto"; end
+        end
+
+        function predImp = importance(mdl, X_test, Y_test, opts)
+        % IMPORTANCE  RF importance per fold; ImportanceMethod as in Classifier.classify
+        %   ("auto": held-out-fold permutation importance with CVGroups, otherwise OOB).
+            predImp = [];
+            if opts.Algorithm ~= "rf" || ~opts.ComputeImportance
+                return
+            end
+            method = string(opts.ImportanceMethod);
+            if method == "auto"
+                if isempty(opts.CVGroups), method = "oob"; else, method = "test"; end
+            end
+            if method == "test"
+                predImp = MLUtils.testPermutationImportance(mdl, X_test, Y_test, false);
+            else
+                predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
+            end
         end
 
         function g = resolveGroups(groups_input, N)

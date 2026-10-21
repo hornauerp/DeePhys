@@ -37,8 +37,16 @@ classdef Classifier
         %     .PoolingValues     - cell array to merge label values
         %     .GroupLabels       - (optional) string array of class label names
         %     .Prior             - 'empirical' (default) or 'uniform' (equal class weight)
-        %     .ComputeImportance - RF OOB permutation importance per fold (default true;
+        %     .ComputeImportance - RF permutation importance per fold (default true;
         %                          the slowest step, switch off when only accuracy is needed)
+        %     .ImportanceMethod  - "auto" (default: "test" with CVGroups, else "oob"), "test"
+        %                          (shuffle a feature in the held-out fold) or "oob"
+        %                          (out-of-bag; with grouped data the OOB rows come from the
+        %                          training groups and favour group-identifying features)
+        %
+        % Rows with a missing label are left out (warning). result(k).train_acc is the OOB
+        % (RF) or resubstitution accuracy on the training rows: optimistic whenever rows of a
+        % group are correlated; the held-out estimate is summarizeFolds(result).
         %
         % OUTPUTS:
         %   result - (1 x K) ClassificationResult array, one per fold
@@ -49,7 +57,9 @@ classdef Classifier
             end
 
             opts = Classifier.defaultOpts(opts);
+            [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);
             [Y, group_labels] = Classifier.prepareLabels(Y, opts.PoolingValues);
+            n_classes = numel(group_labels);
 
             % Reproducibility: fix rng seed before building CV partition.
             if ~isempty(opts.Seed)
@@ -102,14 +112,16 @@ classdef Classifier
 
                 clf_params = MLPipeline.returnDefaultParams();
                 clf_params.RF.Prior = opts.Prior;
-                [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, opts.Algorithm, opts.NHyper, clf_params);
+                train_groups = [];
+                if ~isempty(cv_groups), train_groups = cv_groups(train_idx); end
+                [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, opts.Algorithm, ...
+                    opts.NHyper, clf_params, train_groups);
                 [Y_pred, scores] = predict(clf, X_test);
+                % One score column per class of the whole data set (Score_j = class j), also
+                % when a class is missing from this fold's training rows
+                scores = Classifier.expandScores(scores, clf.ClassNames, n_classes);
 
-                if opts.Algorithm == "rf" && opts.ComputeImportance
-                    predImp = oobPermutedPredictorImportance(clf, 'Options', statset('UseParallel', true));
-                else
-                    predImp = [];
-                end
+                predImp = Classifier.importance(clf, X_test, Y_test, opts, true);
 
                 result(k) = ClassificationResult( ...
                     'Mdl',         clf, ...
@@ -175,6 +187,7 @@ classdef Classifier
                 n_permutations (1,1) double = 100
             end
             opts = Classifier.defaultOpts(opts);
+            [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);   % before shuffling labels
 
             % Observed balanced accuracy
             obs_result = Classifier.classify(X, Y, opts);
@@ -271,6 +284,9 @@ classdef Classifier
                 end
                 X_mat = MLUtils.applyPreprocessing(r.Preprocessing, X, norm_groups);
                 [Y_idx, scores] = predict(r.Mdl, X_mat);
+                if ~isempty(r.GroupLabels)
+                    scores = Classifier.expandScores(scores, r.Mdl.ClassNames, numel(r.GroupLabels));
+                end
                 if ~isempty(r.GroupLabels) && isnumeric(Y_idx)
                     Y_pred = r.GroupLabels(Y_idx);
                 else
@@ -302,6 +318,34 @@ classdef Classifier
             if ~isfield(opts, 'Prior'),              opts.Prior = 'empirical';    end
             if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
             if ~isfield(opts, 'ComputeImportance'),  opts.ComputeImportance = true; end
+            if ~isfield(opts, 'ImportanceMethod'),   opts.ImportanceMethod = "auto"; end
+        end
+
+        function S = expandScores(scores, class_names, n_classes)
+        % EXPANDSCORES  Scores in columns 1..n_classes (labels are class indices); NaN for
+        %   classes the fold's model never saw.
+            S = nan(size(scores, 1), n_classes);
+            S(:, double(class_names)) = scores;
+        end
+
+        function predImp = importance(mdl, X_test, Y_test, opts, is_classification)
+        % IMPORTANCE  RF feature importance per fold (opts.ComputeImportance, ImportanceMethod):
+        %   "test" - permutation importance on the held-out fold (MLUtils.testPermutationImportance)
+        %   "oob"  - out-of-bag permutation importance (rows exchangeable only without CVGroups)
+        %   "auto" - "test" with CVGroups, otherwise "oob"
+            predImp = [];
+            if opts.Algorithm ~= "rf" || ~opts.ComputeImportance
+                return
+            end
+            method = string(opts.ImportanceMethod);
+            if method == "auto"
+                if isempty(opts.CVGroups), method = "oob"; else, method = "test"; end
+            end
+            if method == "test"
+                predImp = MLUtils.testPermutationImportance(mdl, X_test, Y_test, is_classification);
+            else
+                predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
+            end
         end
 
         function checkClassBalance(Y)

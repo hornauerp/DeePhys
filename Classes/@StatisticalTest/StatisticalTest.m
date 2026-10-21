@@ -46,8 +46,13 @@ classdef StatisticalTest
                 options.Clusters = []
             end
 
+            % Missing values carry no observation: NaN would turn the means, the SD and Cohen's
+            % d into NaN (d then fell back to 0) and still count in group_ns
+            keep = ~isnan(values) & ~ismissing(group_labels(:));
+            values = values(keep);
+            group_labels = group_labels(keep);
             if ~isempty(options.Clusters)
-                [values, group_labels] = StatisticalTest.clusterMedians(values, group_labels, options.Clusters);
+                [values, group_labels] = StatisticalTest.clusterMedians(values, group_labels, options.Clusters(keep));
             end
             groups = unique(group_labels);
             assert(length(groups) == 2, 'StatisticalTest:compareGroups requires exactly 2 groups. Use anova for >2.');
@@ -241,14 +246,23 @@ classdef StatisticalTest
             if ~isempty(pair_ids)
                 assert(size(pair_ids, 1) == length(pre_values) || length(pair_ids) == 2*length(pre_values), ...
                     'pair_ids must match the length of pre/post values or be [pre_ids; post_ids].');
-                % pair_ids is a column of identifiers for each pre/post observation
-                % Ensure ordering: match pre to post by shared ID
-                [unique_ids, ~, ic] = unique(pair_ids(1:length(pre_values)));
+                % N x 1: one ID per pair (pre(i) and post(i) share pair_ids(i));
+                % 2N x 1: [pre_ids; post_ids], pre and post matched by ID
+                n_pre = length(pre_values);
+                pre_ids = pair_ids(1:n_pre);
+                if length(pair_ids) == n_pre + length(post_values) && length(pair_ids) ~= n_pre
+                    post_ids = pair_ids(n_pre+1:end);
+                else
+                    post_ids = pre_ids;
+                end
+                assert(numel(unique(pre_ids)) == numel(pre_ids) && numel(unique(post_ids)) == numel(post_ids), ...
+                    'StatisticalTest:duplicatePairIDs', 'pair_ids must be unique within pre and within post.');
+                unique_ids = unique(pre_ids);
                 aligned_pre = NaN(length(unique_ids), 1);
                 aligned_post = NaN(length(unique_ids), 1);
                 for ip = 1:length(unique_ids)
-                    pre_match = find(pair_ids(1:length(pre_values)) == unique_ids(ip), 1);
-                    post_match = find(pair_ids(1:length(post_values)) == unique_ids(ip), 1);
+                    pre_match = find(pre_ids == unique_ids(ip), 1);
+                    post_match = find(post_ids == unique_ids(ip), 1);
                     if ~isempty(pre_match) && ~isempty(post_match)
                         aligned_pre(ip) = pre_values(pre_match);
                         aligned_post(ip) = post_values(post_match);
@@ -318,16 +332,20 @@ classdef StatisticalTest
         %   formula    - Wilkinson notation string, e.g. 'Feature ~ DIV * Mutation + (1|CultureID)'
         %
         % OUTPUT:
-        %   result - struct with: lme (fitted model), anova_table, coefficients, R2
+        %   result - struct with: lme (fitted model, REML), anova_table and coefficients
+        %            (Satterthwaite degrees of freedom), R2
             arguments
                 data_table table
                 formula string
             end
 
-            lme = fitlme(data_table, formula);
+            % REML variance components and Satterthwaite degrees of freedom: with the default
+            % ML fit and residual DF a between-culture effect is tested with ~N_units DF
+            % instead of ~N_cultures (anti-conservative, type-I error well above alpha)
+            lme = fitlme(data_table, formula, 'FitMethod', 'REML');
             result.lme = lme;
-            result.anova_table = anova(lme);
-            result.coefficients = lme.Coefficients;
+            result.anova_table = anova(lme, 'DFMethod', 'satterthwaite');
+            [~, ~, result.coefficients] = fixedEffects(lme, 'DFMethod', 'satterthwaite');
 
             % Nakagawa & Schielzeth (2013) R2 for mixed models
             % Marginal R2: variance explained by fixed effects only
