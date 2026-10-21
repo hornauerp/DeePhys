@@ -71,9 +71,6 @@ if classify_method == "graph"
     assert(size(G, 1) == n_unique, 'CellTypeClassifier:graphSize', ...
         'Unit graph has %d nodes but there are %d unique units — rerun generateTrainLabels().', ...
         size(G, 1), n_unique);
-    row_sums = sum(G, 2);
-    row_sums(row_sums == 0) = 1;
-    W = G ./ row_sums;  % row-stochastic transition matrix
 
     % Per-unit count of direct training-unit neighbors in the UMAP graph.
     % Stored in UnitGraphConnectivity so callers can distinguish "robustly
@@ -91,72 +88,19 @@ if classify_method == "graph"
 
     fprintf('Graph classification: %d nodes, propagating on UMAP NxN graph\n', n_unique);
 
-    % Initialise label distributions: [P(exc), P(inh)] per unit
-    F_label = ones(n_unique, 2) * 0.5;  % uninformed prior
-    for ti = 1:numel(labels.sorted_train_ids)
-        idx = labels.sorted_train_ids(ti);
-        if labels.sorted_y_train(ti) == 1
-            F_label(idx, :) = [1, 0];
-        else
-            F_label(idx, :) = [0, 1];
-        end
+    % Label propagation with the training labels clamped; unreached units (no graph path
+    % to a training unit) are left unlabelled (NaN) instead of being called excitatory by
+    % the tie rule. F is seed-count normalised (see CellTypeClassifier.propagateLabels).
+    [F_label, unreached, converged, iter] = CellTypeClassifier.propagateLabels(G, ...
+        labels.sorted_train_ids, labels.sorted_y_train, p_conf.GraphMaxIter, p_conf.GraphConvergenceTol);
+    if converged
+        fprintf('Graph label propagation converged at iteration %d\n', iter);
+    else
+        fprintf('Graph label propagation reached max iterations (%d)\n', p_conf.GraphMaxIter);
     end
-
-    % Iterative label propagation (clamp labeled nodes each iteration)
-    max_iter = p_conf.GraphMaxIter;
-    tol      = p_conf.GraphConvergenceTol;
-
-    converged = false;
-    for iter = 1:max_iter
-        F_new = W * F_label;
-
-        % Re-normalise rows to valid distributions
-        F_row_sum = sum(F_new, 2);
-        F_row_sum(F_row_sum == 0) = 1;
-        F_new = F_new ./ F_row_sum;
-
-        % Clamp training labels
-        for ti = 1:numel(labels.sorted_train_ids)
-            idx = labels.sorted_train_ids(ti);
-            if labels.sorted_y_train(ti) == 1
-                F_new(idx, :) = [1, 0];
-            else
-                F_new(idx, :) = [0, 1];
-            end
-        end
-
-        % Check convergence
-        if max(abs(F_new(:) - F_label(:))) < tol
-            fprintf('Graph label propagation converged at iteration %d\n', iter);
-            F_label = F_new;
-            converged = true;
-            break
-        end
-        F_label = F_new;
-    end
-    if ~converged
-        fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
-    end
-
-    % Units with no graph path to a training unit keep the uninformed [0.5 0.5]; leave
-    % them unlabelled (NaN) instead of calling them excitatory by the tie rule.
-    unreached = all(abs(F_label - 0.5) < 1e-12, 2);
     if any(unreached(test_idx))
         warning('CellTypeClassifier:unreached', ['%d units have no graph path to a ' ...
             'training unit and are left unlabelled (NaN).'], sum(unreached(test_idx)));
-    end
-
-    % Seed-count normalisation: F(:,k) is the probability that a walk from the unit is
-    % absorbed at a class-k training unit, which grows with the number of class-k seeds.
-    % With unbalanced training sets the larger class floods the graph. Dividing by the seed
-    % counts compares per-seed absorption instead (cf. class mass normalisation, Zhu et al.
-    % 2003, with no assumed output prior); it is a no-op for balanced training sets.
-    n_seed = [sum(labels.sorted_y_train == 1), sum(labels.sorted_y_train == 2)];
-    if all(n_seed > 0) && n_seed(1) ~= n_seed(2)
-        F_label = F_label ./ n_seed;
-        F_row_sum = sum(F_label, 2);
-        F_row_sum(F_row_sum == 0) = 1;
-        F_label = F_label ./ F_row_sum;
     end
 
     % Extract predictions and confidence for test units

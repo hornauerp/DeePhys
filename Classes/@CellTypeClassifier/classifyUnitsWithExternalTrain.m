@@ -158,55 +158,30 @@ fprintf('classifyUnitsWithExternalTrain: joint graph on %d units (%d DeePhys + %
 % ── Joint unit graph (same construction as the main pipeline) ──────────────────
 [G, reduction] = jointGraph(ctc, X_combined, n_neighbors, feat_names_trimmed);
 if isempty(reduction), reduction = nan(N_all, 0); end
-row_sums = sum(G, 2);
-row_sums(row_sums == 0) = 1;
-W = G ./ row_sums;
 
 % ── Label propagation: external units are seeds, DeePhys units receive labels ──
+% Same propagation as classifyUnits: units with no graph path to an external unit are
+% left unlabelled instead of being called excitatory by the tie rule, and F is seed-count
+% normalised (external label sets are usually unbalanced).
 p_conf = ctc.Parameters.Classification;
-
-% Initialise: uninformed prior for DeePhys, clamped labels for external
-F_label = ones(N_all, 2) * 0.5;
-for i = 1:n_ext
-    gi = n_dphy + i;
-    if y_train(i) == 1
-        F_label(gi, :) = [1, 0];
-    else
-        F_label(gi, :) = [0, 1];
-    end
+[F_label, unreached_all, converged, iter] = CellTypeClassifier.propagateLabels(G, ...
+    n_dphy + (1:n_ext), y_train, p_conf.GraphMaxIter, p_conf.GraphConvergenceTol);
+if converged
+    fprintf('Graph label propagation converged at iteration %d\n', iter);
+else
+    fprintf('Graph label propagation reached max iterations (%d)\n', p_conf.GraphMaxIter);
 end
-
-max_iter = p_conf.GraphMaxIter;
-tol      = p_conf.GraphConvergenceTol;
-for iter = 1:max_iter
-    F_new = W * F_label;
-    F_row_sum = sum(F_new, 2);
-    F_row_sum(F_row_sum == 0) = 1;
-    F_new = F_new ./ F_row_sum;
-    % Clamp external seed labels
-    for i = 1:n_ext
-        gi = n_dphy + i;
-        if y_train(i) == 1
-            F_new(gi, :) = [1, 0];
-        else
-            F_new(gi, :) = [0, 1];
-        end
-    end
-    if max(abs(F_new(:) - F_label(:))) < tol
-        fprintf('Graph label propagation converged at iteration %d\n', iter);
-        F_label = F_new;
-        break
-    end
-    F_label = F_new;
-end
-if iter == max_iter
-    fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
+unreached = unreached_all(1:n_dphy);
+if any(unreached)
+    warning('CellTypeClassifier:unreached', ['%d units have no graph path to an ' ...
+        'external training unit and are left unlabelled (NaN).'], sum(unreached));
 end
 
 % ── Extract DeePhys labels, confidence, and graph connectivity ─────────────────
 unique_labels     = nan(1, n_dphy);
 unique_confidence = nan(1, n_dphy);
 for i = 1:n_dphy
+    if unreached(i), continue, end      % label and confidence stay NaN
     p_exc = F_label(i, 1);
     p_inh = F_label(i, 2);
     if p_exc >= p_inh

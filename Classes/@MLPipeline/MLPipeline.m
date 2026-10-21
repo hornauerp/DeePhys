@@ -240,12 +240,12 @@ classdef MLPipeline
                 group_labels string
                 classification_val string
             end
-            clf_group_idx = find(contains(group_labels, classification_val));
-            new_group_idx = ismember(group_idx, clf_group_idx) * 1;
-            new_group_labels(1) = join(group_labels(clf_group_idx), '/');
-            clf_group_idx = find(~ismember(group_labels, classification_val));
+            % Exact matches: a substring match would also pool e.g. "HET_KD" with "HET"
+            in_pool = ismember(group_labels, classification_val);
+            new_group_idx = ismember(group_idx, find(in_pool)) * 1;
+            new_group_labels(1) = join(group_labels(in_pool), '/');
             new_group_idx(new_group_idx == 0) = 2;
-            new_group_labels(2) = join(group_labels(clf_group_idx), '/');
+            new_group_labels(2) = join(group_labels(~in_pool), '/');
         end
 
     end

@@ -73,9 +73,11 @@ function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, res
     end
 
     % -- excitatory seeds -----------------------------------------------------------------
-    % Responder density of each unit's graph neighbourhood (weighted)
+    % Responder density of each unit's graph neighbourhood (weighted). Only responders of the
+    % training subset count: in leave-one-culture-out evaluation the held-out culture's
+    % responders must not decide which seeds are kept.
     deg = full(sum(G, 2))'; deg(deg == 0) = 1;
-    dens = full(double(resp_unique(:)') * G) ./ deg;
+    dens = full(double(resp_unique(:)' & in_subset) * G) ./ deg;
     pool_mask = elig & ~resp_unique(:)' & exc_freq >= 0.5;
     if ~any(pool_mask)
         warning('CellTypeClassifier:noDepletedCommunity', ...

@@ -167,7 +167,7 @@ classdef EIAnalyzer < handle
             defaultParams.Labels.ResponderFilter    = {};           % e.g. {'Construct', 1}
 
             defaultParams.Activity.BinSize          = 0.01;   % seconds per bin
-            defaultParams.Activity.SecCutout        = [0, 1200];  % analysis window (s)
+            defaultParams.Activity.SecCutout        = [0, 1200];  % analysis window (s); ends at the recording's end if earlier (Inf = whole recording)
             defaultParams.Activity.SmoothWindow     = 5;      % movmean window (bins)
             defaultParams.Activity.RateType         = "mean"; % "mean" (per-unit average) | "sum" (total spikes)
             % RatioMethod: "smoothed" (default) = movmean(I) ./ movmean(E), NaN where the window

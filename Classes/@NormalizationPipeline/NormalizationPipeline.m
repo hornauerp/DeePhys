@@ -65,12 +65,13 @@ classdef NormalizationPipeline < handle
 
                     case 'global_zscore'
                         [X_out, gmu, gsd] = normalize(X_out);
+                        X_out(:, gsd == 0) = 0;
                         np.FitParams(1).global_zscore.mean = gmu;
                         np.FitParams(1).global_zscore.sd = gsd;
 
                     case 'clip'
                         clip_range = step.params.range;
-                        X_out = max(min(X_out, clip_range), -clip_range);
+                        X_out = clipKeepNaN(X_out, clip_range);
                         np.FitParams(1).clip.range = clip_range;
 
                     case 'max_abs_scale'
@@ -116,10 +117,11 @@ classdef NormalizationPipeline < handle
                     case 'global_zscore'
                         gfit = np.FitParams.global_zscore;
                         X_out = normalize(X_out, 'center', gfit.mean, 'scale', gfit.sd);
+                        X_out(:, gfit.sd == 0) = 0;
 
                     case 'clip'
                         clip_range = np.FitParams.clip.range;
-                        X_out = max(min(X_out, clip_range), -clip_range);
+                        X_out = clipKeepNaN(X_out, clip_range);
 
                     case 'max_abs_scale'
                         sf = np.FitParams.max_abs_scale.scale_factor;
@@ -199,6 +201,7 @@ function [X_out, fit] = fitGroupZscore(X, group_labels)
             singleton = singleton | mask;
         else
             [X_out(mask,:), fit.means(g,:), fit.sds(g,:)] = normalize(X(mask,:));
+            X_out(mask, fit.sds(g,:) == 0) = 0;     % constant in the group: no deviation (not NaN)
         end
     end
     valid_g = ~any(isnan(fit.means), 2);
@@ -220,6 +223,7 @@ function X_out = applyGroupZscore(X, group_labels, fit)
         mask = (group_labels == fit.groups(g));
         if any(mask) && ~any(isnan(fit.means(g,:)))
             X_out(mask,:) = normalize(X(mask,:), 'center', fit.means(g,:), 'scale', fit.sds(g,:));
+            X_out(mask, fit.sds(g,:) == 0) = 0;
             known_mask = known_mask | mask(:);
         end
         % Groups with NaN means (singletons during fit) remain in ~known_mask → pooled fallback
@@ -428,4 +432,10 @@ function cats = getCovariateCategories(covariate_labels)
     else
         cats = num2cell(u);
     end
+end
+
+function X = clipKeepNaN(X, r)
+% Clip to [-r, r]. min/max would turn NaN (missing values, constant features) into +-r.
+X(X > r)  = r;
+X(X < -r) = -r;
 end

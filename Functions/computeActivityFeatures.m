@@ -34,14 +34,12 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
     do_regularity  = ~isempty(p.Regularity);
     do_catch22     = ~isempty(p.Catch22);
 
-    act_names = ["FiringRate","MeanInterSpikeInterval","VarianceInterSpikeInterval","CVInterSpikeInterval", ...
-        "CV2InterSpikeInterval","LocalVariation","RevisedLocalVariation","FanoFactor","PartialAutocorrelation", ...
-        "ISIBimodality"];
+    act_names = unitFeatureNames("act");
 
     if length(spike_times) <= 2
         activity_table = array2table(NaN(1, length(act_names)), 'VariableNames', act_names);
         if do_regularity
-            reg_names = ["RegularityFrequency","RegularityMagnitude","RegularityFit"];
+            reg_names = unitFeatureNames("reg");
             regularity_table = array2table(NaN(1, length(reg_names)), 'VariableNames', reg_names);
         else
             regularity_table = table();

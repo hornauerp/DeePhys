@@ -306,10 +306,10 @@ classdef FeatureCatalog
 
         function names = fullSet(group)
         % FULLSET  All feature names for the given group (no filtering).
-        %   Delegates to Unit.returnFeatureNames where available.
+        %   Single-unit groups come from unitFeatureNames.
             switch group
                 case "ActivityFeatures"
-                    names = Unit.returnFeatureNames("act");
+                    names = unitFeatureNames("act");
 
                 case "WaveformFeatures"
                     % Actual column names written by inferWaveformFeatures.m
@@ -318,7 +318,7 @@ classdef FeatureCatalog
                              "T2Pdelay", "T2Pratio"];
 
                 case "RegularityFeatures"
-                    names = Unit.returnFeatureNames("reg");
+                    names = unitFeatureNames("reg");
 
                 case "Catch22"
                     try
@@ -328,7 +328,7 @@ classdef FeatureCatalog
                     end
 
                 case "BombcellMetrics"
-                    names = Unit.returnFeatureNames("bc");
+                    names = unitFeatureNames("bc");
 
                 case "GraphFeatures"
                     % Per-unit graph columns: suffixed by algorithm (e.g. _CCG, _STTC)
@@ -344,7 +344,7 @@ classdef FeatureCatalog
                              "BurstWidth", "BurstRise", "BurstFall", "BurstFWHM"];
 
                 case "NetworkRegularity"
-                    names = "Network" + Unit.returnFeatureNames("reg");  % NetworkRegularityFrequency, ...
+                    names = "Network" + unitFeatureNames("reg");  % NetworkRegularityFrequency, ...
 
                 case "NetworkCatch22"
                     names = string(GetAllFeatureNames(true));   % plain catch22 names (SC_ = single unit)

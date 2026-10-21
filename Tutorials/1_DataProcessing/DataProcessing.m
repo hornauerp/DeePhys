@@ -115,7 +115,7 @@ disp(proc.NetworkFeatureTable);
 %   proc.Parameters.CCG.BonfWindow = 0.005;   % Bonferroni-correction window    (s) — default 5.0 ms
 %
 % STTC significance: surrogates jitter each spike with SD proc.Parameters.STTC.JitterSD
-% (default 0.1 s = 2 x MaxLag; it must exceed the coincidence window MaxLag).
+% (default: empty = 2 x MaxLag, so it follows MaxLag; it must exceed the coincidence window).
 
 proc.computeConnectivity();
 

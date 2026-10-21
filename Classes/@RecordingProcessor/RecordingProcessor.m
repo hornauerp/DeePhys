@@ -901,7 +901,10 @@ classdef RecordingProcessor < handle
                 proc.CellTypeLabels = s.CellTypeLabels;
             end
             if isfield(s, 'Parameters')
-                proc.Parameters = s.Parameters;
+                % Parameters added since the file was saved take their defaults (steps read
+                % them unguarded); stored values, including retired fields, are kept as saved.
+                proc.Parameters = RecordingProcessor.fillMissingParameters( ...
+                    RecordingProcessor.returnDefaultParams(), s.Parameters);
             else
                 proc.Parameters = RecordingProcessor.returnDefaultParams();
             end
@@ -1104,7 +1107,7 @@ classdef RecordingProcessor < handle
 
             params.STTC.MaxLag          = 0.05;
             params.STTC.SurrogateMethod = 'jitter';
-            params.STTC.JitterSD        = 0.1;     % s, surrogate jitter SD; must exceed MaxLag (default 2 x MaxLag)
+            params.STTC.JitterSD        = [];      % s, surrogate jitter SD; empty = 2 x MaxLag (must exceed MaxLag)
             params.STTC.N_Surrogates    = 100;
             params.STTC.Percentile      = 95;
 
@@ -1164,6 +1167,18 @@ classdef RecordingProcessor < handle
     % Private helpers
     % =====================================================================
     methods (Static, Access = private)
+
+        function p = fillMissingParameters(defaults, p)
+        % Add fields of defaults that p lacks, at any depth; existing fields of p are kept.
+            for f = string(fieldnames(defaults))'
+                if ~isfield(p, f)
+                    p.(f) = defaults.(f);
+                elseif isstruct(defaults.(f)) && isscalar(defaults.(f)) && ...
+                        isstruct(p.(f)) && isscalar(p.(f))
+                    p.(f) = RecordingProcessor.fillMissingParameters(defaults.(f), p.(f));
+                end
+            end
+        end
 
         function [st, su] = qcSpikes(proc)
         % QCSPIKES  Spike times of QC-passing units, with unit labels 1..numel(proc.Units).

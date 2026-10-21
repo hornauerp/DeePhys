@@ -22,10 +22,13 @@ function response = bootstrapFiringRateResponse(pre_mat, post_mat, n_iter, alpha
 %   UnitWisePermutation - logical (default false). When true, each unit gets
 %     an independent randperm per iteration. More conservative for correlated
 %     spike trains (e.g. synchronous MEA bursting), but ~N_units times slower.
-%   NetworkCorrection   - logical (default false). When true, subtract the
-%     population-mean FR change before testing. Removes the network-wide
-%     disinhibition confound (e.g. GABAergic blockade). Units are then tested
-%     for ABOVE-AVERAGE response rather than any increase.
+%   NetworkCorrection   - logical (default false). When true, divide the post
+%     window by the population's median fold change before testing. Removes the
+%     network-wide disinhibition confound (e.g. GABAergic blockade). Units are then
+%     tested for a larger-than-typical relative response rather than any increase.
+%     The correction is multiplicative because a network-wide gain scales rates:
+%     subtracting a common count change would call fast units "increase" and slow
+%     units "decrease" under a uniform gain.
 %
 % OUTPUTS:
 %   response - struct with fields:
@@ -56,17 +59,26 @@ full_mat = [pre_mat, post_mat];
 emp_diff = mean(post_mat, 2) - mean(pre_mat, 2);
 
 % -- Network-level firing rate correction ------------------------------------
-% When NetworkCorrection=true, subtract the population-mean firing rate change
-% before per-unit testing. Units are then tested for above-average response,
-% removing the network-wide disinhibition confound (e.g. under GABAergic
-% blockade, all units tend to increase FR; only units that increase *more than
-% average* are likely to be truly inhibitory).
+% When NetworkCorrection=true, divide the post window by the population's median
+% fold change before per-unit testing. Units are then tested for a larger-than-
+% typical relative response, removing the network-wide disinhibition confound
+% (e.g. under GABAergic blockade, all units tend to increase FR; only units that
+% increase *more than the typical unit* are likely to be truly inhibitory).
+% A gain acts on rates multiplicatively, so a common subtraction in counts would
+% depend on each unit's baseline rate.
 if opts.NetworkCorrection
-    pop_mean_diff = mean(emp_diff);
-    emp_diff      = emp_diff - pop_mean_diff;
-    % Apply the same correction to the full matrix (post columns only) so
-    % that the bootstrap null reflects the corrected distribution.
-    full_mat(:, n_bins+1:end) = full_mat(:, n_bins+1:end) - pop_mean_diff;
+    pre_mean  = mean(pre_mat, 2);
+    post_mean = mean(post_mat, 2);
+    active    = pre_mean > 0 | post_mean > 0;
+    if any(active)
+        pseudo   = 0.5 / n_bins;     % half a spike per window, as in the calibrated test
+        log_fc   = log((post_mean(active) + pseudo) ./ (pre_mean(active) + pseudo));
+        net_gain = exp(median(log_fc));
+        % Scale the post columns of the matrix too, so that the bootstrap null
+        % reflects the corrected distribution.
+        full_mat(:, n_bins+1:end) = full_mat(:, n_bins+1:end) / net_gain;
+        emp_diff = post_mean / net_gain - pre_mean;
+    end
 end
 
 % -- Determine iteration scheme ----------------------------------------------

@@ -98,6 +98,7 @@ classdef CellTypeClassifier < handle
                 ['CellTypeClassifier: UnitDataArray length (%d) must match ' ...
                  'UnitTable height (%d). Build both from the same FeatureStore ' ...
                  'assembly call.'], numel(unit_data), height(feature_store.UnitTable));
+            CellTypeClassifier.assertUnitAlignment(unit_data, feature_store.UnitTable);
             ctc.FeatureStore  = feature_store;
             ctc.UnitDataArray = unit_data;
             ctc.Parameters    = parseStructParameters(ctc.returnDefaultParams(), parameters);
@@ -689,9 +690,10 @@ classdef CellTypeClassifier < handle
             %   for correlated spike trains; avoids inflated FPR from shared null).
             defaultParams.Bootstrap.UnitWisePermutation  = true;
 
-            % NetworkCorrection: subtract population-mean FR change before per-unit testing.
-            %   Removes the network-wide disinhibition confound (e.g. GABAergic blockade
-            %   drives all units to fire more; only units firing above-average are flagged).
+            % NetworkCorrection: divide out the population's median fold change before
+            %   per-unit testing. Removes the network-wide disinhibition confound (e.g.
+            %   GABAergic blockade drives all units to fire more; only units whose rate rises
+            %   more than the typical unit's are flagged), independently of baseline rate.
             defaultParams.Bootstrap.NetworkCorrection     = true;
 
             % ── UMAP parameters ───────────────────────────────────────────────
@@ -1068,6 +1070,55 @@ classdef CellTypeClassifier < handle
 
     methods (Static)
 
+        function [F, unreached, converged, n_iter] = propagateLabels(G, seed_idx, seed_y, max_iter, tol)
+        % PROPAGATELABELS  Graph label propagation with clamped seeds (classes 1 and 2).
+        %
+        %   [F, unreached] = CellTypeClassifier.propagateLabels(G, seed_idx, seed_y, max_iter, tol)
+        %
+        % G is an (N x N) non-negative graph, seed_idx the seed nodes and seed_y their classes
+        % (1 = excitatory, anything else = inhibitory). F (N x 2) holds [P(exc) P(inh)] per node
+        % after seed-count normalisation. unreached marks nodes with no graph path to a seed
+        % (they keep the uninformed prior, or [0 0] when isolated); callers leave them unlabelled.
+            n = size(G, 1);
+            row_sums = sum(G, 2);
+            row_sums(row_sums == 0) = 1;
+            W = G ./ row_sums;                           % row-stochastic transition matrix
+            seed_idx = seed_idx(:);
+            clamp = [double(seed_y(:) == 1), double(seed_y(:) ~= 1)];
+            F = ones(n, 2) * 0.5;                        % uninformed prior
+            F(seed_idx, :) = clamp;
+            converged = false;
+            n_iter = 0;
+            for n_iter = 1:max_iter
+                F_new = W * F;
+                F_row_sum = sum(F_new, 2);
+                F_row_sum(F_row_sum == 0) = 1;
+                F_new = F_new ./ F_row_sum;
+                F_new(seed_idx, :) = clamp;
+                if max(abs(F_new(:) - F(:))) < tol
+                    F = F_new;
+                    converged = true;
+                    break
+                end
+                F = F_new;
+            end
+            F = full(F);
+            unreached = all(abs(F - 0.5) < 1e-12, 2) | all(F == 0, 2);
+            unreached(seed_idx) = false;
+            % Seed-count normalisation: F(:,k) is the probability that a walk from the unit is
+            % absorbed at a class-k seed, which grows with the number of class-k seeds. With
+            % unbalanced seeds the larger class floods the graph. Dividing by the seed counts
+            % compares per-seed absorption instead (cf. class mass normalisation, Zhu et al.
+            % 2003, with no assumed output prior); it is a no-op for balanced seeds.
+            n_seed = sum(clamp, 1);
+            if all(n_seed > 0) && n_seed(1) ~= n_seed(2)
+                F = F ./ n_seed;
+                F_row_sum = sum(F, 2);
+                F_row_sum(F_row_sum == 0) = 1;
+                F = F ./ F_row_sum;
+            end
+        end
+
         function binned = binnedSpikeMatrix(unit_data, time_window, bin_size)
         % BINNEDSPIKEMATRIX  (N_units x N_bins) spike count matrix from UnitData.SpikeTimes.
         %   Replaces Culture.getBinnedSpikeMat without requiring Culture objects.
@@ -1309,6 +1360,24 @@ classdef CellTypeClassifier < handle
     end
 
     methods (Static, Access = private)
+
+        function assertUnitAlignment(unit_data, unit_table)
+        % ASSERTUNITALIGNMENT  Row i of UnitDataArray must be the unit of UnitTable row i.
+        %   Equal counts are not enough: processors loaded in another order give the same
+        %   count, and spike times would silently attach to other units' features.
+            for f = ["UnitID", "RecordingID"]
+                if ~ismember(f, string(unit_table.Properties.VariableNames)), continue, end
+                ud_ids = arrayfun(@(u) string(u.(f)), unit_data(:), 'UniformOutput', false);
+                ud_ids(cellfun(@isempty, ud_ids)) = {missing};
+                ud_ids = vertcat(ud_ids{:});
+                ut_ids = string(unit_table.(f));
+                known  = ~ismissing(ud_ids) & ud_ids ~= "" & ~ismissing(ut_ids) & ut_ids ~= "";
+                bad = find(known & ud_ids ~= ut_ids, 1);
+                assert(isempty(bad), 'CellTypeClassifier:unitMisaligned', ...
+                    ['UnitDataArray(%d).%s (%s) does not match UnitTable row %d (%s). Order ' ...
+                     'UnitDataArray like FeatureStore.UnitTable.'], bad, f, ud_ids(bad), bad, ut_ids(bad));
+            end
+        end
 
         function [bin_size, lag] = storedACGParams(unit_data, n_bins)
         % STOREDACGPARAMS  Bin size and lag of stored parent ACGs ([] if unknown).

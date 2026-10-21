@@ -49,7 +49,8 @@ function connectivity = computeConnectivitySTTC(unit_spike_times_cell, spike_tim
     silent_units = find(cellfun(@isempty, unit_spike_times_cell));
     spks_data = convert2asdf2(spike_times, spike_units, sampling_rate);
 
-    for su = fliplr(silent_units)
+    % Ascending order: each insertion assumes the units before su are already in place
+    for su = silent_units(:)'
         spks_data.raster = [spks_data.raster(1:su-1); cell(1,1); spks_data.raster(su:end)];
     end
     spks_data.nchannels = length(spks_data.raster);
@@ -60,6 +61,12 @@ function connectivity = computeConnectivitySTTC(unit_spike_times_cell, spike_tim
     jitter_sd = 2 * sttc_params.MaxLag;
     if isfield(sttc_params, 'JitterSD') && ~isempty(sttc_params.JitterSD)
         jitter_sd = sttc_params.JitterSD;
+        if strcmp(sttc_params.SurrogateMethod, 'jitter') && jitter_sd <= sttc_params.MaxLag
+            warning('computeConnectivitySTTC:jitterTooSmall', ...
+                ['STTC.JitterSD (%g s) does not exceed MaxLag (%g s): the surrogates keep most ' ...
+                 'coincidences and few pairs can be significant. Leave JitterSD empty (2 x MaxLag).'], ...
+                jitter_sd, sttc_params.MaxLag);
+        end
     end
     rand_args = {};
     if strcmp(sttc_params.SurrogateMethod, 'jitter')

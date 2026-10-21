@@ -560,7 +560,7 @@ classdef FeatureStore < handle
                     fg = feature_groups(g);
                     switch fg
                         case "ActivityFeatures"
-                            names = Unit.returnFeatureNames("act");
+                            names = unitFeatureNames("act");
                             selected = selected | ismember(all_cols, names);
                         case "WaveformFeatures"
                             % Actual column names written by inferWaveformFeatures
@@ -569,7 +569,7 @@ classdef FeatureStore < handle
                                         "T2Pdelay","T2Pratio"];
                             selected = selected | ismember(all_cols, wf_names);
                         case "RegularityFeatures"
-                            names = Unit.returnFeatureNames("reg");
+                            names = unitFeatureNames("reg");
                             selected = selected | ismember(all_cols, names);
                         case "Catch22"
                             % Catch22 columns are stored with SC_ prefix
@@ -587,7 +587,7 @@ classdef FeatureStore < handle
                                 selected = selected | startsWith(all_cols, r);
                             end
                         case "BombcellMetrics"
-                            names = Unit.returnFeatureNames("bc");
+                            names = unitFeatureNames("bc");
                             selected = selected | ismember(all_cols, names);
                         case {"ReferenceWaveform","Waveform"}
                             selected = selected | (startsWith(all_cols,"Waveform") & ~ismember(all_cols, exclude));
@@ -605,7 +605,7 @@ classdef FeatureStore < handle
                         case "NetworkRegularity"
                             % Network columns are NetworkRegularityFrequency etc.; the bare
                             % names belong to the single-unit regularity features
-                            names = "Network" + Unit.returnFeatureNames("reg");
+                            names = "Network" + unitFeatureNames("reg");
                             selected = selected | ismember(all_cols, names);
                         case "NetworkCatch22"
                             % Network catch22 columns carry the plain catch22 names; the
@@ -763,14 +763,14 @@ classdef FeatureStore < handle
                         tf = startsWith(col_name, "Waveform");
                     case "ActivityFeatures"
                         try
-                            names = Unit.returnFeatureNames("act");
+                            names = unitFeatureNames("act");
                             tf = ismember(col_name, names);
                         catch
                             tf = false;
                         end
                     case "RegularityFeatures"
                         try
-                            names = Unit.returnFeatureNames("reg");
+                            names = unitFeatureNames("reg");
                             tf = ismember(col_name, names);
                         catch
                             tf = false;
@@ -809,14 +809,25 @@ classdef FeatureStore < handle
         % Returns a (N_recordings x 1) string vector.
             n = height(meta_table);
             parts = cell(n, numel(identity_keys));
+            missing_keys = strings(1, 0);
             for k = 1:numel(identity_keys)
                 key = identity_keys(k);
                 if ismember(key, string(meta_table.Properties.VariableNames))
                     col = meta_table.(key);
+                    if isdatetime(col)
+                        col = FeatureStore.dateToString(col);   % same text as in MetadataTable
+                    end
                     parts(:, k) = cellstr(string(col));
                 else
                     parts(:, k) = repmat({'_'}, n, 1);
+                    missing_keys(end+1) = key; %#ok<AGROW>
                 end
+            end
+            if n > 0 && ~isempty(missing_keys)
+                % Without the key, cultures that differ only in it (e.g. a reused chip) merge.
+                warning('FeatureStore:missingCultureKey', ...
+                    'Culture key(s) %s not in the metadata; cultures that differ only in them are merged.', ...
+                    strjoin(missing_keys, ', '));
             end
             culture_ids = string(join(parts, '_', 2));   % dim 2: with one key, join(parts) would merge all rows
         end
@@ -961,10 +972,13 @@ classdef FeatureStore < handle
             for i = 1:numel(fns)
                 v = meta_struct.(fns{i});
                 % Skip fields that are non-scalar or complex types
-                if isstruct(v) || iscell(v) || (isnumeric(v) && ~isscalar(v)) || isa(v, 'datetime')
+                if isstruct(v) || iscell(v) || (isnumeric(v) && ~isscalar(v)) || (isdatetime(v) && ~isscalar(v))
                     continue
                 end
-                if ischar(v) || isstring(v)
+                if isdatetime(v)
+                    % Dates are identity keys (e.g. PlatingDate): keep them as fixed-format text
+                    row_data{end+1} = FeatureStore.dateToString(v); %#ok<AGROW>
+                elseif ischar(v) || isstring(v)
                     row_data{end+1} = string(v);    %#ok<AGROW>
                 elseif isnumeric(v) && isscalar(v)
                     row_data{end+1} = v;             %#ok<AGROW>
@@ -980,6 +994,15 @@ classdef FeatureStore < handle
             else
                 meta_row = cell2table(row_data, 'VariableNames', var_names);
             end
+        end
+
+        function s = dateToString(d)
+        % ISO text of a datetime (date only when there is no time of day); NaT -> missing.
+            s = strings(size(d));
+            has_time = timeofday(d) > 0;
+            s(~has_time) = string(d(~has_time), 'yyyy-MM-dd');
+            s(has_time)  = string(d(has_time),  'yyyy-MM-dd HH:mm:ss');
+            s(isnat(d))  = missing;
         end
 
     end

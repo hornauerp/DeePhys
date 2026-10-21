@@ -119,7 +119,7 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `CCG.Alpha` | `0.001` | Significance threshold for edge detection |
 | `CCG.InhibitoryCriterion` | `"strict"` | Inhibitory links: `"strict"` (causal trough below the pre-spike mean and the slow 10 ms-to-edge flank; no reverse artefact of strong excitation) or `"cellexplorer"` (CellExplorer `ce_MonoSynConvClick`, the previous DeePhys default; many false positives) |
 | `STTC.MaxLag` | `0.05` | Synchrony window (s) |
-| `STTC.JitterSD` | `0.1` | SD (s) of the spike jitter of the surrogates; must exceed `MaxLag` (2 × `MaxLag`) |
+| `STTC.JitterSD` | `[]` | SD (s) of the spike jitter of the surrogates; empty = 2 × `MaxLag`. It must exceed `MaxLag` |
 | `STTC.N_Surrogates` | `100` | Surrogate count for significance |
 | `STTC.Percentile` | `95` | Significance percentile |
 | `DDC.BinSize` | `0.001` | Bin width (s) |

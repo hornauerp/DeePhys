@@ -3,7 +3,7 @@ function output_path_list = split_sortings(sorting_path, split_times, output_fol
 %
 % Reads spike_times.npy and spike_templates.npy (or spike_clusters.npy) from sorting_path,
 % slices them into the requested windows, and writes each window to a new subfolder.
-% Skips processing if the output files already exist.
+% Skips processing if every window folder is complete and was split with the same times.
 %
 % Each window gets its own params.py (n_samples = the window length, so SpikeData.Duration
 % and firing rates refer to the window) and a split_window.txt marker, by which SpikeData
@@ -32,7 +32,16 @@ end
 
 output_path_list = fullfile(sorting_path, output_folders);
 
-if ~all(arrayfun(@(x) exist(x,'file'),fullfile(output_path_list, "spike_times.npy")))
+% A window is up to date only when its split_window.txt (written last) records the requested
+% times: folders from an interrupted run, from an older version of this function (whole-
+% recording n_samples, no marker) or from other split times are written again.
+up_to_date = arrayfun(@(i) windowUpToDate(output_path_list(i), split_times(i,:)), 1:numel(output_path_list));
+if ~all(up_to_date)
+    stale = output_path_list(~up_to_date & arrayfun(@(p) isfile(fullfile(p, "spike_times.npy")), output_path_list(:)'));
+    if ~isempty(stale)
+        warning('split_sortings:overwrite', 'Rewriting split folder(s) with outdated or incomplete content: %s', ...
+            strjoin(stale, ', '));
+    end
 
     spike_times = readNPY(fullfile(sorting_path, "spike_times.npy"));
     label_files = ["spike_templates.npy", "spike_clusters.npy", "amplitudes.npy"];
@@ -76,10 +85,23 @@ if ~all(arrayfun(@(x) exist(x,'file'),fullfile(output_path_list, "spike_times.np
         end
 
         fid = fopen(fullfile(output_path, "split_window.txt"), 'w');
-        fprintf(fid, 'parent = %s\nstart_min = %g\nend_min = %g\n', sorting_path, split_times(i,1), split_times(i,2));
+        fprintf(fid, 'parent = %s\nstart_min = %.12g\nend_min = %.12g\n', sorting_path, split_times(i,1), split_times(i,2));
         fclose(fid);
     end
 else
     disp("Skipped splitting, output files already exist")
 end
+end
+
+function ok = windowUpToDate(output_path, window_min)
+% True when output_path holds a complete split of window_min ([start end] in minutes).
+ok = false;
+marker = fullfile(output_path, "split_window.txt");
+if ~isfile(marker) || ~isfile(fullfile(output_path, "spike_times.npy")), return, end
+txt = fileread(marker);
+t0 = regexp(txt, '(?m)^start_min\s*=\s*(\S+)', 'tokens', 'once');
+t1 = regexp(txt, '(?m)^end_min\s*=\s*(\S+)',   'tokens', 'once');
+if isempty(t0) || isempty(t1), return, end
+% tolerance covers markers written with 6 significant digits
+ok = all(abs([str2double(t0{1}), str2double(t1{1})] - window_min) <= 1e-4 * max(1, abs(window_min)));
 end

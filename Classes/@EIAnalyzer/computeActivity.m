@@ -62,10 +62,24 @@ for c = 1:n_cultures
         continue
     end
 
-    % Build binned spike matrix (N_units x N_bins)
-    binned_mat = CellTypeClassifier.binnedSpikeMatrix(ud(ud_indices), p.SecCutout, p.BinSize);
+    % Build binned spike matrix (N_units x N_bins). The window ends at the recording's end
+    % when that comes first (SecCutout(2) = Inf: the whole recording); bins past the end
+    % would read as silence in the E and I traces and in the correlations.
+    win = p.SecCutout;
+    rec_dur = min([ud(ud_indices).RecordingDuration]);
+    if ~isempty(rec_dur) && rec_dur > 0 && win(2) > rec_dur
+        if isfinite(win(2))
+            warning('EIAnalyzer:windowBeyondRecording', ...
+                'Culture %s: Activity.SecCutout ends at %g s but the recording lasts %g s; using [%g %g].', ...
+                cid, win(2), rec_dur, win(1), rec_dur);
+        end
+        win(2) = rec_dur;
+    end
+    assert(isfinite(win(2)), 'EIAnalyzer:noDuration', ...
+        'Culture %s: no RecordingDuration on its units, so Activity.SecCutout must be finite.', cid);
+    binned_mat = CellTypeClassifier.binnedSpikeMatrix(ud(ud_indices), win, p.BinSize);
     n_bins     = size(binned_mat, 2);
-    x          = p.SecCutout(1) + (0:n_bins-1) * p.BinSize;
+    x          = win(1) + (0:n_bins-1) * p.BinSize;
 
     mapped_labels = map.labels(unit_rows);
     inh_rows = mapped_labels == 2;

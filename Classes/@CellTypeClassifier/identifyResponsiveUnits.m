@@ -114,7 +114,8 @@ if strcmp(method, 'metadata')
 
     resp_idx   = raw_labels == resp_value;
     % Counterexamples: any unit with a non-empty label that is NOT the responsive class
-    ce_idx     = ~resp_idx & raw_labels ~= "" & raw_labels ~= "NaN";
+    % (missing strings and undefined categoricals compare unequal to "", so test them explicitly)
+    ce_idx     = ~resp_idx & ~ismissing(raw_labels) & raw_labels ~= "" & raw_labels ~= "NaN";
 
     ctc.ResponsiveUnitIdx       = resp_idx(:)';
     ctc.ResponsiveUnitDirection = repmat("none", 1, N_total);
