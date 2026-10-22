@@ -327,7 +327,7 @@ classdef FeatureCatalog
 
                 case "Catch22"
                     try
-                        names = "SC_" + string(GetAllFeatureNames());
+                        names = "SC_" + string(GetAllFeatureNames(false));   % catch22 (no DN_Mean / DN_Spread_Std)
                     catch
                         names = string.empty;
                     end
@@ -355,7 +355,7 @@ classdef FeatureCatalog
                     names = "Network" + unitFeatureNames("reg");  % NetworkRegularityFrequency, ...
 
                 case "NetworkCatch22"
-                    names = string(GetAllFeatureNames(true));   % plain catch22 names (SC_ = single unit)
+                    names = string(GetAllFeatureNames(false));   % plain catch22 names (SC_ = single unit)
 
                 case "NetworkGraph"
                     % Network-level graph columns: suffixed by algorithm

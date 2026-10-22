@@ -103,9 +103,13 @@ for i = 1:N
 end
 acg = smoothACG(acg, nf.acg_sigma_ms / 1000 / ph.ACGBinSize);
 [~, X] = evalc('buildFeatureMatrix(ctc, wf, acg, sr)');
-X(isnan(X)) = 0;
+missing = isnan(X);   % filled with the (group) mean, as in buildNormalizedFeatures
 if isfield(nf, 'group_stats') && ~isempty(nf.group_stats)
     X = zscoreByGroup(X, nf.group_values(unique_idx), Stats=nf.group_stats, ConstantAs=NaN);
+    X(missing) = 0;
+else
+    [~, c] = find(missing);
+    X(missing) = np.mu_global(c);
 end
 X = normalize(X, 'center', np.mu_global, 'scale', np.sigma_global);
 X(:, np.nan_cols) = [];

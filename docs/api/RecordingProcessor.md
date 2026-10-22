@@ -93,6 +93,8 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `PowerCutoff` | `1.3` | Max high-frequency power ratio |
 | `N_Units` | `10` | Minimum units per recording (recordings with fewer are dropped) |
 | `MinSpikeCount` | `10` | Minimum spike count per unit |
+| `RateReference` | `"parent"` | For a window of a longer sorting (`split_sortings`, `segment_N`, `ParentPath`): `FiringRate`, `MinSpikeCount` and `RPV` are checked on the whole parent sorting, so every segment keeps the same units (a drug-silenced unit is not dropped from its drug segment). `"recording"`: this window only |
+| `GoodUnits` | `[]` | Skip the criteria above and keep these templates: a logical mask over the templates or 1-based template numbers |
 | `KSLabel.Enable` | `false` | Filter by Kilosort label (`cluster_KSLabel.tsv`) |
 | `KSLabel.AcceptedLabels` | `"good"` | Labels to keep (`"good"`, `"mua"`, or both) |
 | `Bombcell.Enable` | `false` | Filter using Bombcell quality metrics (`cluster_bc_unitType.tsv`; missing table: warning, standard QC only) |

@@ -1,4 +1,5 @@
 deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+if ~isfolder(fullfile(deephys_root, 'Plots')), mkdir(fullfile(deephys_root, 'Plots')); end   % figure exports
 rg_params.Selection.Inclusion = {{'Mutation',"WT"}};
 rg_WT = RecordingGroup(fcdi_array,rg_params);
 rg_params.Selection.Inclusion = {{'Mutation',"A53T"}};
@@ -53,7 +54,7 @@ greys = greys(6:15,:);
 heatmap_colormap = othercolor('RdBu9',N_groups*20); heatmap_colormap((size(heatmap_colormap,1)/2)-2:size(heatmap_colormap,1)/2+2,:) = [];
 
 %% LOAD DATA
-save_path = fullfile(deephys_root, "Data", "Figure3");
+save_path = fullfile(deephys_root, "Figures", "Data", "Figure3");
 load(fullfile(save_path,'network_p_vals.mat'))
 load(fullfile(save_path,'network_heatmap.mat'))
 load(fullfile(save_path,'network_values.mat'))

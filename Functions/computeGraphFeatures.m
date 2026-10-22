@@ -97,13 +97,13 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
 
         n_rand = graph_params.SmallWorldnessIterations;
         n_nodes = size(con_mat, 1);
-        % Skip small-worldness for sparse or disconnected networks where
-        % characteristic path length is ill-defined (many node pairs unreachable).
+        % Skip small-worldness for sparse networks. Path lengths are averaged over reachable
+        % pairs only, so one isolated node does not make L infinite (and SW NaN or 0).
         % randmio_dir / randmio_und loop forever unless two edges have four distinct
         % end nodes (e.g. a graph whose only links are one reciprocal pair)
         if density > 0 && density >= 0.05 && n_nodes >= 4 && hasDisjointEdgePair(con_mat)
             C_real = mean(clustering_coef);
-            L_real = charpath(distance_bin(con_mat));
+            L_real = charpath(distance_bin(con_mat), 0, 0);   % finite paths only (BCT default counts Inf)
             C_rand_vals = zeros(1, n_rand);
             L_rand_vals = zeros(1, n_rand);
             for ir = 1:n_rand
@@ -114,7 +114,7 @@ function [network_table, unit_table] = computeGraphFeatures(connectivity, graph_
                     rand_mat = randmio_und(double(con_mat ~= 0), 5);
                     C_rand_vals(ir) = mean(clustering_coef_bu(rand_mat));
                 end
-                L_rand_vals(ir) = charpath(distance_bin(rand_mat));
+                L_rand_vals(ir) = charpath(distance_bin(rand_mat), 0, 0);
             end
             C_rand = mean(C_rand_vals);
             L_rand = mean(L_rand_vals);

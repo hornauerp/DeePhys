@@ -1,4 +1,5 @@
 deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+if ~isfolder(fullfile(deephys_root, 'Plots')), mkdir(fullfile(deephys_root, 'Plots')); end   % figure exports
 addpath(genpath(deephys_root))
 
 %% Generate sorting_path_list 

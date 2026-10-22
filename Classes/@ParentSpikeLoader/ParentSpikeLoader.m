@@ -92,6 +92,49 @@ classdef ParentSpikeLoader
             fprintf('ParentSpikeLoader: done (%d templates cached).\n', numel(group_tids));
         end
 
+        function [trains, duration] = loadSpikeTrains(parent_path, sampling_rate)
+        % LOADSPIKETRAINS  Spike times (s) of every template in a parent sorting, cached.
+        %   trains{tid} holds the times of 1-based TemplateID tid (same numbering as
+        %   loadFullACGs); duration is n_samples / sampling_rate from params.py, else the
+        %   last spike time.
+            arguments
+                parent_path   (1,1) string
+                sampling_rate (1,1) double
+            end
+            cache = ParentSpikeLoader.getCache();
+            key   = paramHash(struct('ParentPath', char(parent_path), 'Trains', true, ...
+                'SamplingRate', sampling_rate));
+            if cache.isKey(key)
+                c = cache(key); trains = c.trains; duration = c.duration;
+                return
+            end
+            npy_times = fullfile(parent_path, 'spike_times.npy');
+            npy_units = fullfile(parent_path, 'spike_templates.npy');
+            if ~isfile(npy_times) || ~isfile(npy_units)
+                error('ParentSpikeLoader:missingFiles', ...
+                    'spike_times.npy or spike_templates.npy not found in: %s', parent_path);
+            end
+            raw_times = double(readNPY(npy_times));
+            raw_units = double(readNPY(npy_units));
+            spike_units = raw_units + (1 - ParentSpikeLoader.templateIndexBase(parent_path, raw_units));
+            [spike_times, o] = sort(raw_times / sampling_rate);
+            spike_units = spike_units(o);
+            trains = cell(max([spike_units; 0]), 1);
+            trains(:) = {zeros(0, 1)};
+            [g, tids] = findgroups(spike_units);
+            if ~isempty(tids)
+                trains(tids) = splitapply(@(t) {t}, spike_times, g);
+            end
+            duration = NaN;
+            pf = fullfile(parent_path, 'params.py');
+            if isfile(pf)
+                tok = regexp(fileread(pf), '(?m)^\s*n_samples\w*\s*=\s*([-+0-9.eE]+)', 'tokens', 'once');
+                if ~isempty(tok), duration = str2double(tok{1}) / sampling_rate; end
+            end
+            if isnan(duration), duration = max([spike_times; 0]); end
+            cache(key) = struct('trains', {trains}, 'duration', duration);  %#ok<NASGU>
+        end
+
         function clearCache()
         % CLEARCACHE  Remove all cached ACG maps to free memory.
             cache = ParentSpikeLoader.getCache();

@@ -11,8 +11,8 @@ function metrics = validateClassification(pred_labels, true_labels)
 %   true_labels - (1xN) ground truth labels: 1=excitatory, 2=inhibitory, NaN=unknown
 %
 % OUTPUT:
-%   metrics - struct with Accuracy, Precision, Recall, F1score, Specificity
-%             per class and macro-averaged (from multiclass_metrics_common)
+%   metrics - struct: Accuracy, BalancedAccuracy, PerClassPrecision / Recall / F1 (1 x 2,
+%             [excitatory inhibitory]) and their macro averages Precision, Recall, F1score
 
 pred_labels = pred_labels(:)';
 true_labels = true_labels(:)';
@@ -41,14 +41,15 @@ fprintf('Pred label breakdown:  %i excitatory | %i inhibitory\n', ...
 % 2x2 confusion matrix: rows = true, cols = predicted, order [exc=1, inh=2]
 C = confusionmat(y_true, y_pred, 'Order', [1, 2]);
 
-% Metrics via existing helper (handles both 2-class and N-class)
-metrics = multiclass_metrics_common(C);
+% Per-class metrics (multiclass_metrics_common reports class 1 only for a 2x2 matrix, which
+% hides the minority inhibitory class) and their macro average
+metrics = classMetrics(C);
 
-fprintf('\nAccuracy:    %.3f\n', metrics.Accuracy);
-fprintf('Precision:   %.3f  (macro)\n', metrics.Precision);
-fprintf('Recall:      %.3f  (macro)\n', metrics.Recall);
-fprintf('F1 score:    %.3f  (macro)\n', metrics.F1score);
-fprintf('Specificity: %.3f\n',          metrics.Specificity);
+fprintf('\nAccuracy:    %.3f   balanced: %.3f\n', metrics.Accuracy, metrics.BalancedAccuracy);
+fprintf('             excitatory  inhibitory  macro\n');
+fprintf('Precision:   %10.3f  %10.3f  %.3f\n', metrics.PerClassPrecision, metrics.Precision);
+fprintf('Recall:      %10.3f  %10.3f  %.3f\n', metrics.PerClassRecall, metrics.Recall);
+fprintf('F1 score:    %10.3f  %10.3f  %.3f\n', metrics.PerClassF1, metrics.F1score);
 
 plotConfusionMatrixPair(C);
 end
@@ -114,4 +115,20 @@ if val > 0.55 * maxVal
 else
     col = [0 0 0];
 end
+end
+
+% -------------------------------------------------------------------------
+function m = classMetrics(C)
+% Per-class precision / recall / F1 of a confusion matrix (rows = true, cols = predicted);
+% a class without predicted (true) units has NaN precision (recall), left out of the mean.
+tp   = diag(C)';
+prec = tp ./ sum(C, 1);
+rec  = tp ./ sum(C, 2)';
+prec(sum(C, 1) == 0) = NaN;
+rec(sum(C, 2)' == 0) = NaN;
+f1 = 2 * prec .* rec ./ (prec + rec);
+f1(prec + rec == 0) = 0;
+m = struct('Accuracy', sum(tp) / max(sum(C(:)), 1), 'BalancedAccuracy', mean(rec, 'omitnan'), ...
+    'PerClassPrecision', prec, 'PerClassRecall', rec, 'PerClassF1', f1, ...
+    'Precision', mean(prec, 'omitnan'), 'Recall', mean(rec, 'omitnan'), 'F1score', mean(f1, 'omitnan'));
 end

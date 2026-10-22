@@ -172,6 +172,7 @@ classdef CellTypeClassifier < handle
             ctc.UnitLabels          = [];
             ctc.UnitConfidence      = [];
             ctc.UnitGraphConnectivity = [];
+            ctc.Composition         = struct();   % fitted on the old seeds / units
         end
 
         function validateParameters(ctc)

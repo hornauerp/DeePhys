@@ -57,8 +57,8 @@ for g = 1:max(iG)
         if ~all(is_ref), fallback(end+1) = g; end %#ok<AGROW>
         rmask = mask;
     end
-    mu = mean(X(rmask, :), 1);
-    sd = std(X(rmask, :), 0, 1);
+    mu = mean(X(rmask, :), 1, "omitnan");     % missing rows stay missing
+    sd = std(X(rmask, :), 0, 1, "omitnan");
     stats.Mu(g, :) = mu; stats.SD(g, :) = sd;
     flat = sd == 0;
     sd(flat) = 1;

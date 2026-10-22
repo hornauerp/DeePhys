@@ -72,9 +72,8 @@ classdef test_RecordingProcessor < matlab.unittest.TestCase
             proc.runQC();
             proc.computeConnectivity();
             tc.verifyEqual(proc.Status.Connectivity, "done");
-            if numel(proc.Units) >= 2
-                tc.verifyTrue(isfield(proc.Connectivity, 'CCG'));
-            end
+            tc.assumeGreaterThanOrEqual(numel(proc.Units), 2, 'connectivity needs two QC-passing units');
+            tc.verifyTrue(isfield(proc.Connectivity, 'CCG'));
         end
 
         function testFullPipelineSequence(tc)

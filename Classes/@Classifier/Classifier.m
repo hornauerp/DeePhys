@@ -43,6 +43,11 @@ classdef Classifier
         %                          (shuffle a feature in the held-out fold) or "oob"
         %                          (out-of-bag; with grouped data the OOB rows come from the
         %                          training groups and favour group-identifying features)
+        %     .RF                - struct of random forest overrides of
+        %                          MLPipeline.returnDefaultParams().RF, e.g.
+        %                          struct('MinLeafSize', 1, 'MinParentSize', 2) for data
+        %                          with a few rows per class (one row per well). Ignored
+        %                          by the hyperparameter search (NHyper > 0)
         %
         % Rows with a missing label are left out (warning). result(k).train_acc is the OOB
         % (RF) or resubstitution accuracy on the training rows: optimistic whenever rows of a
@@ -68,6 +73,8 @@ classdef Classifier
 
             % Warn if class distribution is severely imbalanced (>3:1 ratio).
             Classifier.checkClassBalance(Y);
+
+            clf_params = Classifier.modelParams(opts);
 
             norm_groups = MLUtils.groupLabels(opts.NormalizationGroups, height(X));   % keep names: fitted stats are keyed by them
             cv_groups   = Classifier.resolveGroups(opts.CVGroups, height(X));
@@ -110,8 +117,6 @@ classdef Classifier
                     continue
                 end
 
-                clf_params = MLPipeline.returnDefaultParams();
-                clf_params.RF.Prior = opts.Prior;
                 train_groups = [];
                 if ~isempty(cv_groups), train_groups = cv_groups(train_idx); end
                 [clf, train_acc] = MLPipeline.createClassifier(X_train, Y_train, opts.Algorithm, ...
@@ -318,6 +323,38 @@ classdef Classifier
             if ~isfield(opts, 'Seed'),               opts.Seed = [];              end
             if ~isfield(opts, 'ComputeImportance'),  opts.ComputeImportance = true; end
             if ~isfield(opts, 'ImportanceMethod'),   opts.ImportanceMethod = "auto"; end
+            if ~isfield(opts, 'RF'),                 opts.RF = struct();          end
+        end
+
+        function params = modelParams(opts)
+        % MODELPARAMS  MLPipeline parameters with opts.Prior and the opts.RF overrides.
+        %   opts.RF may set any MLPipeline RF field except Prior (that is opts.Prior);
+        %   an unknown field is an error rather than a silently ignored typo.
+            params = MLPipeline.returnDefaultParams();
+            params.RF.Prior = opts.Prior;
+            if isempty(opts.RF), return; end
+            if ~isstruct(opts.RF) || ~isscalar(opts.RF)
+                error('Classifier:rfOptions', 'opts.RF must be a scalar struct of RF parameters.');
+            end
+            allowed = setdiff(string(fieldnames(params.RF)), "Prior");
+            given   = string(fieldnames(opts.RF));
+            bad     = given(~ismember(given, allowed));
+            if ~isempty(bad)
+                error('Classifier:rfOptions', 'Unknown opts.RF field(s) %s; allowed: %s (use opts.Prior for the prior).', ...
+                    strjoin(bad, ', '), strjoin(allowed, ', '));
+            end
+            for f = given'
+                params.RF.(f) = opts.RF.(f);
+            end
+            is_count = @(v) isnumeric(v) && isscalar(v) && v >= 1 && v == round(v);
+            for f = ["MinLeafSize", "NumCycles"]
+                if ~is_count(params.RF.(f))
+                    error('Classifier:rfOptions', 'opts.RF.%s must be a positive integer.', f);
+                end
+            end
+            if ~isempty(params.RF.MinParentSize) && ~is_count(params.RF.MinParentSize)
+                error('Classifier:rfOptions', 'opts.RF.MinParentSize must be a positive integer or [].');
+            end
         end
 
         function S = expandScores(scores, class_names, n_classes)
@@ -343,7 +380,7 @@ classdef Classifier
             if method == "test"
                 predImp = MLUtils.testPermutationImportance(mdl, X_test, Y_test, is_classification);
             else
-                predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
+                predImp = oobPermutedPredictorImportance(mdl, 'Options', MLPipeline.parallelOptions());
             end
         end
 

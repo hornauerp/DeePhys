@@ -1,4 +1,5 @@
 deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+if ~isfolder(fullfile(deephys_root, 'Plots')), mkdir(fullfile(deephys_root, 'Plots')); end   % figure exports
 %% Batch 3 FCDI
 rg = RecordingGroup(fcdi_array);
 

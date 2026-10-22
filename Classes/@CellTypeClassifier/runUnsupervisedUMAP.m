@@ -27,16 +27,20 @@ if isfield(ctc.Parameters, 'Graph') && isfield(ctc.Parameters.Graph, 'Method')
 end
 want_embedding = ~isfield(p_umap, 'ComputeEmbedding') || p_umap.ComputeEmbedding || graph_method == "umap";
 
-umap_ready = ~isempty(ctc.UMAP) && ~isempty(ctc.Reduction) ...
-             && isfield(ctc.Reduction, 'Unsupervised') ...
-             && ~isempty(ctc.Reduction.Unsupervised) ...
-             && size(ctc.Reduction.Unsupervised, 1) == N_all;
-
 % Same group weighting as optimizeUnsupervisedUMAP, so a recomputed embedding (e.g. one per
 % ensemble seed) matches the optimised one and the ACG bins do not dominate distances.
 if ~isempty(ctc.NormalizationParams) && isfield(ctc.NormalizationParams, 'feat_names_trimmed')
     X_all = applyFeatureGroupWeights(X_all, ctc.NormalizationParams.feat_names_trimmed, p_umap);
 end
+
+% An embedding is reused only for the same features and UMAP settings, not merely the same
+% unit count
+embed_key = embeddingKey(X_all, n_neighbors, p_umap.MinDist, p_umap.Spread, p_umap.NDims);
+umap_ready = ~isempty(ctc.UMAP) && ~isempty(ctc.Reduction) ...
+             && isfield(ctc.Reduction, 'Unsupervised') ...
+             && ~isempty(ctc.Reduction.Unsupervised) ...
+             && size(ctc.Reduction.Unsupervised, 1) == N_all ...
+             && isfield(ctc.Reduction, 'UnsupervisedKey') && ctc.Reduction.UnsupervisedKey == embed_key;
 
 % The exact graph is rebuilt every time (seconds; never stale). "Reuse" applies to the
 % expensive UMAP embedding only.
@@ -73,6 +77,7 @@ if want_embedding
     ctc.UMAP = umap_model;
     if isempty(ctc.Reduction); ctc.Reduction = struct(); end
     ctc.Reduction.Unsupervised = reduction;
+    ctc.Reduction.UnsupervisedKey = embed_key;
     fprintf('Unsupervised UMAP: %d units, %d features, %d dimensions\n', ...
         N_all, size(X_all, 2), p_umap.NDims);
 end

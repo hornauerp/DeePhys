@@ -19,6 +19,8 @@ function [T, post, p, mdl_all] = estimateClassComposition(Z, train_rows, y, grou
 %   y          - labels of the training units (1 / 2), same order as train_rows
 %   groups     - (N x 1) group of each unit
 %   opts.NFolds (5), opts.NBoot (200), opts.Lambda ([] = 1 / n_train), opts.Seed (1)
+%   opts.KnownLabels - (N x 1) 1 / 2 for units whose label is taken as known (left out of
+%                the EM and counted with that label), NaN otherwise; [] = none
 % OUTPUTS:
 %   T    - table: Group, NUnits, Fraction, CILow, CIHigh, Counted (share p > 0.5),
 %          MeanProbability
@@ -34,6 +36,7 @@ arguments
     opts.NBoot  (1,1) double = 200
     opts.Lambda double = []
     opts.Seed   (1,1) double = 1
+    opts.KnownLabels double = []
 end
 N = size(Z, 1);
 if islogical(train_rows), train_rows = find(train_rows); end
@@ -79,20 +82,34 @@ end
 pi_tr = mean(y);
 
 % -- per group: EM prior adjustment with a bootstrap interval ------------------------
+% Units with known labels (opts.KnownLabels, e.g. the class-balanced, typical graph seeds)
+% are left out of the EM and counted with their label: their 1:1, tail-selected
+% probabilities would pull every culture that holds seeds towards 50%.
+known = nan(N, 1);
+if ~isempty(opts.KnownLabels), known = double(opts.KnownLabels(:)); end
 [G, gname] = findgroups(groups);
 ng = numel(gname);
 frac = nan(ng, 1); lo = frac; hi = frac; counted = frac; meanp = frac; n_units = zeros(ng, 1);
 post = nan(N, 1);
 for g = 1:ng
     rows = find(G == g);
-    pg = p(rows);
-    [frac(g), post(rows)] = adjustClassPrior(pg, pi_tr);
-    boot = nan(opts.NBoot, 1);
-    for b = 1:opts.NBoot
-        boot(b) = adjustClassPrior(pg(randi(numel(pg), numel(pg), 1)), pi_tr);
+    is_known = ~isnan(known(rows));
+    est = rows(~is_known);
+    k_pos = sum(known(rows(is_known)) == 2);
+    pg = p(est);
+    q = 0;
+    if ~isempty(est), q = adjustClassPrior(pg, pi_tr); end
+    w1 = q / pi_tr * p(rows); w0 = (1 - q) / (1 - pi_tr) * (1 - p(rows));
+    post(rows) = w1 ./ max(w1 + w0, realmin);
+    combine = @(qq) (numel(est) * qq + k_pos) / numel(rows);
+    frac(g) = combine(q);
+    boot = repmat(frac(g), opts.NBoot, 1);
+    for b = 1:opts.NBoot * ~isempty(est)
+        boot(b) = combine(adjustClassPrior(pg(randi(numel(pg), numel(pg), 1)), pi_tr));
     end
     lo(g) = prctile(boot, 2.5); hi(g) = prctile(boot, 97.5);
-    counted(g) = mean(pg > 0.5); meanp(g) = mean(pg); n_units(g) = numel(rows);
+    counted(g) = (sum(pg > 0.5) + k_pos) / numel(rows);
+    meanp(g) = (sum(pg) + k_pos) / numel(rows); n_units(g) = numel(rows);
 end
 T = table(gname, n_units, frac, lo, hi, counted, meanp, 'VariableNames', ...
     {'Group', 'NUnits', 'Fraction', 'CILow', 'CIHigh', 'Counted', 'MeanProbability'});

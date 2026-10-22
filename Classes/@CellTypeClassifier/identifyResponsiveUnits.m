@@ -3,12 +3,12 @@ function identifyResponsiveUnits(ctc, metadata_filter)
 %
 % Two methods controlled by Parameters.Bootstrap.GroundTruthMethod:
 %
-%   "two_window" (default)
+%   "two_window"
 %       Bootstrap permutation test comparing binned spike counts in a pre
 %       window vs a post window within a single recording.
 %       Parameters used: PreCutout, PostCutout, BinSize, NIter, Alpha.
 %
-%   "full_curve"
+%   "full_curve" (default)
 %       Three-stage pipeline using the full dose-response curve:
 %         Stage 1 — Monotonicity: |Spearman rho(dose rank, mean FR)| >= threshold
 %         Stage 2 — Effect size:  fold change (baseline to max dose) >= threshold

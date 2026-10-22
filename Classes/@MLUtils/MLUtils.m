@@ -144,9 +144,14 @@ classdef MLUtils
             % Select normalization pipeline
             use_combat = string(pipeline_type) == "combat";
             if use_combat
+                if isempty(norm_groups)
+                    error('MLUtils:combatNeedsGroups', ['NormalizationPipeline "combat" needs batch ' ...
+                        'groups (NormalizationVar); none were given.']);
+                end
                 np        = NormalizationPipeline.combatThenGlobal();
                 g_train   = norm_groups(train_idx);
-                cov_train = covariate_labels(train_idx);
+                cov_train = [];   % no covariate to protect: plain ComBat
+                if ~isempty(covariate_labels), cov_train = covariate_labels(train_idx); end
             elseif ~isempty(norm_groups)
                 np        = NormalizationPipeline.groupThenGlobal();
                 g_train   = norm_groups(train_idx);

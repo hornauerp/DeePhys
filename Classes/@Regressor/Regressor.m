@@ -269,7 +269,7 @@ classdef Regressor
             if method == "test"
                 predImp = MLUtils.testPermutationImportance(mdl, X_test, Y_test, false);
             else
-                predImp = oobPermutedPredictorImportance(mdl, 'Options', statset('UseParallel', true));
+                predImp = oobPermutedPredictorImportance(mdl, 'Options', MLPipeline.parallelOptions());
             end
         end
 

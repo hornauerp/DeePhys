@@ -1,9 +1,10 @@
 deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+if ~isfolder(fullfile(deephys_root, 'Plots')), mkdir(fullfile(deephys_root, 'Plots')); end   % figure exports
 addpath(genpath(deephys_root))
 set(0,'defaultFigureRenderer','painters')
 
 %% LOAD DATA
-save_root = fullfile(deephys_root, "Data", "Figure6");
+save_root = fullfile(deephys_root, "Figures", "Data", "Figure6");
 load(fullfile(save_root,'qp_results.mat'))
 
 %% PREPARE DATA

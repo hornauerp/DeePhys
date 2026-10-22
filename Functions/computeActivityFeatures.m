@@ -46,7 +46,7 @@ function [activity_table, regularity_table, catch22_table] = computeActivityFeat
             regularity_table = table();
         end
         if do_catch22
-            c22_names = "SC_" + string(GetAllFeatureNames());
+            c22_names = "SC_" + string(GetAllFeatureNames(false));
             catch22_table = array2table(NaN(1, length(c22_names)), 'VariableNames', c22_names);
         else
             catch22_table = table();

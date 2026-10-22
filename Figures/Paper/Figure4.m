@@ -1,4 +1,5 @@
 deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+if ~isfolder(fullfile(deephys_root, 'Plots')), mkdir(fullfile(deephys_root, 'Plots')); end   % figure exports
 addpath(genpath(deephys_root))
 
 %% Set some parameters
@@ -25,7 +26,7 @@ example_idx = [11 + 3, 11 + 1,6,3]; %Descending for right plotting order
 example_labels = ["nRF [Hz]","nPMW","CVI","sEAF"];
 
 %% Load data
-save_root = fullfile(deephys_root, "Data", "Figure4");
+save_root = fullfile(deephys_root, "Figures", "Data", "Figure4");
 load(fullfile(save_root,'lna_accuracy.mat'))
 load(fullfile(save_root,'FRET_results.mat'))
 load(fullfile(save_root,'lna_comparisons.mat'))

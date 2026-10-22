@@ -6,7 +6,9 @@ function T = calibratedResponseTable(ud_all, meta, culture_keys, group_field, ba
 %   LFC  = log2 fold change of the firing rate (high doses pooled vs baseline; half-spike
 %          pseudo-count)
 %   LFCc = LFC minus the culture's median LFC (removes culture-wide drift / network effects)
-%   p    = rank-sum test of p.BinSize-s spike counts (high doses vs baseline)
+%   p    = rank-sum test of p.BinSize-s spike counts, high doses divided by the culture's
+%          median fold change vs baseline (the drift-corrected change, like LFCc; a raw test
+%          calls most units of a culture with a global rate shift significant)
 % Thresholds are set elsewhere from control cultures (control_calibrated method).
 %
 % INPUTS:
@@ -41,6 +43,7 @@ function T = calibratedResponseTable(ud_all, meta, culture_keys, group_field, ba
         bi = find(ud_rec == base);
         hi_sets = arrayfun(@(r) find(ud_rec == r), high, 'UniformOutput', false);
         lfc = nan(numel(bi), 1); pv = lfc; r0 = lfc; rh = lfc; keep = false(numel(bi), 1);
+        cbs = cell(numel(bi), 1); chs = cbs;
         for k = 1:numel(bi)
             u = ud_all(bi(k));
             cb = histcounts(u.SpikeTimes, 0:bin:u.RecordingDuration);
@@ -56,10 +59,14 @@ function T = calibratedResponseTable(ud_all, meta, culture_keys, group_field, ba
             keep(k) = true;
             r0(k) = mean(cb) / bin; rh(k) = mean(ch) / bin;
             lfc(k) = log2((rh(k) + 0.5 / (numel(ch) * bin)) / (r0(k) + 0.5 / (numel(cb) * bin)));
-            pv(k) = ranksum(ch, cb);
+            cbs{k} = cb; chs{k} = ch;
         end
         if ~any(keep), continue, end
-        lfcc = lfc(keep) - median(lfc(keep));
+        drift = median(lfc(keep));
+        lfcc = lfc(keep) - drift;
+        for k = find(keep)'
+            pv(k) = ranksum(chs{k} / 2^drift, cbs{k});
+        end
         n = sum(keep);
         rows(end+1, :) = {ud_uid(bi(keep))', repmat(c, n, 1), repmat(base, n, 1), ...
             r0(keep), rh(keep), lfc(keep), lfcc, pv(keep)}; %#ok<AGROW>

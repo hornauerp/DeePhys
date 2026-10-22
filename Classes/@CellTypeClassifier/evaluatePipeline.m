@@ -68,6 +68,9 @@ end
 
 resp_class_label   = ctc.Parameters.TrainLabels.ResponsiveClassLabel;
 orig_training_idx  = ctc.Parameters.UMAP.TrainingCultureIdx;
+% A fold can error (e.g. no responders left without the held-out culture); the training
+% set must not stay reduced to that fold's cultures
+restore_training = onCleanup(@() setTrainingCultures(ctc, orig_training_idx)); %#ok<NASGU>
 
 cv_results = struct('fold_idx', {}, 'n_responsive', {}, 'n_labeled_inh', {}, ...
     'true_positives', {}, 'precision_inh', {}, 'recall_inh', {}, ...
@@ -136,7 +139,7 @@ for fi = 1:n_folds
     cv_results(fi).confidence     = ctc.UnitConfidence;
 end
 
-% Restore original TrainingCultureIdx
+% Restore original TrainingCultureIdx (also on error, via restore_training)
 ctc.Parameters.UMAP.TrainingCultureIdx = orig_training_idx;
 
 if opts.Verbose
@@ -147,4 +150,10 @@ if opts.Verbose
         mean([cv_results.precision_inh]), mean(valid_recall));
     fprintf('  NOTE: UnitLabels/Confidence reflect the last fold. Re-run pipeline to restore full-data results.\n');
 end
+end
+
+
+function setTrainingCultures(ctc, idx)
+% SETTRAININGCULTURES  Restore TrainingCultureIdx (onCleanup of evaluatePipeline).
+    ctc.Parameters.UMAP.TrainingCultureIdx = idx;
 end

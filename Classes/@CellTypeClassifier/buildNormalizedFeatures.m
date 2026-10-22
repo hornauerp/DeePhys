@@ -9,8 +9,8 @@ function buildNormalizedFeatures(ctc)
 %   1. Deduplicate UnitDataArray to one representative per unique UnitID
 %   2. Extract harmonized waveforms + ACGs (three-level cache via getOrExtract)
 %   3. Build feature matrix (waveform + ACG features, common grid)
-%   4. Fill NaN → 0
-%   5. Per-group z-score within each NormalizationVar group
+%   4. Per-group z-score within each NormalizationVar group (missing values ignored)
+%   5. Fill missing values with the (group) mean
 %   6. Compute training-culture subset mask (TrainingCultureIdx)
 %
 % Does NOT perform global z-score, NaN-column removal, or scaling — those are
@@ -67,8 +67,9 @@ ctc.HarmonizedWaveforms = aligned_wf(:, all_to_unique);
 ctc.HarmonizedACGs      = norm_acgs(:, all_to_unique);
 ctc.HarmonizedSR        = ctc.Parameters.Harmonization.WaveformTargetSamplingRate;
 
-% -- Fill NaN before per-group z-score (missing features treated as mean) -----
-X_raw(isnan(X_raw)) = 0;
+% Missing features (e.g. a waveform too short for the window) are filled with the mean
+% after the z-score: a raw 0 would sit far from the mean and enter the group statistics
+missing = isnan(X_raw);
 
 % -- Map unique units to FeatureStore rows (order-independent) ----------------
 % unique_to_rep contains UnitDataArray indices, but FeatureStore columns
@@ -112,6 +113,13 @@ if norm_var ~= "" && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Proper
 elseif norm_var ~= ""
     warning('CellTypeClassifier:normVarNotFound', ...
         'NormalizationVar "%s" not found in UnitTable — per-group z-score skipped.', norm_var);
+end
+if isempty(group_stats)
+    col_mean = mean(X_raw, 1, 'omitnan');   % the global z-score maps it to 0
+    [~, c] = find(missing);
+    X_raw(missing) = col_mean(c);           % all-missing columns stay NaN and are dropped
+else
+    X_raw(missing) = 0;                     % the group mean after the per-group z-score
 end
 
 % -- Training culture subset mask ---------------------------------------------

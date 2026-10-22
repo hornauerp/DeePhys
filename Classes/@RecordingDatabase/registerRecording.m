@@ -103,8 +103,10 @@ function val = getFieldSafe(s, field, default)
 end
 
 function s = nanStr(val)
-% NANSTR  Convert numeric to SQL-safe string (NULL for NaN).
-    if isnan(val)
+% NANSTR  Convert numeric to SQL-safe string (NULL for NaN). Text such as '14' is read as a
+%   number (sprintf('%.6g', '14') would print the character codes).
+    if ischar(val) || isstring(val) || iscell(val), val = str2double(string(val)); end
+    if isempty(val) || isnan(val)
         s = 'NULL';
     else
         s = sprintf('%.6g', val);

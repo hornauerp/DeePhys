@@ -111,6 +111,15 @@ All fields are optional.
 | `NHyper` | `0` | Bayesian hyperparameter optimisation evaluations (0 = skip). With `CVGroups`, the inner folds of the search also keep groups together |
 | `Prior` | `"empirical"` | `"empirical"` or `"uniform"` (equal class weighting for imbalanced data) |
 | `Seed` | `[]` | RNG seed for reproducibility |
+| `RF` | `struct()` | Random forest overrides of `MLPipeline.returnDefaultParams().RF`: `NumCycles` (500), `MinLeafSize` (5), `MinParentSize` (`[]` = `templateTree` default 10), `NumVariablesToSample` (`"auto"`), `Surrogate`, `Reproducible`. Unknown fields are an error; the prior is set with `Prior`. Ignored by the hyperparameter search (`NHyper > 0`) |
+
+The RF defaults suit unit-level data. With a few rows per class, such as one row per well, a tree cannot split a node smaller than `MinParentSize` or create a leaf smaller than `MinLeafSize`. With about 5 training rows per class every tree then stays a single leaf: predictions are constant and importances are zero. Lower both in that case:
+
+```matlab
+opts = struct('Algorithm', 'rf', 'KFold', 5, 'Prior', 'uniform', ...
+              'RF', struct('MinLeafSize', 1, 'MinParentSize', 2));
+result = Classifier.classify(X_wells, patterning, opts);
+```
 
 ### Cross-validation grouping
 

@@ -11,6 +11,7 @@ classdef MLPipeline
         %   Replaces hardcoded values scattered across RecordingGroup methods.
             params.RF.NumCycles = 500;
             params.RF.MinLeafSize = 5;  % ≥5 prevents leaf-level memorisation on typical neuro datasets
+            params.RF.MinParentSize = [];  % [] = templateTree default (10); with few rows per class (e.g. one row per well) lower both, e.g. 1 / 2
             params.RF.NumVariablesToSample = 'auto';  % auto = sqrt(F) for classif, F/3 for regress (Breiman, 2001)
             params.RF.Surrogate = 'on';
             params.RF.Reproducible = true;
@@ -95,14 +96,10 @@ classdef MLPipeline
                     case 'knn'
                         clf = fitcknn(X_train, Y_train, 'Prior', params.RF.Prior);
                     case 'rf'
-                        t = templateTree('Surrogate', params.RF.Surrogate, ...
-                            'MinLeafSize', params.RF.MinLeafSize, ...
-                            'NumVariablesToSample', MLPipeline.resolveNumVariables( ...
-                                params.RF.NumVariablesToSample, size(X_train, 2), "classification"), ...
-                            'Reproducible', params.RF.Reproducible);
+                        t = MLPipeline.treeTemplate(params.RF, size(X_train, 2), "classification");
                         clf = fitcensemble(X_train, Y_train, 'Method', 'Bag', 'Prior', params.RF.Prior, ...
                             'NumLearningCycles', params.RF.NumCycles, ...
-                            'Learners', t, 'Options', statset("UseParallel", true));
+                            'Learners', t, 'Options', MLPipeline.parallelOptions());
                 end
                 if alg == "rf"
                     % OOB accuracy: held-out only for exchangeable rows; with grouped rows (units
@@ -112,6 +109,27 @@ classdef MLPipeline
                     train_acc = 1 - resubLoss(clf, 'LossFun', 'classiferror');  % resubstitution; optimistic (~1.0 for SVM/KNN)
                 end
             end
+        end
+
+        function t = treeTemplate(rf, n_features, task)
+        % TREETEMPLATE  templateTree of the random forest from the RF parameter struct.
+        %   MinParentSize is passed only when set: templateTree's default (10) otherwise
+        %   applies, and with a few rows per class it stops every split before MinLeafSize does.
+            args = {'Surrogate', rf.Surrogate, 'MinLeafSize', rf.MinLeafSize, ...
+                'NumVariablesToSample', MLPipeline.resolveNumVariables(rf.NumVariablesToSample, n_features, task), ...
+                'Reproducible', rf.Reproducible};
+            if isfield(rf, 'MinParentSize') && ~isempty(rf.MinParentSize)
+                args = [args, {'MinParentSize', rf.MinParentSize}];
+            end
+            t = templateTree(args{:});
+        end
+
+        function o = parallelOptions()
+        % PARALLELOPTIONS  statset for bagging / OOB importance. Parallel workers ignore the
+        %   global RNG, so a substream-capable stream seeded from it keeps rng(seed) runs
+        %   reproducible with or without a parallel pool.
+            s = RandStream('mlfg6331_64', 'Seed', randi(2^31 - 1));
+            o = statset('UseParallel', true, 'Streams', s, 'UseSubstreams', true);
         end
 
         function n = resolveNumVariables(spec, n_features, task)
@@ -183,14 +201,10 @@ classdef MLPipeline
                     case 'knn'   % MATLAB has no fitrknn
                         mdl = KNNRegressionModel(X_train, Y_train, 5);
                     case 'rf'
-                        t = templateTree('Surrogate', params.RF.Surrogate, ...
-                            'MinLeafSize', params.RF.MinLeafSize, ...
-                            'NumVariablesToSample', MLPipeline.resolveNumVariables( ...
-                                params.RF.NumVariablesToSample, size(X_train, 2), "regression"), ...
-                            'Reproducible', params.RF.Reproducible);
+                        t = MLPipeline.treeTemplate(params.RF, size(X_train, 2), "regression");
                         mdl = fitrensemble(X_train, Y_train, 'Method', 'Bag', ...
                             'NumLearningCycles', params.RF.NumCycles, ...
-                            'Learners', t, 'Options', statset('UseParallel', true));
+                            'Learners', t, 'Options', MLPipeline.parallelOptions());
                     otherwise
                         error('MLPipeline:createRegressor', 'Unknown algorithm "%s". Use rf, svm, or knn.', alg);
                 end

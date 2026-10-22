@@ -125,7 +125,7 @@ classdef SpikeData
 
             % Recording ID from the spike data, so the same sorting gets the same ID on
             % every machine and mount point (the path differs between Windows and Linux mounts)
-            sd.RecordingID = SpikeData.contentID(raw_times, raw_units, sd.SamplingRate);
+            sd.RecordingID = SpikeData.contentID(raw_times, raw_units, sd.SamplingRate, input_path);
             sd.SortingID   = SpikeData.resolveSortingID(input_path, sd.ParentPath, sd.RecordingID);
         end
 
@@ -187,10 +187,13 @@ classdef SpikeData
             key = string(strjoin(parts(max(1, end - 5):end), '/'));
         end
 
-        function id = contentID(raw_times, raw_units, sampling_rate)
+        function id = contentID(raw_times, raw_units, sampling_rate, input_path)
         % CONTENTID  Path-independent recording ID: hash of a fingerprint of the spike data
         % (spike count, exact sum of the sample indices, spikes per template, and the
         % first and last 10,000 spikes). Identical sortings give identical IDs.
+        % A recording without spikes has no content to tell it apart (every silent window
+        % would share one ID); its last six path components (input_path) are used instead.
+            if nargin < 4, input_path = ""; end
             t = uint64(raw_times(:));
             u = uint64(raw_units(:));
             k = min(10000, numel(t));
@@ -199,6 +202,12 @@ classdef SpikeData
             fp = struct('SamplingRate', double(sampling_rate), 'NSpikes', numel(t), ...
                 'SampleSum', sum(t, 'native'), 'Counts', counts, ...
                 'Head', [t(1:k), u(1:k)], 'Tail', [t(end-k+1:end), u(end-k+1:end)]);
+            if isempty(t) && strlength(string(input_path)) > 0
+                p = strrep(char(input_path), '\', '/');
+                parts = strsplit(regexprep(p, '/+$', ''), '/');
+                parts = parts(~cellfun(@isempty, parts));
+                fp.EmptyPath = strjoin(parts(max(1, end - 5):end), '/');
+            end
             id = string(paramHash(fp));
         end
 

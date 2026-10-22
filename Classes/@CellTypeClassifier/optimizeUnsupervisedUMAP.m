@@ -327,6 +327,7 @@ end
 
 % -- Apply best params and run final unsupervised UMAP ------------------------
 ctc.Parameters.UMAP.NNeighbors    = best_full.NNeighbors;
+ctc.Parameters.UMAP.AutoNNeighbors = false;   % otherwise the tuned NNeighbors is ignored
 ctc.Parameters.UMAP.MinDist       = best_full.MinDist;
 ctc.Parameters.UMAP.Spread        = best_full.Spread;
 ctc.Parameters.UMAP.ACGWeight     = best_full.ACGWeight;
@@ -350,6 +351,8 @@ rng(rng_seed, 'twister');
 ctc.UMAP = umap_model;
 if isempty(ctc.Reduction); ctc.Reduction = struct(); end
 ctc.Reduction.Unsupervised = reduction_final;
+ctc.Reduction.UnsupervisedKey = embeddingKey(X_final, min(best_full.NNeighbors, N_all - 1), ...
+    best_full.MinDist, best_full.Spread, p_umap.NDims);
 ctc.Graph = struct();   % rebuilt with the optimised parameters by generateTrainLabels
 fprintf('Phase 1 complete. Final UMAP stored in ctc.Reduction.Unsupervised.\n');
 

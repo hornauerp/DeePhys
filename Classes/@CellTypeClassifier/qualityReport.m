@@ -56,11 +56,33 @@ function report = qualityReport(ctc, opts)
     report = add(report, "Training seeds", status(ok), detail);
 
     % 2. responder calls
-    if isfield(ctc.ResponsivenessDetail, 'calibration')
-        ci = ctc.ResponsivenessDetail.calibration;
-        report = add(report, "Responder FDR", status(ci.fdr_inc <= opts.MaxFDR), ...
-            sprintf('increase: est. FDR %.2f (%.1f%% treated vs %.1f%% control)', ci.fdr_inc, ...
-            100 * ci.rate_inc_treated, 100 * ci.rate_inc_control));
+    % One calibration per response rule (ResponseRules), else the single one; each is
+    % checked in the direction its calls were made.
+    rd = ctc.ResponsivenessDetail;
+    calibs = {}; dirs = strings(0);
+    if isfield(rd, 'rules') && ~isempty(rd.rules)
+        for r = 1:numel(rd.rules)
+            if ~isempty(rd.rules(r).Calibration)
+                calibs{end+1} = rd.rules(r).Calibration; dirs(end+1) = lower(string(rd.rules(r).Direction)); %#ok<AGROW>
+            end
+        end
+    elseif isfield(rd, 'calibration') && ~isempty(rd.calibration)
+        calibs = {rd.calibration}; dirs = lower(string(ctc.Parameters.Bootstrap.Direction));
+    end
+    if ~isempty(calibs)
+        ok = true; parts = strings(0);
+        for r = 1:numel(calibs)
+            ci = calibs{r};
+            for d = ["increase", "decrease"]
+                if dirs(r) ~= d && dirs(r) ~= "both", continue, end
+                s = extractBefore(d, 4);   % inc / dec
+                f = ci.("fdr_" + s);
+                ok = ok && f <= opts.MaxFDR;
+                parts(end+1) = sprintf('%s: est. FDR %.2f (%.1f%% treated vs %.1f%% control)', d, f, ...
+                    100 * ci.("rate_" + s + "_treated"), 100 * ci.("rate_" + s + "_control")); %#ok<AGROW>
+            end
+        end
+        report = add(report, "Responder FDR", status(ok), strjoin(parts, '; '));
     else
         report = add(report, "Responder FDR", "INFO", "not estimated (use Bootstrap.GroundTruthMethod = ""control_calibrated"")");
     end

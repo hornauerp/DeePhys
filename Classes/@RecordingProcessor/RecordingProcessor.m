@@ -57,7 +57,11 @@ classdef RecordingProcessor < handle
         %      burst features from burst onset / offset against a rate-matched null
         %      (computeCellTypeBurstEI: BurstEI_*, BurstUnit*), replacing BurstLeadTime_*,
         %      BurstLeadFraction, MeanBurstFraction_*, IntraBurstRate_*, BurstParticipation*
-        FeatureDefinitionVersion = 2
+        %   3  catch22 without the catch24 extras (SC_DN_Mean / SC_DN_Spread_Std and the
+        %      network DN_Mean / DN_Spread_Std are no longer written); SmallWorldness from
+        %      path lengths of reachable pairs (was NaN or 0 with any unreachable pair); QC of a
+        %      window of a longer sorting on the parent's spike trains (QC.RateReference)
+        FeatureDefinitionVersion = 3
     end
 
     % =====================================================================
@@ -135,15 +139,23 @@ classdef RecordingProcessor < handle
                         sd.InputPath, N, p.QC.Amplitude(1), max(max_amps));
                     bad_amp(:) = false;
                 end
-                bad_fr    = RecordingProcessor.checkFiringRate(firing_rates(:), p.QC.FiringRate);   % column: a row broadcasts to an N x N mask
-                bad_rpv   = RecordingProcessor.checkRPV(unit_spike_times, p.QC.RPV, p.QC.RefractoryPeriod);
+                % Spike-train criteria on the whole parent sorting when this recording is a
+                % window of it: per-window checks would drop exactly the units a treatment
+                % silences or drives, so the unit set would differ between segments.
+                [qc_times, qc_duration] = RecordingProcessor.qcReferenceTrains(sd, N, p.QC);
+                if isempty(qc_times)
+                    qc_times = unit_spike_times; qc_duration = sd.Duration;
+                end
+                qc_rates  = cellfun(@numel, qc_times) / qc_duration;
+                bad_fr    = RecordingProcessor.checkFiringRate(qc_rates(:), p.QC.FiringRate);   % column: a row broadcasts to an N x N mask
+                bad_rpv   = RecordingProcessor.checkRPV(qc_times, p.QC.RPV, p.QC.RefractoryPeriod);
                 [is_axon, is_noisy] = RecordingProcessor.checkWaveform(norm_wf, p.QC.Axon, p.QC.Noise, p.QC.NoiseCutout, sd.SamplingRate);
-                spike_counts = cellfun(@numel, unit_spike_times);
+                spike_counts = cellfun(@numel, qc_times);
                 min_n = p.QC.MinSpikeCount;
                 bad_spike_count = spike_counts(:) < min_n;
                 good = ~(bad_power | bad_amp | bad_fr | bad_rpv | is_axon | is_noisy | bad_spike_count);
             else
-                good = p.QC.GoodUnits;
+                good = RecordingProcessor.goodUnitMask(p.QC.GoodUnits, N);
             end
             fprintf('RecordingProcessor QC: %d/%d units passed\n', sum(good), N);
 
@@ -306,7 +318,18 @@ classdef RecordingProcessor < handle
                 feature_tables{end+1} = array2table(acgs', "VariableNames", "ACG" + (1:n_bins));
             end
 
-            proc.UnitFeatureTable = [feature_tables{:}];
+            new_tbl = [feature_tables{:}];
+            old = proc.UnitFeatureTable;
+            if width(old) > 0 && height(old) == height(new_tbl)
+                % A re-run replaces this step's columns and keeps those of the other steps
+                % (parent ACGs, burst participation, graph, cell-type and spatial columns),
+                % whose Status stays "done"
+                names = string(old.Properties.VariableNames);
+                old(:, RecordingProcessor.isUnitStepColumn(names) | ...
+                    ismember(names, string(new_tbl.Properties.VariableNames))) = [];
+                new_tbl = [new_tbl, old];
+            end
+            proc.UnitFeatureTable = new_tbl;
             proc.Status.UnitFeatures = "done";
             proc.FeatureVersion.UnitFeatures = RecordingProcessor.FeatureDefinitionVersion;
         end
@@ -1111,6 +1134,10 @@ classdef RecordingProcessor < handle
             params.QC.PowerCutoff      = 1.3;
             params.QC.N_Units          = 10;
             params.QC.MinSpikeCount    = 10;
+            % "parent": firing rate, spike count and RPV of a window of a longer sorting
+            % (split_sortings / segment_N / ParentPath) are checked on the whole sorting, so
+            % every segment keeps the same units; "recording": on this window only
+            params.QC.RateReference    = "parent";
             params.QC.GoodUnits        = [];
             params.QC.KSLabel.Enable         = false;
             params.QC.KSLabel.AcceptedLabels = "good";
@@ -1253,6 +1280,31 @@ classdef RecordingProcessor < handle
             c = mat2cell(t(o), accumarray(s, 1, [N 1]), 1)';
         end
 
+        function good = goodUnitMask(gu, N)
+        % GOODUNITMASK  QC.GoodUnits as an (N x 1) logical mask: a logical (or 0/1) mask over the
+        %   N templates, or 1-based template indices.
+            gu = gu(:);
+            if islogical(gu) || (numel(gu) == N && all(gu == 0 | gu == 1) && any(gu == 0))
+                assert(numel(gu) == N, 'RecordingProcessor:goodUnits', ...
+                    'QC.GoodUnits mask has %d entries for %d templates.', numel(gu), N);
+                good = logical(gu);
+            else
+                assert(all(gu >= 1 & gu <= N & gu == round(gu)), 'RecordingProcessor:goodUnits', ...
+                    'QC.GoodUnits indices must be template numbers 1..%d.', N);
+                good = false(N, 1);
+                good(gu) = true;
+            end
+        end
+
+        function tf = isUnitStepColumn(names)
+        % ISUNITSTEPCOLUMN  Columns written by computeUnitFeatures (any feature group).
+            names = string(names);
+            wf = ["AUC_peak_1","AUC_trough","AUC_peak_2","Rise","Decay","HalfWidth", ...
+                  "Asymmetry","T2Pdelay","T2Pratio"];
+            tf = ismember(names, [unitFeatureNames("act"), unitFeatureNames("reg"), wf]) | ...
+                 startsWith(names, "SC_") | ~cellfun(@isempty, regexp(cellstr(names), '^(Waveform|ACG)\d+$', 'once'));
+        end
+
         function T = mergeColumns(T, new)
         % MERGECOLUMNS  Append the columns of new to T, replacing columns of the same name
         %   (a re-run step overwrites its own columns and keeps those of the other steps).
@@ -1339,6 +1391,60 @@ classdef RecordingProcessor < handle
                 error('DeePhys:noClusterTable', '%s not found in %s or its parent folder', file_name, input_path);
             end
             T = readtable(found{1}, 'FileType', 'text', 'Delimiter', '\t');
+        end
+
+        function [times, duration] = qcReferenceTrains(sd, n_templates, qc)
+        % QCREFERENCETRAINS  Parent-sorting spike trains (cell, one per template) and duration
+        %   for the spike-train QC criteria of a recording that is a window of a longer
+        %   sorting; {} when QC.RateReference is "recording" or no parent sorting is found.
+        %   Parent: the sorting named in split_sortings' split_window.txt, the sorter output
+        %   holding a segment_N / split window folder, else SpikeData.ParentPath.
+            times = {}; duration = NaN;
+            if ~isfield(qc, 'RateReference') || string(qc.RateReference) ~= "parent"
+                return
+            end
+            in_path = char(sd.InputPath);
+            parent = "";
+            marker = fullfile(in_path, 'split_window.txt');
+            if isfile(marker)
+                tok = regexp(fileread(marker), '(?m)^parent\s*=\s*(.+?)\s*$', 'tokens', 'once');
+                if ~isempty(tok) && isfile(fullfile(tok{1}, 'spike_times.npy'))
+                    parent = string(tok{1});
+                end
+            end
+            if parent == ""
+                [up, leaf] = fileparts(in_path);
+                if (isfile(marker) || ~isempty(regexp(leaf, '^segment_\d+$', 'once'))) && ...
+                        isfile(fullfile(up, 'spike_times.npy'))
+                    parent = string(up);
+                elseif strlength(sd.ParentPath) > 0 && isfile(fullfile(sd.ParentPath, 'spike_times.npy'))
+                    parent = sd.ParentPath;
+                end
+            end
+            if parent == "", return, end
+            try
+                [trains, duration] = ParentSpikeLoader.loadSpikeTrains(parent, sd.SamplingRate);
+            catch ME
+                warning('RecordingProcessor:parentQC', ['%s: parent sorting %s unreadable (%s); ' ...
+                    'spike-train QC uses this window only.'], sd.InputPath, parent, ME.message);
+                return
+            end
+            times = repmat({zeros(0, 1)}, n_templates, 1);
+            n = min(n_templates, numel(trains));
+            times(1:n) = trains(1:n);
+            % A window holds a subset of its parent's spikes per template; more spikes in the
+            % window than in the parent means the template numbering differs
+            su = sd.SpikeUnits(:);
+            su = su(su >= 1 & su <= n_templates & su == round(su));
+            own = accumarray(su, 1, [n_templates 1]);
+            if any(own > cellfun(@numel, times))
+                warning('RecordingProcessor:parentQC', ['%s: template numbering does not match the ' ...
+                    'parent sorting %s; spike-train QC uses this window only.'], sd.InputPath, parent);
+                times = {}; duration = NaN;
+                return
+            end
+            fprintf('RecordingProcessor QC: spike-train criteria from parent sorting %s (%.0f s)\n', ...
+                parent, duration);
         end
 
         function ids = templateClusterIds(input_path, n_templates)

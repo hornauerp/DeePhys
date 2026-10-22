@@ -85,8 +85,16 @@ if use_labelled
     train_ids = find(resp_u | ce_u);
     y_train = r_lab * resp_u(train_ids) + (3 - r_lab) * (ce_u(train_ids) & ~resp_u(train_ids));
 end
+% Graph seeds are a balanced, typical subset: they are counted with their labels instead of
+% entering each culture's EM. Labelled pure-culture units are their whole culture, so they stay.
+known = [];
+if ~use_labelled
+    known = nan(size(Z, 1), 1);
+    known(train_ids) = y_train;
+end
 [T, post, p, mdl] = estimateClassComposition(Z, train_ids, y_train, groups, ...
-    NFolds=opts.NFolds, NBoot=opts.NBoot, Lambda=opts.Lambda, Seed=ctc.Parameters.RNGSeed);
+    NFolds=opts.NFolds, NBoot=opts.NBoot, Lambda=opts.Lambda, Seed=ctc.Parameters.RNGSeed, ...
+    KnownLabels=known);
 
 a2u = nf.all_to_unique;
 training = "seeds"; if use_labelled, training = "labelled"; end

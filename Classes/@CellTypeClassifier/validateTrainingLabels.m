@@ -37,38 +37,14 @@ labels  = ctc.TrainLabels;
 p_umap  = ctc.Parameters.UMAP;
 np      = ctc.NormalizationParams;
 
-% -- Rebuild unique unit space + full feature matrix --------------------------
-[unique_ud, all_to_unique, ~] = ctc.uniqueUnitMap();
-n_unique = numel(unique_ud);
-
-unique_to_rep = zeros(1, n_unique);
-for u = 1:n_unique
-    rows = find(all_to_unique == u);
-    unique_to_rep(u) = rows(1);
-end
-
-[wf, acg, sr]  = ctc.getOrExtract(unique_ud);
-[X_raw, ~]     = buildFeatureMatrix(ctc, wf, acg, sr);
-X_raw(isnan(X_raw)) = 0;
-
-% Per-group z-score (same as generateTrainLabels / classifyUnits)
-% Map unique units to FeatureStore rows via UnitID+RecordingID (order-independent)
-ud = ctc.UnitDataArray;
-rep_ud_keys_v = string({ud(unique_to_rep).UnitID}) + "|" + string({ud(unique_to_rep).RecordingID});
-fs_keys_v     = string(ctc.FeatureStore.UnitTable.UnitID(:))' + "|" + ...
-                string(ctc.FeatureStore.UnitTable.RecordingID(:))';
-[~, unique_to_fs_v] = ismember(rep_ud_keys_v, fs_keys_v);
-
-norm_var = p_umap.NormalizationVar;
-if ~isempty(norm_var) && ismember(norm_var, string(ctc.FeatureStore.UnitTable.Properties.VariableNames))
-    group_col        = ctc.FeatureStore.UnitTable.(norm_var);
-    group_col_unique = group_col(unique_to_fs_v);
-    [~, ~, iG] = unique(string(group_col_unique), 'stable');
-    for g = 1:max(iG)
-        mask = iG == g;
-        X_raw(mask, :) = normalize(X_raw(mask, :));
-    end
-end
+% -- Feature matrix of the production pipeline ---------------------------------
+% The per-group z-scored matrix of generateTrainLabels (ACG smoothing, NormalizationVar /
+% NormalizationReference groups), not a rebuild: the stored global normalisation below
+% belongs to exactly this matrix.
+ctc.buildNormalizedFeatures();
+nf        = ctc.NormalizedFeatures;
+unique_ud = nf.unique_ud;
+X_raw     = nf.X_pergroup;
 
 % Apply stored global normalization from generateTrainLabels
 X_all = normalize(X_raw, 'center', np.mu_global, 'scale', np.sigma_global);

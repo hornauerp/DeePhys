@@ -603,7 +603,7 @@ classdef FeatureStore < handle
                         case "Catch22"
                             % Catch22 columns are stored with SC_ prefix
                             try
-                                names = "SC_" + string(GetAllFeatureNames());
+                                names = "SC_" + string(GetAllFeatureNames(false));   % catch22 (no DN_Mean / DN_Spread_Std)
                                 selected = selected | ismember(all_cols, names);
                             catch
                                 selected = selected | startsWith(all_cols, "SC_");
@@ -642,7 +642,7 @@ classdef FeatureStore < handle
                         case "NetworkCatch22"
                             % Network catch22 columns carry the plain catch22 names; the
                             % SC_ prefix marks the single-unit features
-                            names = string(GetAllFeatureNames(true));   % bundled (Toolboxes/catch22)
+                            names = string(GetAllFeatureNames(false));   % bundled (Toolboxes/catch22); catch22, not catch24
                             selected = selected | ismember(all_cols, names);
                         case "NetworkGraph"
                             % Network-level graph columns: suffixed by algorithm (e.g. _CCG)

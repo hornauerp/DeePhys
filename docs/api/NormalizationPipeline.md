@@ -22,7 +22,7 @@ X_test_norm = np_fitted.transform(np_fitted, X_test, batch_ids_test, ...
     CovariateLabels=Y_test);
 
 % Build a custom pipeline manually
-steps = {struct('type','group_zscore'), struct('type','clip'), struct('type','max_abs_scale')};
+steps = {struct('type','group_zscore'), struct('type','clip','params',struct('range',5)), struct('type','max_abs_scale')};
 np_custom = NormalizationPipeline(steps);
 ```
 

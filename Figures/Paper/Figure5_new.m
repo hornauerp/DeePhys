@@ -1,9 +1,10 @@
 deephys_root = fileparts(fileparts(fileparts(mfilename('fullpath'))));   % repository root
+if ~isfolder(fullfile(deephys_root, 'Plots')), mkdir(fullfile(deephys_root, 'Plots')); end   % figure exports
 addpath(genpath(deephys_root))
 set(0,'defaultFigureRenderer','painters')
 
 %% LOAD DATA
-save_root = fullfile(deephys_root, "Data", "Figure5");
+save_root = fullfile(deephys_root, "Figures", "Data", "Figure5");
 load(fullfile(save_root,'activity_prediction.mat'))
 load(fullfile(save_root,'waveform_prediction.mat'))
 load(fullfile(save_root,'combined_prediction.mat'))

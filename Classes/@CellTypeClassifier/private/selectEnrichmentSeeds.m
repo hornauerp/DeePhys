@@ -44,6 +44,14 @@ function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, res
 
     in_subset = false(1, N_all); in_subset(subset_global_idx) = true;
     elig = eligible_global(:)' & in_subset;
+    if ~isempty(strata_global) && ~anyMixedStratum(strata_global, elig, resp_unique)
+        % Every culture's eligible units are all responders or all non-responders (pure-culture
+        % labels): within-culture counts are then fixed and the stratified test has no power.
+        % Culture and class are confounded by design, so the test is pooled.
+        warning('CellTypeClassifier:pureStrata', ['No culture holds both labelled classes; the ' ...
+            'enrichment test is pooled over cultures instead of stratified.']);
+        strata_global = [];
+    end
     [T, inh_comm, exc_comm] = communityEnrichmentTest(M, elig, resp_unique(:)', fdr, strata_global);
     tested = T.NEligible' > 0;
     fprintf(['Responder enrichment (%d responders among %d eligible units, FDR %.2f): ' ...
@@ -157,4 +165,15 @@ function det = selectEnrichmentSeeds(G, responsive_local, subset_global_idx, res
         'success',                      true, ...
         'enrichment',                   T, ...
         'louvain',                      linfo);
+end
+
+
+function tf = anyMixedStratum(strata, elig, resp)
+% ANYMIXEDSTRATUM  True when at least one stratum holds eligible responders and eligible
+%   non-responders, i.e. contributes information to the stratified test.
+    s = strata(:)'; e = elig(:)'; r = logical(resp(:)');
+    [~, ~, g] = unique(s(e));
+    n_resp = accumarray(g(:), double(r(e))');
+    n_all  = accumarray(g(:), 1);
+    tf = any(n_resp > 0 & n_resp < n_all);
 end

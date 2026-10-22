@@ -20,6 +20,8 @@ function catch22_table = computeCatch22(spike_times, duration, bin_size)
 
     n_bins = round(duration / bin_size);
     binned = histcounts(spike_times, linspace(0, duration, n_bins + 1));
-    [featureValues, featureNames] = catch22_all(binned');
+    % catch22 only: catch24 adds DN_Mean and DN_Spread_Std of the binned counts, i.e. the
+    % firing rate and its spread, which the activity features already hold
+    [featureValues, featureNames] = catch22_all(binned', false);
     catch22_table = array2table(featureValues', 'VariableNames', featureNames);
 end

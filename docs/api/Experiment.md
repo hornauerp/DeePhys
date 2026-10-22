@@ -104,6 +104,7 @@ All fields are optional. Unspecified fields use the defaults shown.
 | `NHyper` | `0` | Bayesian hyperparameter optimisation evaluations (0 = skip) |
 | `Prior` | `"empirical"` | `"empirical"` or `"uniform"` (balanced class weighting) |
 | `Seed` | `[]` | RNG seed for reproducible CV splits |
+| `RF` | `struct()` | `classify` only: random forest overrides, e.g. `struct('MinLeafSize', 1, 'MinParentSize', 2)` at the `"Recording"` / `"Culture"` level with few rows per class. See [Classifier](Classifier.md) |
 | `ComputeImportance` | `true` | RF only: compute permutation importance per fold (forwarded to `Classifier` / `Regressor`) |
 | `ImportanceMethod` | `"auto"` | RF only: `"auto"` (held-out-fold importance when CV groups are set, i.e. at the `"Unit"`/`"Recording"` levels; out-of-bag at the `"Culture"` level), `"test"` or `"oob"`. See [Classifier](Classifier.md) |
 

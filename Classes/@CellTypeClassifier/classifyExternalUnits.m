@@ -155,7 +155,7 @@ assert(size(X_ext_raw, 2) == numel(np.mu_global), ...
      'bin size / lag as ctc.Parameters.Harmonization.'], ...
     size(X_ext_raw, 2), numel(np.mu_global));
 
-X_ext_raw(isnan(X_ext_raw)) = 0;
+missing = isnan(X_ext_raw);   % filled with the (group) mean below, as in buildNormalizedFeatures
 
 % Mirror the per-group z-score that buildNormalizedFeatures applied to the DeePhys units.
 norm_var   = string(p_umap.NormalizationVar);
@@ -174,11 +174,15 @@ if do_group
     for g = 1:max(iG)
         X_ext_raw(iG == g, :) = normalize(X_ext_raw(iG == g, :));
     end
-    X_ext_raw(isnan(X_ext_raw)) = 0;   % constant columns within a group
-elseif uses_group
-    warning('CellTypeClassifier:externalScaleMismatch', ...
-        ['The classifier z-scores DeePhys features per %s group but PerGroupZScore=false: ' ...
-         'external features are on a different scale.'], norm_var);
+    X_ext_raw(isnan(X_ext_raw)) = 0;   % missing values and constant columns within a group
+else
+    if uses_group
+        warning('CellTypeClassifier:externalScaleMismatch', ...
+            ['The classifier z-scores DeePhys features per %s group but PerGroupZScore=false: ' ...
+             'external features are on a different scale.'], norm_var);
+    end
+    [~, c] = find(missing);
+    X_ext_raw(missing) = np.mu_global(c);   % maps to 0 in the global z-score
 end
 
 X_ext = normalize(X_ext_raw, 'center', np.mu_global, 'scale', np.sigma_global);

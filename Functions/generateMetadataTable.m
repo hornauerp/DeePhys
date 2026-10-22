@@ -117,6 +117,7 @@ function T = generateMetadataTable(sorting_paths, condition_lookup_path, PathPar
         for c = 1:length(meta_cols)
             val = cond_table.(meta_cols(c))(match_row);
             if iscell(val); val = val{1}; end
+            if isdatetime(val), val = string(val, "yyyy-MM-dd"); end   % ISO, not locale text
             meta_vals{c}(i) = val;
         end
 

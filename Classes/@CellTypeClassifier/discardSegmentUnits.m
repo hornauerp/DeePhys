@@ -30,8 +30,11 @@ end
 all_rec_ids = string(ctc.FeatureStore.MetadataTable.RecordingID);
 ctc.FeatureStore = ctc.FeatureStore.subset(all_rec_ids);
 
-% Store original for FullACG recomputation via computeParentACGs
-ctc.OriginalUnitDataArray = ctc.UnitDataArray;
+% Store original for FullACG recomputation via computeParentACGs. A second call (re-run
+% cell) must not replace the full set with the already reduced baseline rows.
+if isempty(ctc.OriginalUnitDataArray) || numel(ctc.OriginalUnitDataArray) < numel(ctc.UnitDataArray)
+    ctc.OriginalUnitDataArray = ctc.UnitDataArray;
+end
 
 group_field = string(ctc.Parameters.UMAP.GroupingVar);
 baseline_gv = ctc.Parameters.UMAP.GroupingValues;
