@@ -113,7 +113,7 @@ All fields are optional.
 | `Seed` | `[]` | RNG seed for reproducibility |
 | `RF` | `struct()` | Random forest overrides of `MLPipeline.returnDefaultParams().RF`: `NumCycles` (500), `MinLeafSize` (5), `MinParentSize` (`[]` = `templateTree` default 10), `NumVariablesToSample` (`"auto"`), `Surrogate`, `Reproducible`. Unknown fields are an error; the prior is set with `Prior`. Ignored by the hyperparameter search (`NHyper > 0`) |
 
-The RF defaults suit unit-level data. With a few rows per class, such as one row per well, a tree cannot split a node smaller than `MinParentSize` or create a leaf smaller than `MinLeafSize`. With about 5 training rows per class every tree then stays a single leaf: predictions are constant and importances are zero. Lower both in that case:
+The RF defaults suit unit-level data. A tree cannot split a node smaller than `MinParentSize` (10) or create a leaf smaller than `MinLeafSize` (5). When the training rows of a fold number about 10 or fewer, as with one row per well in a small experiment, the trees stay single leaves. A fold then predicts one class and its importances are zero. Lower both in that case:
 
 ```matlab
 opts = struct('Algorithm', 'rf', 'KFold', 5, 'Prior', 'uniform', ...

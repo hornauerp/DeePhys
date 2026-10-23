@@ -83,7 +83,7 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
 
     cellfun_input = {IBIs, BDs, RiseTime, FallTime, PeakFR, StdFR};
 
-    if ~isempty(params.Outlier.Method)
+    if strlength(string(params.Outlier.Method)) > 0   % "" (string) and '' both skip
         cellfun_input = cellfun(@(x) rmoutliers(x, params.Outlier.Method, ...
             'ThresholdFactor', params.Outlier.ThresholdFactor), cellfun_input, 'un', 0);
     end
@@ -95,8 +95,10 @@ function burst_features = computeBurstStatistics(bursts, spike_times, spike_unit
         Burst.FallTime, ...
         Burst.PeakFR, ...
         Burst.StdFR] = feature_means{:};
-    Burst.StdBurstDuration = std(BDs);
-    Burst.StdInterBurstInterval = std(IBIs);
+    % Spread of the same (outlier-filtered) values the central values above summarise;
+    % on the raw values one merged or very long burst dominated the SD
+    Burst.StdBurstDuration = std(cellfun_input{2}, 'omitnan');
+    Burst.StdInterBurstInterval = std(cellfun_input{1}, 'omitnan');
     Burst.IntraFiringRate = median(intra_fr);
     Burst.InterFiringRate = median(inter_fr);
     % detector-independent timing and shape (burstShape at ShapeLevel)

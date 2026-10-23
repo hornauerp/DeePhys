@@ -83,7 +83,8 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 
 | Field | Default | Description |
 |---|---|---|
-| `Amplitude` | `[20 1000]` | Accepted peak-to-trough amplitude range (µV) |
+| `Amplitude` | `[20 1000]` | Accepted trough amplitude range (µV) of the unwhitened template (`SpikeData.TemplateAmplitudes` × gain). Skipped with a warning when the sorting gives no amplitude scale or the amplitudes are implausible (median < 5 or > 5000 µV); `[]` turns it off. The same amplitude is the `Amplitude` unit feature (`WaveformFeatures`) |
+| `LSB` | `6.2` | µV per recording unit, used when the sorting does not record its gain (`SpikeData.GainToUV`) |
 | `FiringRate` | `[0.01 10]` | Accepted firing rate range (Hz) |
 | `RPV` | `0.02` | Max fraction of refractory period violations (0–1) |
 | `RefractoryPeriod` | `0.002` | Refractory period (s) used for RPV computation |

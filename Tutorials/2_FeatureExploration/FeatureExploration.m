@@ -26,7 +26,7 @@ id_cols   = ["UnitID", "RecordingID"];
 meta_cols = string(fs.MetadataTable.Properties.VariableNames(2:end))';  % skip RecordingID
 fprintf('\nMetadata columns:\n');  disp(meta_cols);
 
-feat_cols = all_cols(~ismember(all_cols, [id_cols; meta_cols]));
+feat_cols = all_cols(~ismember(all_cols, [id_cols(:); meta_cols]));
 fprintf('Feature columns: %d total\n', numel(feat_cols));
 
 % Parent feature columns (from parent recording, stored with prefix)
@@ -125,9 +125,10 @@ fs_ko_wt = fs.subsetByMetadata('Mutation', {'WT', 'KO'});
 
 %% 10  Plot waveform overlays
 
-wf_cols = startsWith(string(X_wf.Properties.VariableNames), 'Waveform');
-if any(wf_cols)
-    wf_mat = X_wf.Variables;
+% Waveform1..N (group ReferenceWaveform); WaveformFeatures holds the derived scalars
+[X_refwf, ~] = fs.unitMatrix('ReferenceWaveform');
+if width(X_refwf) > 0
+    wf_mat = X_refwf.Variables;
     figure;
     plot(wf_mat(1:min(50, height(wf_mat)), :)', 'Color', [0 0 0 0.3]);
     xlabel('Sample'); ylabel('Amplitude (norm.)');

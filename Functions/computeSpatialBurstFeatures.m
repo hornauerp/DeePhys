@@ -20,7 +20,9 @@ function [network_table, unit_table] = computeSpatialBurstFeatures( ...
 %                             .BurstMinUnitsForWavefront (default 5)
 %
 % OUTPUTS:
-%   network_table - (1 x 3) table: BurstOriginDispersion, MeanBurstPropagationSpeed,
+%   network_table - (1 x 3) table: BurstOriginDispersion, MeanBurstPropagationSpeed
+%                                  (um/ms, 1 / median latency-distance slope over bursts;
+%                                  NaN without a significant latency gradient),
 %                                  BurstOriginExcFraction
 %   unit_table    - empty table (no per-unit features added here)
 
@@ -70,7 +72,8 @@ function [network_table, unit_table] = computeSpatialBurstFeatures( ...
 
     % Per-burst analysis
     origin_xy     = NaN(n_bursts, 2);
-    prop_speeds   = NaN(n_bursts, 1);
+    prop_slopes   = NaN(n_bursts, 1);
+    pooled        = cell(n_bursts, 1);   % [distance, latency] of the units of each burst
     origin_is_exc = NaN(n_bursts, 1);
 
     for b = 1:n_bursts
@@ -106,11 +109,11 @@ function [network_table, unit_table] = computeSpatialBurstFeatures( ...
         moving = dists > 0;
         if sum(moving) < 3, continue; end
 
-        % slope: dt/dx (s/um), speed = 1/slope (um/s -> um/ms * 0.001)
+        % slope: latency per distance (ms/um); negative and near-zero slopes are kept, the
+        % speed is taken from their median below
         p_fit = polyfit(dists(moving), lats(moving) * 1000, 1);  % latency in ms
-        if p_fit(1) > 0
-            prop_speeds(b) = 1 / p_fit(1);  % um/ms
-        end
+        prop_slopes(b) = p_fit(1);
+        pooled{b} = [dists(moving), lats(moving)];
     end
 
     valid_origins = ~any(isnan(origin_xy), 2);
@@ -120,8 +123,17 @@ function [network_table, unit_table] = computeSpatialBurstFeatures( ...
             sqrt(sum((origin_xy(valid_origins,:) - centroid).^2, 2)), 'omitnan');
     end
 
-    if any(~isnan(prop_speeds))
-        nw.MeanBurstPropagationSpeed = mean(prop_speeds, 'omitnan');
+    % Speed from the median latency-distance slope over bursts (um/ms). The mean of per-burst
+    % 1/slope was dominated by near-flat slopes. A speed is reported only when latency rises
+    % with distance from the origin (Spearman over the pooled units of all bursts, p < 0.05):
+    % without such a gradient 1/slope is arbitrarily large.
+    med_slope = median(prop_slopes, 'omitnan');
+    P = vertcat(pooled{:});
+    if ~isnan(med_slope) && med_slope > 0 && size(P, 1) >= 5
+        [rho, p_rho] = corr(P(:, 1), P(:, 2), 'Type', 'Spearman');
+        if rho > 0 && p_rho < 0.05
+            nw.MeanBurstPropagationSpeed = 1 / med_slope;
+        end
     end
 
     valid_type = ~isnan(origin_is_exc);

@@ -61,7 +61,17 @@ classdef RecordingProcessor < handle
         %      network DN_Mean / DN_Spread_Std are no longer written); SmallWorldness from
         %      path lengths of reachable pairs (was NaN or 0 with any unreachable pair); QC of a
         %      window of a longer sorting on the parent's spike trains (QC.RateReference)
-        FeatureDefinitionVersion = 3
+        %   4  waveform features on a spline-interpolated waveform (trough / peak times between
+        %      samples; pchip kept them on the sample grid); StdBurstDuration /
+        %      StdInterBurstInterval over the same outlier-filtered bursts as the medians;
+        %      "logISI" bursts must recruit >= max(5, 10 %) of the active units;
+        %      MeanBurstPropagationSpeed = 1 / median latency-distance slope (NaN without a
+        %      significant latency gradient); SpatialDecayTau from a least-squares fit of
+        %      a*exp(-d/tau) + c over all pairs (NaN if not significant or not resolved);
+        %      QC.Amplitude on the unwhitened template amplitude in uV (Kilosort 1-3 inverse
+        %      whitening and spike scaling, recorded gain or QC.LSB) and new unit feature
+        %      Amplitude; skipped when the sorting gives no scale (was whitened x QC.LSB)
+        FeatureDefinitionVersion = 4
     end
 
     % =====================================================================
@@ -103,9 +113,10 @@ classdef RecordingProcessor < handle
             % (templates x samples x channels). Zero-padded channels need no removal: they never
             % hold the trough, and dropping columns would break the electrode index of ref_elec.
             tmpl = sd.TemplateWaveforms;
-            [max_amps, max_idx] = min(tmpl, [], [2,3], 'linear');
-            max_amps = abs(max_amps * p.QC.LSB);
+            [tmpl_min, max_idx] = min(tmpl, [], [2,3], 'linear');
+            bad_template = ~isfinite(tmpl_min(:));   % no waveform (e.g. NaN template of an empty cluster)
             [~, ~, ref_elec] = ind2sub(size(tmpl), max_idx);
+            amps_uV = RecordingProcessor.templateAmplitudesUV(sd, p.QC.LSB);
 
             % Peak waveform (normalised)
             n_t = size(tmpl, 1);
@@ -129,16 +140,28 @@ classdef RecordingProcessor < handle
             % QC checks
             if isempty(p.QC.GoodUnits)
                 bad_power = RecordingProcessor.checkPower(norm_wf, p.QC.PowerCutoff);
-                bad_amp   = RecordingProcessor.checkAmplitude(max_amps, p.QC.Amplitude);
-                if N > 0 && all(bad_amp) && all(max_amps(:) < p.QC.Amplitude(1))
-                    % Kilosort writes whitened templates; without whitening_mat_inv.npy
-                    % their scale is not in ADC units, so a microvolt range rejects everything.
-                    warning('RecordingProcessor:amplitudeScale', ['%s: all %d template amplitudes are below ' ...
-                        'QC.Amplitude(1) = %g (max %.3g); the templates are probably whitened, so the ' ...
-                        'amplitude criterion is skipped. Set QC.Amplitude = [] to silence this.'], ...
-                        sd.InputPath, N, p.QC.Amplitude(1), max(max_amps));
-                    bad_amp(:) = false;
+                % Amplitude in uV (see templateAmplitudesUV). Kilosort templates are whitened,
+                % so without the conversion their scale is not uV and the criterion is skipped.
+                amp_range  = p.QC.Amplitude;
+                use_amp    = ~isempty(amp_range) && ~any(isnan(amp_range));
+                finite_uV  = amps_uV(isfinite(amps_uV) & ~bad_template);
+                if use_amp && isempty(finite_uV)
+                    warning('RecordingProcessor:noAmplitudeScale', ['%s: no amplitude in uV ' ...
+                        '(needs whitening_mat_inv.npy and amplitudes.npy of a Kilosort 1-3 sorting); ' ...
+                        'the amplitude criterion is skipped. Set QC.Amplitude = [] to silence this.'], sd.InputPath);
+                    use_amp = false;
+                elseif use_amp && (median(finite_uV) < 5 || median(finite_uV) > 5000)
+                    warning('RecordingProcessor:amplitudeScale', ['%s: median template amplitude %.3g uV ' ...
+                        'is implausible (gain or sorter scaling unknown); the amplitude criterion is skipped.'], ...
+                        sd.InputPath, median(finite_uV));
+                    use_amp = false;
                 end
+                if use_amp
+                    bad_amp = RecordingProcessor.checkAmplitude(amps_uV, amp_range);
+                else
+                    bad_amp = RecordingProcessor.checkAmplitude(amps_uV, []);
+                end
+                bad_amp = bad_amp(:) | bad_template;
                 % Spike-train criteria on the whole parent sorting when this recording is a
                 % window of it: per-window checks would drop exactly the units a treatment
                 % silences or drives, so the unit set would differ between segments.
@@ -260,7 +283,11 @@ classdef RecordingProcessor < handle
             if any(feat_groups == "WaveformFeatures")
                 wf_feats = computeWaveformFeatures(norm_wf, sr);
                 wf_tables = cellfun(@(s) struct2table(s), wf_feats, 'un', 0);
-                feature_tables{end+1} = vertcat(wf_tables{:});
+                wf_tbl = vertcat(wf_tables{:});
+                % Trough amplitude in uV (NaN without an amplitude scale, see runQC)
+                amps_uV = RecordingProcessor.templateAmplitudesUV(proc.SpikeData, proc.Parameters.QC.LSB);
+                wf_tbl.Amplitude = amps_uV([proc.Units.TemplateID]);
+                feature_tables{end+1} = wf_tbl;
             end
 
             % Activity features (+ optional regularity + catch22)
@@ -1038,7 +1065,10 @@ classdef RecordingProcessor < handle
         % FROMLEGACYMAT  Migrate an old MEArecording.mat to the new format.
         %
         % Loads the old object, extracts SpikeData + UnitData + feature tables from
-        % its already-computed properties. Sets Status = "migrated" so no recomputation.
+        % its already-computed properties. The copied steps are marked "done" (no
+        % recomputation) and keep the legacy feature definitions; FeatureVersion stays
+        % unstamped, so FeatureStore.fromProcessors warns when they are mixed with
+        % recomputed processors (set a step's Status to "pending" to recompute it).
             arguments
                 mat_path   (1,1) string
                 parameters (1,1) struct = struct()
@@ -1300,7 +1330,7 @@ classdef RecordingProcessor < handle
         % ISUNITSTEPCOLUMN  Columns written by computeUnitFeatures (any feature group).
             names = string(names);
             wf = ["AUC_peak_1","AUC_trough","AUC_peak_2","Rise","Decay","HalfWidth", ...
-                  "Asymmetry","T2Pdelay","T2Pratio"];
+                  "Asymmetry","T2Pdelay","T2Pratio","Amplitude"];
             tf = ismember(names, [unitFeatureNames("act"), unitFeatureNames("reg"), wf]) | ...
                  startsWith(names, "SC_") | ~cellfun(@isempty, regexp(cellstr(names), '^(Waveform|ACG)\d+$', 'once'));
         end
@@ -1488,6 +1518,18 @@ classdef RecordingProcessor < handle
             power = abs(y).^2 / n;
             bad   = max(power)' > cutoff;
             fprintf('QC power: %d bad\n', sum(bad));
+        end
+
+        function a = templateAmplitudesUV(sd, lsb)
+        % TEMPLATEAMPLITUDESUV  Trough amplitude of each template in uV: recording units
+        %   (SpikeData.TemplateAmplitudes) x the gain recorded with the sorting
+        %   (SpikeData.GainToUV), else x QC.LSB. All NaN when the sorting gives no scale.
+            n = size(sd.TemplateWaveforms, 1);
+            a = NaN(n, 1);
+            if isempty(sd.TemplateAmplitudes) || numel(sd.TemplateAmplitudes) ~= n, return; end
+            gain = sd.GainToUV;
+            if isempty(gain) || ~isfinite(gain), gain = lsb; end
+            a = sd.TemplateAmplitudes(:) * gain;
         end
 
         function bad = checkAmplitude(amps, range)

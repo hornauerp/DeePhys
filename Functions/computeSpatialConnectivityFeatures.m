@@ -116,24 +116,36 @@ function tau = pairDecay(D, W, row_idx, col_idx, upper_tri_only)
 end
 
 function tau = fitExpDecay(d, w)
-% Fit w = a*exp(-d/tau) + c via log-linear regression on positive w values.
-% Falls back to NaN if fit is degenerate.
-    pos = w > 0;
-    if sum(pos) < 4
-        tau = NaN;
-        return
-    end
-    try
-        X = [ones(sum(pos),1), d(pos)];
-        b = X \ log(w(pos));
-        if b(2) >= 0
-            tau = NaN;
-        else
-            tau = -1 / b(2);
-        end
-    catch
-        tau = NaN;
-    end
+% Least-squares fit of w = a*exp(-d/tau) + c over all pairs (zero and negative w included:
+% a fit on the positive values only is biased towards slow decay). For a given tau, a and
+% c are linear, so tau is found by a profile search between the smallest and largest
+% distance. NaN when the coupling does not decay (a <= 0), the decay explains no more than
+% a constant (F-test, p >= 0.05), or tau reaches either end of the measured distances
+% (decay not resolved within the measured range).
+    d = d(:); w = w(:);
+    tau = NaN;
+    if numel(d) < 4 || range(d) == 0, return; end
+    lo = log(max(min(d), eps)); hi = log(max(d));
+    sse = @(lt) profileSSE(lt, d, w);
+    grid = linspace(lo, hi, 60);
+    s = arrayfun(sse, grid);
+    [~, k] = min(s);
+    lt = fminbnd(sse, grid(max(k - 1, 1)), grid(min(k + 1, end)));
+    tol = 1e-3 * (hi - lo);
+    if lt >= hi - tol || lt <= lo + tol, return; end
+    [s1, a] = profileSSE(lt, d, w);
+    % The decay must explain more than a constant (nested F-test, 2 extra parameters)
+    n = numel(w); s0 = sum((w - mean(w)).^2);
+    if n <= 3 || s1 <= 0, return; end
+    p = 1 - fcdf(((s0 - s1) / 2) / (s1 / (n - 3)), 2, n - 3);
+    if a > 0 && p < 0.05, tau = exp(lt); end
+end
+
+function [s, a] = profileSSE(log_tau, d, w)
+    X = [exp(-d / exp(log_tau)), ones(size(d))];
+    b = X \ w;
+    s = sum((w - X * b).^2);
+    a = b(1);
 end
 
 function nw = makeNaNStruct()

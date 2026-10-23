@@ -60,6 +60,7 @@ classdef test_SorterFormats < matlab.unittest.TestCase
             fclose(fid);
             sd = SpikeData.fromKilosort(ks);
             p.QC.N_Units = 1;
+            p.QC.Amplitude = [];                 % mock templates have no uV scale
             p.QC.Bombcell.Enable = true;
             p.QC.Bombcell.AcceptedTypes = "GOOD";
             by_name = RecordingProcessor(sd, p);
@@ -72,17 +73,73 @@ classdef test_SorterFormats < matlab.unittest.TestCase
             tc.verifyEqual([by_name.Units.TemplateID], [by_code.Units.TemplateID]);
         end
 
-        function testWhitenedTemplateAmplitudes(tc)
-            % Whitened Kilosort templates are far below the microvolt range: the amplitude
-            % criterion is skipped with a warning instead of rejecting every unit.
+        function testAmplitudeCriterionSkippedWithoutScale(tc)
+            % Without whitening_mat_inv.npy / amplitudes.npy the templates have no uV scale:
+            % the amplitude criterion is skipped with a warning instead of rejecting units.
             ks = make_mock_sorting(tc.Root, 5, 50, 20000, 60);
             base = RecordingProcessor(SpikeData.fromKilosort(ks), struct('QC', struct('N_Units', 1, 'Amplitude', [])));
             base.runQC();
             w = readNPY(fullfile(ks, 'templates.npy'));
             writeNPY(single(w * 1e-4), fullfile(ks, 'templates.npy'));
-            proc = RecordingProcessor(SpikeData.fromKilosort(ks), struct('QC', struct('N_Units', 1)));
-            tc.verifyWarning(@() proc.runQC(), 'RecordingProcessor:amplitudeScale');
+            sd = SpikeData.fromKilosort(ks);
+            tc.verifyEmpty(sd.TemplateAmplitudes);
+            proc = RecordingProcessor(sd, struct('QC', struct('N_Units', 1)));
+            tc.verifyWarning(@() proc.runQC(), 'RecordingProcessor:noAmplitudeScale');
             tc.verifyEqual(numel(proc.Units), numel(base.Units));
+        end
+
+        function testNaNTemplateRejected(tc)
+            % A template without a waveform (NaN) is rejected; the other units pass.
+            ks = make_mock_sorting(tc.Root, 5, 50, 20000, 60);
+            base = RecordingProcessor(SpikeData.fromKilosort(ks), struct('QC', struct('N_Units', 1, 'Amplitude', [])));
+            base.runQC();
+            w = readNPY(fullfile(ks, 'templates.npy'));
+            w(5, :, :) = NaN;
+            writeNPY(single(w), fullfile(ks, 'templates.npy'));
+            proc = RecordingProcessor(SpikeData.fromKilosort(ks), struct('QC', struct('N_Units', 1)));
+            w_state = warning('off', 'RecordingProcessor:noAmplitudeScale');
+            c = onCleanup(@() warning(w_state));
+            proc.runQC();
+            kept = setdiff([base.Units.TemplateID], 5);
+            tc.verifyEqual(sort([proc.Units.TemplateID]), sort(kept));
+        end
+
+        function testKilosortAmplitudeInMicrovolts(tc)
+            % trough(template x whitening_mat_inv) x median scaling / scaleproc x gain, used
+            % by QC.Amplitude and written as the Amplitude unit feature
+            ks = make_mock_sorting(tc.Root, 5, 50, 20000, 60);
+            tmpl = double(readNPY(fullfile(ks, 'templates.npy')));
+            su = double(readNPY(fullfile(ks, 'spike_templates.npy'))) + 1;
+            rng(5);
+            winv = 200 * eye(4) + 20 * (rand(4) - 0.5);
+            scale = 10 + 5 * rand(numel(su), 1);
+            writeNPY(winv, fullfile(ks, 'whitening_mat_inv.npy'));
+            writeNPY(scale, fullfile(ks, 'amplitudes.npy'));
+            fid = fopen(fullfile(fileparts(ks), 'spikeinterface_recording.json'), 'w');
+            fprintf(fid, '{"properties": {"gain_to_uV": [6.3, 6.3, 6.3, 6.3]}}');
+            fclose(fid);
+            c = onCleanup(@() delete(fullfile(fileparts(ks), 'spikeinterface_recording.json')));
+            expected = zeros(5, 1);
+            for u = 1:5
+                U = squeeze(tmpl(u, :, :)) * winv;
+                expected(u) = -min(U(:)) * median(scale(su == u)) / 200;
+            end
+            sd = SpikeData.fromKilosort(ks);
+            tc.verifyEqual(sd.TemplateAmplitudes, expected, 'RelTol', 1e-5);
+            tc.verifyEqual(sd.GainToUV, 6.3);
+            uV = expected * 6.3;
+            [~, smallest] = min(uV);
+            lim = [min(uV(uV > min(uV))) - 1, 1e5];          % excludes only the smallest unit
+            proc = RecordingProcessor(sd, struct('QC', struct('N_Units', 1, 'Amplitude', lim)));
+            proc.runQC();
+            tc.verifyFalse(ismember(smallest, [proc.Units.TemplateID]));
+            proc.computeUnitFeatures("WaveformFeatures");
+            tc.verifyEqual(proc.UnitFeatureTable.Amplitude, uV([proc.Units.TemplateID]), 'RelTol', 1e-5);
+            % another sorter (different scaling convention): no amplitude
+            fid = fopen(fullfile(ks, 'spikeinterface_params.json'), 'w');
+            fprintf(fid, '{"sorter_name": "kilosort4", "sorter_params": {}}');
+            fclose(fid);
+            tc.verifyEmpty(SpikeData.fromKilosort(ks).TemplateAmplitudes);
         end
 
         function testRecordingIDIsPathIndependent(tc)

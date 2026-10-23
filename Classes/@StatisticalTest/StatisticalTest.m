@@ -201,7 +201,7 @@ classdef StatisticalTest
             % Multiple comparison correction
             switch options.correction
                 case "bonferroni"
-                    corrected_ps = min(raw_ps * n_pairs, 1);
+                    corrected_ps = min(raw_ps * sum(~isnan(raw_ps)), 1);   % pairs that could be tested
                 case "holm"
                     corrected_ps = StatisticalTest.holmCorrection(raw_ps);
                 case "fdr"
@@ -384,33 +384,35 @@ classdef StatisticalTest
         end
 
         function corrected = holmCorrection(raw_ps)
-        % HOLMCORRECTION  Holm-Bonferroni step-down correction.
-            n = length(raw_ps);
-            [sorted_p, sort_idx] = sort(raw_ps);
-            corrected = zeros(n, 1);
-            for i = 1:n
-                corrected(sort_idx(i)) = min(sorted_p(i) * (n - i + 1), 1);
-            end
-            % Enforce monotonicity
-            [~, sort_idx2] = sort(raw_ps);
-            for i = 2:n
-                corrected(sort_idx2(i)) = max(corrected(sort_idx2(i)), corrected(sort_idx2(i-1)));
-            end
+        % HOLMCORRECTION  Holm-Bonferroni step-down correction (column vector). NaN p-values
+        %   (tests that could not be run) stay NaN and do not count as tests.
+            raw_ps = raw_ps(:);
+            corrected = NaN(numel(raw_ps), 1);
+            ok = ~isnan(raw_ps);
+            p  = raw_ps(ok);
+            n  = numel(p);
+            [sorted_p, sort_idx] = sort(p);
+            adj = min(sorted_p .* (n - (1:n)' + 1), 1);
+            adj = cummax(adj);                                   % step-down monotonicity
+            q = zeros(n, 1);
+            q(sort_idx) = adj;
+            corrected(ok) = q;
         end
 
         function corrected = fdrCorrection(raw_ps)
-        % FDRCORRECTION  Benjamini-Hochberg false discovery rate correction.
-            n = length(raw_ps);
-            [sorted_p, sort_idx] = sort(raw_ps);
-            corrected = zeros(n, 1);
-            for i = 1:n
-                corrected(sort_idx(i)) = min(sorted_p(i) * n / i, 1);
-            end
-            % Enforce monotonicity (from largest to smallest)
-            [~, rev_sort] = sort(raw_ps, 'descend');
-            for i = 2:n
-                corrected(rev_sort(i)) = min(corrected(rev_sort(i)), corrected(rev_sort(i-1)));
-            end
+        % FDRCORRECTION  Benjamini-Hochberg false discovery rate correction (column vector).
+        %   NaN p-values (tests that could not be run) stay NaN and do not count as tests.
+            raw_ps = raw_ps(:);
+            corrected = NaN(numel(raw_ps), 1);
+            ok = ~isnan(raw_ps);
+            p  = raw_ps(ok);
+            n  = numel(p);
+            [sorted_p, sort_idx] = sort(p);
+            adj = min(sorted_p .* n ./ (1:n)', 1);
+            adj = flip(cummin(flip(adj)));                       % step-up monotonicity
+            q = zeros(n, 1);
+            q(sort_idx) = adj;
+            corrected(ok) = q;
         end
 
     end

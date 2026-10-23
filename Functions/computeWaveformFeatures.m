@@ -22,7 +22,9 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
     dt_ms = 1 / ms_conversion;   % AUC_* in amplitude x ms, the same at every sampling rate
     x = 1:size(norm_wf_matrix,1);
     xq = 1:(1/interpolation_factor):size(norm_wf_matrix,1);
-    interp_wf_matrix = double(interp1(x(:), norm_wf_matrix, xq(:), 'pchip'));
+    % Cubic spline: trough and peak can fall between samples. pchip is shape-preserving and
+    % keeps every extremum on a sample, so the timing features stayed on the 1/fs grid.
+    interp_wf_matrix = double(interp1(x(:), norm_wf_matrix, xq(:), 'spline'));
     if isvector(norm_wf_matrix), interp_wf_matrix = interp_wf_matrix(:); end   % interp1 returns a row for a single unit
     zci = @(v) find(v(1:end-1) .* v(2:end) <= 0);
     n_units = size(interp_wf_matrix, 2);

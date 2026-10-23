@@ -14,7 +14,11 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
 %   duration      - (1 x 1) double, recording duration in seconds
 %   params        - struct with fields:
 %       .Method         "ISIN" (legacy, default), "logISI" or "ISINJoint" (detectNetworkBursts:
-%                       N and threshold chosen jointly against surrogates, with a gate)
+%                       N and threshold chosen jointly against surrogates, with a gate).
+%                       "logISI": log-ISI mixture threshold on the pooled train; events must
+%                       recruit >= max(5, 10 % of the active units) distinct units. It has no
+%                       chance test, so chance coincidences of high-rate units can still pass;
+%                       prefer "ISINJoint"
 %       .TonicMethod    "ISINJoint" only: unit removal before detection (default "gini")
 %       .ShapeLevel     onset / offset level for burst timing and shape (default 0.25, burstShape)
 %       .TonicMinRate   "ISINJoint" only: units below this rate (Hz, or "median") are never removed (default "median")
@@ -64,8 +68,13 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
 
     if string(params.Method) == "logISI"
         B = detectBurstsLogISI_local(spike_times);
-        bursts.T_start = B.T_start;
-        bursts.T_end = B.T_end;
+        % The log-ISI threshold is found on the pooled train of all units, where any three
+        % close spikes of different units form an event and one burst splits into pieces.
+        % As in detectNetworkBursts, an event must recruit >= 5 and >= 10 % of the active
+        % units, and recruiting events less than 0.2 s apart (MinQuietGap) are one burst.
+        % Joining before the recruitment test would chain background events into long spans.
+        keep = recruitingBursts_local(B.T_start(:), B.T_end(:), spike_times, spike_units);
+        [bursts.T_start, bursts.T_end] = joinCloseEvents_local(B.T_start(keep), B.T_end(keep), 0.2);
         if isfield(B, 'LogISI_Threshold')
             bursts.LogISI_Threshold = B.LogISI_Threshold;
         end
@@ -103,6 +112,48 @@ end
 %% ========================================================================
 %  Local helper functions
 %  ========================================================================
+
+function [t0, t1] = joinCloseEvents_local(t0, t1, min_gap)
+% Join sorted events separated by less than min_gap seconds.
+    if numel(t0) < 2, return; end
+    sep = find(t0(2:end) - t1(1:end-1) >= min_gap);
+    t1 = t1([sep; numel(t1)]);
+    t0 = t0([1; sep + 1]);
+end
+
+function keep = recruitingBursts_local(t_start, t_end, spike_times, spike_units)
+% Bursts with >= max(5, 10 % of the active units) distinct units; active = >= 20 spikes
+% (the MinBurstUnits / MinUnitSpikes defaults of detectNetworkBursts).
+    t_start = t_start(:); t_end = t_end(:);
+    n_b  = numel(t_start);
+    keep = false(n_b, 1);
+    if n_b == 0, return; end
+    [~, ~, u_idx] = unique(spike_units);
+    n_active  = sum(accumarray(u_idx, 1) >= 20);
+    min_units = max(5, ceil(0.1 * n_active));
+    edges = reshape([t_start(:)'; t_end(:)'], 1, []);
+    if issorted(edges) && all(diff(edges) > 0)
+        % disjoint events: odd bins of the interleaved edges are inside event (bin + 1) / 2;
+        % the end spike of an event sits on its right edge and belongs to it
+        bin = discretize(spike_times, edges);
+        on_end = ismember(spike_times, t_end);
+        [~, end_b] = ismember(spike_times(on_end), t_end);
+        burst_of = NaN(size(spike_times));
+        odd = mod(bin, 2) == 1;
+        burst_of(odd) = (bin(odd) + 1) / 2;
+        burst_of(on_end) = end_b;
+        in = ~isnan(burst_of);
+        pairs = unique([burst_of(in), u_idx(in)], 'rows');
+        n_units = accumarray(pairs(:, 1), 1, [n_b 1]);
+    else
+        n_units = zeros(n_b, 1);
+        for b = 1:n_b
+            in_b = spike_times >= t_start(b) & spike_times <= t_end(b);
+            n_units(b) = numel(unique(spike_units(in_b)));
+        end
+    end
+    keep = n_units >= min_units;
+end
 
 function Burst = detectBurstsLogISI_local(spike_times, min_spikes)
     if nargin < 2, min_spikes = 3; end

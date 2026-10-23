@@ -320,7 +320,7 @@ classdef FeatureCatalog
                     % Actual column names written by inferWaveformFeatures.m
                     names = ["AUC_peak_1", "AUC_trough", "AUC_peak_2", ...
                              "Rise", "Decay", "HalfWidth", "Asymmetry", ...
-                             "T2Pdelay", "T2Pratio"];
+                             "T2Pdelay", "T2Pratio", "Amplitude"];   % Amplitude: uV, NaN without a scale
 
                 case "RegularityFeatures"
                     names = unitFeatureNames("reg");

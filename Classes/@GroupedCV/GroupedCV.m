@@ -70,10 +70,11 @@ classdef GroupedCV
             % Build group-level labels for stratified partitioning
             if ~isempty(class_labels)
                 gcv.ClassLabels = class_labels(:);
+                [~, ~, class_codes] = unique(class_labels(:));   % string / categorical / cellstr labels too
                 group_class = zeros(n_groups, 1);
                 for g = 1:n_groups
                     mask = (gcv.GroupIDs == gcv.UniqueGroups(g));
-                    group_class(g) = mode(class_labels(mask));
+                    group_class(g) = mode(class_codes(mask));
                 end
                 gcv.GroupPartition = cvpartition(group_class, 'KFold', gcv.NumFolds);
             else

@@ -299,11 +299,23 @@ function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
         C = zeros(N, 0);
     end
 
+    % Missing values stay missing: each feature is fitted on its observed rows, and the EB
+    % priors (pooled across features) use only finite estimates, so one missing entry
+    % cannot turn every feature NaN.
     D        = [B, C];
-    beta_hat = D \ X;                                        % (n_batch + P) x F
+    obs      = ~isnan(X);
+    beta_hat = zeros(size(D, 2), F);
+    full_col = all(obs, 1);
+    beta_hat(:, full_col) = D \ X(:, full_col);              % (n_batch + P) x F
+    for f = find(~full_col)
+        r = obs(:, f);
+        if any(r)
+            beta_hat(:, f) = lsqminnorm(D(r, :), X(r, f));   % batches without data get 0
+        end
+    end
     alpha    = (n_per_batch' / N) * beta_hat(1:n_batch, :);  % 1 x F grand mean
     beta_cov = beta_hat(n_batch+1:end, :);                   % P x F covariate effects
-    var_pooled = sum((X - D * beta_hat).^2, 1) / N;          % within-batch variance
+    var_pooled = mean((X - D * beta_hat).^2, 1, 'omitnan');  % within-batch variance
     var_pooled(var_pooled == 0 | ~isfinite(var_pooled)) = 1;
     sigma = sqrt(var_pooled);
 
@@ -313,11 +325,10 @@ function [X_out, fit] = fitComBat(X, batch_labels, covariate_labels)
     delta_hat = ones(n_batch, F);
     for b = 1:n_batch
         mask = B(:, b) > 0;
-        gamma_hat(b, :) = mean(S(mask, :), 1);
-        if n_per_batch(b) >= 2
-            delta_hat(b, :) = var(S(mask, :), 0, 1);
-        end
+        gamma_hat(b, :) = mean(S(mask, :), 1, 'omitnan');
+        delta_hat(b, :) = var(S(mask, :), 0, 1, 'omitnan');
     end
+    gamma_hat(~isfinite(gamma_hat)) = 0;                     % no observed value in the batch
     delta_hat(delta_hat <= 0 | ~isfinite(delta_hat)) = 1;
 
     gamma_star = gamma_hat;
@@ -357,8 +368,9 @@ function X_out = applyComBat(X, batch_labels, ~, fit)
         if ~isempty(b)
             g = fit.gamma_star(b, :);  d = fit.delta_star(b, :);
         elseif sum(mask) >= 2
-            g = mean(S(mask, :), 1);
-            d = var(S(mask, :), 0, 1);
+            g = mean(S(mask, :), 1, 'omitnan');
+            d = var(S(mask, :), 0, 1, 'omitnan');
+            g(~isfinite(g)) = 0;
             d(d <= 0 | ~isfinite(d)) = 1;
             [g, d] = ebPosterior(S(mask, :), g, d);
         else
@@ -374,12 +386,13 @@ end
 function [g_star, d_star] = ebPosterior(S_b, g_hat, d_hat)
 % Parametric EB posteriors for one batch (Johnson et al. 2007, it.sol): priors are
 % estimated across features (gamma ~ N(g_bar, t2), delta ~ InvGamma(a, b)).
-    n = size(S_b, 1);
-    g_bar = mean(g_hat);
-    t2    = var(g_hat);
-    m     = mean(d_hat);
-    s2    = var(d_hat);
-    if numel(g_hat) < 2 || t2 <= 0 || s2 <= 0 || n < 2
+    n = sum(~isnan(S_b), 1);                 % observed samples per feature
+    has = n >= 2;                            % features that inform the priors
+    g_bar = mean(g_hat(has));
+    t2    = var(g_hat(has));
+    m     = mean(d_hat(has));
+    s2    = var(d_hat(has));
+    if sum(has) < 2 || t2 <= 0 || s2 <= 0 || size(S_b, 1) < 2
         g_star = g_hat;  d_star = d_hat;   % too little information to shrink
         return
     end
@@ -387,8 +400,8 @@ function [g_star, d_star] = ebPosterior(S_b, g_hat, d_hat)
     b = (m * s2 + m^3) / s2;
     g_old = g_hat;  d_old = d_hat;
     for it = 1:100
-        g_new = (n * t2 * g_hat + d_old * g_bar) ./ (n * t2 + d_old);
-        sum2  = sum((S_b - g_new).^2, 1);
+        g_new = (n .* t2 .* g_hat + d_old * g_bar) ./ (n .* t2 + d_old);
+        sum2  = sum((S_b - g_new).^2, 1, 'omitnan');
         d_new = (b + 0.5 * sum2) ./ (n / 2 + a - 1);
         change = max(max(abs(g_new - g_old) ./ max(abs(g_old), eps)), ...
                      max(abs(d_new - d_old) ./ max(abs(d_old), eps)));

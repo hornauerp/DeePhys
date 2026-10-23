@@ -23,6 +23,11 @@ classdef SpikeData
         SpikeTimes          double  % (N_spikes x 1) spike times in seconds
         SpikeUnits          double  % (N_spikes x 1) 1-indexed template assignment
         TemplateWaveforms   double  % (N_templates x N_samples x N_channels)
+        TemplateAmplitudes  double  % (N_templates x 1) trough amplitude of each template in
+                                    % recording units (ADC): unwhitened template (Kilosort 1-3
+                                    % whitening_mat_inv.npy) x median spike scaling
+                                    % (amplitudes.npy) / scaleproc; [] if unavailable
+        GainToUV            double = NaN  % uV per recording unit (SpikeInterface metadata); NaN if unknown
     end
 
     methods (Static)
@@ -113,6 +118,12 @@ classdef SpikeData
                 'SpikeData:templateIndex', ['%s refers to template %d, but templates.npy has %d. ' ...
                 'Export one template per unit (e.g. SpikeInterface export_to_phy).'], ...
                 unit_file, max(sd.SpikeUnits) - 1, size(sd.TemplateWaveforms, 1));
+
+            % Template amplitudes in recording units and the recording gain, for amplitudes
+            % in uV (RecordingProcessor QC.Amplitude and the Amplitude unit feature)
+            sd.TemplateAmplitudes = SpikeData.kilosortTemplateAmplitudes(input_path, ...
+                sd.TemplateWaveforms, sd.SpikeUnits);
+            sd.GainToUV = SpikeData.parseGainToUV(input_path);
 
             % Duration from params.py n_samples (more accurate than max spike time,
             % which underestimates when the recording goes silent at the end).
@@ -245,6 +256,76 @@ classdef SpikeData
     end
 
     methods (Static, Access = private)
+
+        function amps = kilosortTemplateAmplitudes(input_path, tmpl, spike_units)
+        % KILOSORTTEMPLATEAMPLITUDES  Trough amplitude of each template in recording units.
+        %   Kilosort 1-3 fit the whitened data scaled by ops.scaleproc: a spike is
+        %   scaling (amplitudes.npy) x template, so in recording units it is
+        %   template x whitening_mat_inv x median scaling / scaleproc. [] when the inputs are
+        %   missing or the sorter is not Kilosort 1-3 (another convention), and for phy
+        %   exports without whitening (identity whitening_mat_inv, no sorter metadata).
+            amps = [];
+            winv_f  = fullfile(input_path, 'whitening_mat_inv.npy');
+            scale_f = fullfile(input_path, 'amplitudes.npy');
+            if ~isfile(winv_f) || ~isfile(scale_f) || isempty(tmpl), return; end
+            [sorter, scaleproc] = SpikeData.kilosortSettings(input_path);
+            if ~ismember(sorter, ["", "kilosort", "kilosort2", "kilosort2_5", "kilosort3"]), return; end
+            winv  = double(readNPY(winv_f));
+            scale = double(readNPY(scale_f));
+            n = size(tmpl, 1);
+            if size(winv, 1) ~= size(tmpl, 3) || numel(scale) ~= numel(spike_units), return; end
+            if sorter == "" && isequal(winv, eye(size(winv))), return; end
+            med_scale = accumarray(spike_units(:), scale(:), [n 1], @median, NaN);
+            trough = NaN(n, 1);
+            is_diag = isdiag(winv);
+            w_diag = diag(winv)';
+            for u = 1:n
+                T = reshape(tmpl(u, :, :), size(tmpl, 2), size(tmpl, 3));
+                if is_diag, U = T .* w_diag; else, U = T * winv; end
+                trough(u) = -min(U, [], 'all');
+            end
+            amps = trough .* med_scale / scaleproc;
+        end
+
+        function [sorter, scaleproc] = kilosortSettings(input_path)
+        % KILOSORTSETTINGS  Sorter name and ops.scaleproc from SpikeInterface's
+        %   spikeinterface_params.json (sorter folder or its parent); "" and the Kilosort 1-3
+        %   default 200 without it.
+            sorter = ""; scaleproc = 200;
+            files = [fullfile(input_path, 'spikeinterface_params.json'), ...
+                     fullfile(fileparts(input_path), 'spikeinterface_params.json')];
+            for f = files
+                if ~isfile(f), continue; end
+                try
+                    j = jsondecode(fileread(f));
+                    if isfield(j, 'sorter_name'), sorter = lower(string(j.sorter_name)); end
+                    if isfield(j, 'sorter_params') && isfield(j.sorter_params, 'scaleproc') && ...
+                            isnumeric(j.sorter_params.scaleproc) && isscalar(j.sorter_params.scaleproc)
+                        scaleproc = double(j.sorter_params.scaleproc);
+                    end
+                catch
+                end
+                return
+            end
+        end
+
+        function g = parseGainToUV(input_path)
+        % PARSEGAINTOUV  uV per recording unit from SpikeInterface's spikeinterface_recording.json
+        %   (sorter folder or its parent): median of the channel gains; NaN without it.
+            g = NaN;
+            files = [fullfile(input_path, 'spikeinterface_recording.json'), ...
+                     fullfile(fileparts(input_path), 'spikeinterface_recording.json')];
+            for f = files
+                if ~isfile(f), continue; end
+                tok = regexp(fileread(f), '"gain_to_uV"\s*:\s*(\[[^\]]*\]|[-+0-9.eE]+)', 'tokens', 'once');
+                if ~isempty(tok)
+                    v = str2double(strsplit(erase(tok{1}, ["[", "]"]), ','));
+                    v = v(isfinite(v) & v > 0);
+                    if ~isempty(v), g = median(v); end
+                end
+                return
+            end
+        end
 
         function sr = parseSamplingRate(input_path)
         % sample_rate from params.py (any spacing, CRLF or LF line ends)
