@@ -71,7 +71,14 @@ classdef RecordingProcessor < handle
         %      QC.Amplitude on the unwhitened template amplitude in uV (Kilosort 1-3 inverse
         %      whitening and spike scaling, recorded gain or QC.LSB) and new unit feature
         %      Amplitude; skipped when the sorting gives no scale (was whitened x QC.LSB)
-        FeatureDefinitionVersion = 4
+        %   5  defaults: Bursts.Method "ISINJoint" (was legacy "ISIN"), QC.FiringRate
+        %      [0.01 100] Hz (was [0.01 10]), STTC.MaxLag 0.01 s (was 0.05); E/I-stratified
+        %      spatial columns only with cell-type labels; spatial burst columns for every
+        %      recording (NaN without bursts); BurstFractionSpikes 0 when no burst was found;
+        %      RegularityFit NaN without a significant spectral peak; exact time grid in
+        %      alignWaveformsFromData; CCG honours its Fs option; Amplitude (and QC.Amplitude)
+        %      also for Kilosort 4 sortings (template x whitening_mat_inv)
+        FeatureDefinitionVersion = 5
     end
 
     % =====================================================================
@@ -400,7 +407,7 @@ classdef RecordingProcessor < handle
                     ['No valid parent path for recording %s — ' ...
                      'parent features unavailable, child features used as fallback.'], ...
                     proc.SpikeData.InputPath);
-                proc.Status.ParentFeatures = "done";
+                proc.Status.ParentFeatures = "skipped";   % nothing computed ("done" read as if it had been)
                 return
             end
 
@@ -512,7 +519,7 @@ classdef RecordingProcessor < handle
                     if proc.Status.UnitFeatures ~= "done"
                         proc.computeUnitFeatures();
                     end
-                    burst_params.Method = "ISIN";
+                    burst_params.Method = "ISINJoint";
                     if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'Method')
                         burst_params.Method = proc.Parameters.Bursts.Method;
                     end
@@ -557,6 +564,9 @@ classdef RecordingProcessor < handle
                         burst_frac = n_in ./ n_spk;
                         burst_frac(n_spk == 0) = NaN;
                         proc.UnitFeatureTable.BurstFractionSpikes = burst_frac;
+                    else
+                        % detection ran and found no bursts: no spike lies in a burst
+                        proc.UnitFeatureTable.BurstFractionSpikes = zeros(numel(proc.Units), 1);
                     end
                 catch ME
                     n_failed = n_failed + 1;
@@ -836,6 +846,9 @@ classdef RecordingProcessor < handle
             n_failed = 0;
             labels = proc.CellTypeLabels;
             sp     = proc.Parameters;
+            % Without cell-type labels the E/I-stratified columns would be all NaN: not written
+            has_labels = ~isempty(labels) && any(~isnan(labels));
+            keep = @(t) RecordingProcessor.dropLabelColumns(t, has_labels);
 
             % Remove stale spatial columns before recomputing
             proc.NetworkFeatureTable = removeSpatialCols(proc.NetworkFeatureTable);
@@ -850,7 +863,7 @@ classdef RecordingProcessor < handle
             try
                 [nw_sp, unit_sp] = computeSpatialFeatures( ...
                     ec, proc.Units, labels, proc.UnitFeatureTable, sp_params);
-                RecordingProcessor.appendFeatures(proc, nw_sp, unit_sp);
+                RecordingProcessor.appendFeatures(proc, keep(nw_sp), keep(unit_sp));
             catch ME
                 n_failed = n_failed + 1;
                 warning('RecordingProcessor:spatialAnalysis', ...
@@ -862,7 +875,7 @@ classdef RecordingProcessor < handle
                 if ~isempty(proc.Connectivity) && ~isempty(fieldnames(proc.Connectivity))
                     [nw_conn, unit_conn] = computeSpatialConnectivityFeatures( ...
                         ec, proc.Units, proc.Connectivity, labels, sp_params);
-                    RecordingProcessor.appendFeatures(proc, nw_conn, unit_conn);
+                    RecordingProcessor.appendFeatures(proc, keep(nw_conn), keep(unit_conn));
                 end
             catch ME
                 n_failed = n_failed + 1;
@@ -884,15 +897,17 @@ classdef RecordingProcessor < handle
             end
 
             % --- Burst propagation (H) ---
+            % Written for every recording (NaN without bursts), so all recordings share columns
             try
-                if ~isempty(proc.Bursts) && isfield(proc.Bursts, 'T_start') ...
-                        && ~isempty(proc.Bursts.T_start)
-                    [nw_burst, ~] = computeSpatialBurstFeatures( ...
-                        ec, proc.Units, proc.Bursts, ...
-                        proc.SpikeData.SpikeTimes, proc.SpikeData.SpikeUnits, ...
-                        labels, sp_params);
-                    RecordingProcessor.appendFeatures(proc, nw_burst, table());
+                bursts = proc.Bursts;
+                if isempty(bursts) || ~isfield(bursts, 'T_start')
+                    bursts = struct('T_start', [], 'T_end', []);
                 end
+                [nw_burst, ~] = computeSpatialBurstFeatures( ...
+                    ec, proc.Units, bursts, ...
+                    proc.SpikeData.SpikeTimes, proc.SpikeData.SpikeUnits, ...
+                    labels, sp_params);
+                RecordingProcessor.appendFeatures(proc, keep(nw_burst), table());
             catch ME
                 n_failed = n_failed + 1;
                 warning('RecordingProcessor:spatialAnalysis', ...
@@ -1155,7 +1170,7 @@ classdef RecordingProcessor < handle
 
             params.QC.LSB              = 6.2;
             params.QC.Amplitude        = [20 1000];
-            params.QC.FiringRate       = [0.01 10];
+            params.QC.FiringRate       = [0.01 100];   % Hz; an upper cap of 10 Hz removed fast-spiking units
             params.QC.RPV              = 0.02;
             params.QC.RefractoryPeriod = 0.002;
             params.QC.Axon             = 0.8;
@@ -1180,7 +1195,7 @@ classdef RecordingProcessor < handle
             params.Activity.FanoBinWidth = 0.1;
             params.Activity.LvRRefractory = 0.005;   % s, refractory constant R of the revised local variation (Shinomoto et al. 2009)
 
-            params.Bursts.Method      = "ISIN";      % legacy; "ISINJoint" = detectNetworkBursts, "logISI"
+            params.Bursts.Method      = "ISINJoint"; % detectNetworkBursts; "ISIN" (legacy), "logISI" (deprecated)
             params.Bursts.TonicMethod = "gini";      % "ISINJoint": unit removal before detection (with TonicMinRate)
             params.Bursts.ShapeLevel  = 0.25;        % burst onset / offset at this fraction of the peak (burstShape)
             params.Bursts.TonicMinRate = "median";   % "ISINJoint": units below this rate (Hz or "median") are never removed
@@ -1214,7 +1229,7 @@ classdef RecordingProcessor < handle
             params.DDC.N_Surrogates = 100;
             params.DDC.Percentile  = 95;
 
-            params.STTC.MaxLag          = 0.05;
+            params.STTC.MaxLag          = 0.01;   % s, spike-level synchrony (a 50 ms window mostly measures co-participation in network bursts)
             params.STTC.SurrogateMethod = 'jitter';
             params.STTC.JitterSD        = [];      % s, surrogate jitter SD; empty = 2 x MaxLag (must exceed MaxLag)
             params.STTC.N_Surrogates    = 100;
@@ -1237,10 +1252,6 @@ classdef RecordingProcessor < handle
             params.SpatialFeatures.RipleyNSurrogates         = 100;
             params.SpatialFeatures.KernelBandwidth           = 100;
             params.SpatialFeatures.BurstMinUnitsForWavefront = 5;
-
-            params.Save.Flag      = false;
-            params.Save.Path      = [];
-            params.Save.Overwrite = false;
         end
 
         function applyLabelsFromClassifier(proc_array, ctc)
@@ -1518,6 +1529,17 @@ classdef RecordingProcessor < handle
             power = abs(y).^2 / n;
             bad   = max(power)' > cutoff;
             fprintf('QC power: %d bad\n', sum(bad));
+        end
+
+        function t = dropLabelColumns(t, has_labels)
+        % DROPLABELCOLUMNS  Without cell-type labels, remove the E/I-stratified columns
+        %   (suffixes _E, _I, _EE, _II, _EI and the label-based composition features).
+            if has_labels || isempty(t) || width(t) == 0, return; end
+            names = string(t.Properties.VariableNames);
+            label_based = endsWith(names, ["_E", "_I", "_EE", "_II", "_EI"]) | ismember(names, ...
+                ["SpatialMixingIndex", "FractionExcNN", "FractionInhNN", "BurstOriginExcFraction", ...
+                 "SpatialEIVariability", "SpatialEIMoransI"]);
+            t(:, label_based) = [];
         end
 
         function a = templateAmplitudesUV(sd, lsb)

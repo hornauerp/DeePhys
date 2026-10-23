@@ -37,12 +37,12 @@ fprintf('Duration: %.1f s, N units: %d\n', sd.Duration, ...
 | `SpikeTimes` | double | (N_spikes × 1) spike times in seconds |
 | `SpikeUnits` | double | (N_spikes × 1) 1-indexed template assignment |
 | `TemplateWaveforms` | double | (N_templates × N_samples × N_channels) |
-| `TemplateAmplitudes` | double | (N_templates × 1) trough amplitude of each template in recording units (ADC): unwhitened template × median spike scaling / `scaleproc`. `[]` when unavailable (see below) |
+| `TemplateAmplitudes` | double | (N_templates × 1) trough amplitude of each template in recording units (ADC) from the unwhitened template (Kilosort 1–3 also × median spike scaling / `scaleproc`). `[]` when unavailable (see below) |
 | `GainToUV` | double | µV per recording unit from SpikeInterface's `spikeinterface_recording.json` (`gain_to_uV`); `NaN` if unknown |
 
 ## Notes
 
-- Template amplitudes need `whitening_mat_inv.npy` and `amplitudes.npy` of a Kilosort 1–3 sorting. Kilosort fits the whitened data scaled by `ops.scaleproc` (default 200, or `scaleproc` from `spikeinterface_params.json`), so a spike in recording units is `template × whitening_mat_inv × scaling / scaleproc`. Other sorters (by `sorter_name` in `spikeinterface_params.json`) and phy exports with an identity `whitening_mat_inv` and no sorter metadata get `[]`, since their scaling convention differs.
+- Template amplitudes need `whitening_mat_inv.npy` and `amplitudes.npy` of a Kilosort 1–3 sorting. Kilosort fits the whitened data scaled by `ops.scaleproc` (default 200, or `scaleproc` from `spikeinterface_params.json`), so a spike in recording units is `template × whitening_mat_inv × scaling / scaleproc`. Other sorters (by `sorter_name` in `spikeinterface_params.json`) and phy exports with an identity `whitening_mat_inv` and no sorter metadata get `[]`, since their scaling convention differs. Kilosort 4 (by `sorter_name`, or `ops.npy` / `kilosort4.log` in a native output) whitens without `scaleproc` and saves each cluster's mean waveform in whitened space (`templates = Wall × wPCA`), while its `amplitudes.npy` is the norm of each spike's PC features, not a scaling. Its amplitude in recording units is therefore `template × whitening_mat_inv`; this matched trough amplitudes measured in the raw data. (`cluster_Amplitude.tsv` of Kilosort 4 is the norm of the template, not a peak amplitude.) Kilosort 4 recordings converted to a binary file often carry no `gain_to_uV`; set `QC.LSB` to the recording's gain then.
 - `RecordingID` is derived from the spike data, so it is stable across sessions and paths; units of segments with one `SortingID` get the same `UnitID`.
 - `DIV` is computed automatically from `PlatingDate` + `RecordingDate` if not provided in metadata.
 - If a sibling `qc_output/` folder exists alongside `InputPath`, it is auto-detected as `ParentPath` (split-recording support).

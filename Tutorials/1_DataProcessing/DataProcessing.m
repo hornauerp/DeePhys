@@ -117,9 +117,9 @@ disp(proc.NetworkFeatureTable);
 % STTC significance: surrogates jitter each spike with SD proc.Parameters.STTC.JitterSD
 % (default: empty = 2 x MaxLag, so it follows MaxLag; it must exceed the coincidence window).
 % A pair is an edge when its STTC exceeds its surrogates at a false discovery rate of
-% proc.Parameters.STTC.FDR across all pairs (EdgeTest "fdr"). With the default MaxLag of
-% 50 ms, STTC in bursting cultures mostly reflects joint participation in network bursts;
-% set MaxLag to about 0.01 s for spike-level synchrony.
+% proc.Parameters.STTC.FDR across all pairs (EdgeTest "fdr"). The default MaxLag of 10 ms
+% measures spike-level synchrony; with 50 ms, STTC in bursting cultures mostly reflects
+% joint participation in network bursts.
 
 proc.computeConnectivity();
 

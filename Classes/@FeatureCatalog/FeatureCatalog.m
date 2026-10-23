@@ -61,12 +61,7 @@ classdef FeatureCatalog
                 case "core"
                     if group == "all"
                         % Union of core sets across all known groups
-                        groups = ["ActivityFeatures","WaveformFeatures","RegularityFeatures", ...
-                                  "Catch22","BombcellMetrics","GraphFeatures","BurstParticipation", ...
-                                  "NetworkBurst","NetworkRegularity","NetworkCatch22","NetworkGraph", ...
-                                  "CellTypeGraph","CellTypeBalance", ...
-                                  "CellTypeBurst","CellTypeActivity","CellTypeCorrelation", ...
-                                  "SpatialFeatures"];
+                        groups = FeatureCatalog.groups();
                         names = string.empty;
                         for g = groups
                             names = [names, FeatureCatalog.coreSet(g)]; %#ok<AGROW>
@@ -94,6 +89,92 @@ classdef FeatureCatalog
             end
         end
 
+        function g = groups()
+        % GROUPS  Names of the scalar feature groups (the vector groups ReferenceWaveform /
+        %   ACG / FullACG are listed by rawGroups).
+            g = ["ActivityFeatures","WaveformFeatures","RegularityFeatures", ...
+                 "Catch22","BombcellMetrics","GraphFeatures","BurstParticipation", ...
+                 "NetworkBurst","NetworkRegularity","NetworkCatch22","NetworkGraph", ...
+                 "CellTypeGraph","CellTypeBalance", ...
+                 "CellTypeBurst","CellTypeActivity","CellTypeCorrelation", ...
+                 "SpatialFeatures"];
+        end
+
+        function g = rawGroups()
+        % RAWGROUPS  Vector-valued column groups (Waveform1..N, ACG1..N, FullACG...).
+            g = ["ReferenceWaveform", "Waveform", "ACG", "FullACG"];
+        end
+
+        function tf = isGroup(name)
+        % ISGROUP  True for a known (scalar or vector) feature group name.
+            tf = ismember(string(name), [FeatureCatalog.groups(), FeatureCatalog.rawGroups()]);
+        end
+
+        function tf = matchColumns(group, cols)
+        % MATCHCOLUMNS  Which of the column names cols belong to a feature group: the single
+        %   source of group membership for FeatureStore. Exact names, except
+        %     - graph groups: stems resolve to their algorithm-suffixed columns
+        %       (Density -> Density_CCG, Density_STTC_w; RichClub -> RichClub1_CCG);
+        %       CellTypeGraph takes the _EE / _II columns, the other graph groups do not;
+        %     - SpatialFeatures: base names and their E/I-stratified variants (_E, _I, _EE, ...);
+        %     - vector groups: Waveform1..N, ACG1..N, FullACG*.
+        %   An unknown group matches nothing.
+            cols = string(cols);
+            group = string(group);
+            switch group
+                case {"ReferenceWaveform", "Waveform"}
+                    tf = FeatureCatalog.matchRegexp(cols, '^Waveform\d+$');
+                case "ACG"
+                    tf = FeatureCatalog.matchRegexp(cols, '^ACG\d+$');
+                case "FullACG"
+                    tf = startsWith(cols, "FullACG");
+                case "Catch22"
+                    tf = ismember(cols, FeatureCatalog.fullSet("Catch22"));
+                    if ~any(tf), tf = startsWith(cols, "SC_"); end
+                case {"GraphFeatures", "NetworkGraph"}
+                    tf = FeatureCatalog.matchStems(cols, FeatureCatalog.fullSet(group)) & ...
+                         ~endsWith(cols, ["_EE", "_II"]);
+                case "CellTypeGraph"
+                    roots = [FeatureCatalog.fullSet("NetworkGraph"), FeatureCatalog.fullSet("GraphFeatures")];
+                    tf = (FeatureCatalog.matchStems(cols, roots) & endsWith(cols, ["_EE", "_II"])) | ...
+                         startsWith(cols, ["CrossTypeDensity", "WithinTypeConnections", "CrossTypeConnections"]);
+                case "SpatialFeatures"
+                    base = FeatureCatalog.fullSet("SpatialFeatures");
+                    variants = base(:) + ["_E", "_I", "_EE", "_II", "_EI"];
+                    tf = ismember(cols, base) | ismember(cols, variants(:));
+                otherwise
+                    if FeatureCatalog.isGroup(group)
+                        tf = ismember(cols, FeatureCatalog.fullSet(group));
+                    else
+                        tf = false(size(cols));
+                    end
+            end
+        end
+
+        function names = columns(group, cols)
+        % COLUMNS  The column names among cols that belong to a group (see matchColumns), e.g.
+        %   FeatureCatalog.columns("NetworkGraph", X.Properties.VariableNames) for
+        %   Classifier.classifyByGroups, which needs exact column names.
+            cols = string(cols);
+            names = cols(FeatureCatalog.matchColumns(group, cols));
+        end
+
+        function tf = inSet(cols, set)
+        % INSET  Which columns belong to a named feature set ("core" or a custom set). Names
+        %   match exactly; graph stems (Density, Modularity, ...) also match their
+        %   algorithm-suffixed columns. "full" keeps every column.
+            cols = string(cols);
+            if string(set) == "full"
+                tf = true(size(cols));
+                return
+            end
+            whitelist = FeatureCatalog.features("all", set);
+            graph_stems = [FeatureCatalog.fullSet("GraphFeatures"), FeatureCatalog.fullSet("NetworkGraph"), ...
+                           FeatureCatalog.fullSet("CellTypeGraph")];
+            tf = ismember(cols, whitelist) | ...
+                 FeatureCatalog.matchStems(cols, whitelist(ismember(whitelist, graph_stems)));
+        end
+
         function sets = availableSets()
         % AVAILABLESETS  Return the names of all available feature sets.
         %   Built-in sets appear first; custom sets follow in registration order.
@@ -109,14 +190,8 @@ classdef FeatureCatalog
             arguments
                 name (1,1) string
             end
-            groups = ["ActivityFeatures","WaveformFeatures","RegularityFeatures", ...
-                      "Catch22","BombcellMetrics","GraphFeatures","BurstParticipation", ...
-                      "NetworkBurst","NetworkRegularity","NetworkCatch22","NetworkGraph", ...
-                      "CellTypeGraph","CellTypeBalance", ...
-                      "CellTypeBurst","CellTypeActivity","CellTypeCorrelation", ...
-                      "SpatialFeatures"];
             tf = false;
-            for g = groups
+            for g = FeatureCatalog.groups()
                 if ismember(name, FeatureCatalog.fullSet(g))
                     tf = true;
                     return
@@ -180,6 +255,23 @@ classdef FeatureCatalog
     % =========================================================================
     methods (Static, Access = private)
 
+        function tf = matchStems(cols, stems)
+        % Columns named stem, stem<digits> or stem[<digits>]_<suffix>; stems ending in "_"
+        % (Strength_, MeanStrength_) match any continuation.
+            tf = false(size(cols));
+            for s = string(stems(:))'
+                if endsWith(s, "_")
+                    tf = tf | startsWith(cols, s);
+                else
+                    tf = tf | FeatureCatalog.matchRegexp(cols, ['^' regexptranslate('escape', char(s)) '\d*(_.*)?$']);
+                end
+            end
+        end
+
+        function tf = matchRegexp(cols, pattern)
+            tf = reshape(~cellfun(@isempty, regexp(cellstr(cols), pattern, 'once')), size(cols));
+        end
+
         function reg = registry(action, name, value)
         % REGISTRY  Read/write the session-scoped custom set store.
         %
@@ -242,7 +334,7 @@ classdef FeatureCatalog
                     names = ["T2Pdelay", "HalfWidth", "Asymmetry"];
 
                 case "RegularityFeatures"
-                    names = ["RegularityFrequency", "RegularityFit"];
+                    names = "RegularityFrequency";   % RegularityFit is NaN without a significant rhythm
 
                 case "Catch22"
                     names = string.empty;   % excluded from core
@@ -261,7 +353,7 @@ classdef FeatureCatalog
                              "IntraFiringRate", "InterFiringRate"];
 
                 case "NetworkRegularity"
-                    names = ["NetworkRegularityFrequency", "NetworkRegularityFit"];
+                    names = "NetworkRegularityFrequency";
 
                 case "NetworkCatch22"
                     names = string.empty;   % excluded from core

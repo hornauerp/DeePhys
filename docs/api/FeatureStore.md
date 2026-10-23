@@ -59,7 +59,7 @@ result = Classifier.classify(X, Y, opts);
 [X, ids] = fs.unitMatrix('all', [], MinFiringRate=0.1) % exclude quiet units
 ```
 
-`feature_groups` can be `"all"` or a string array like `["ActivityFeatures","WaveformFeatures"]`.
+`feature_groups` can be `"all"` or a string array like `["ActivityFeatures","WaveformFeatures"]`. Group membership comes from `FeatureCatalog.matchColumns`. A name that is not a group is a column-name prefix (e.g. `"Density"`); a name that is neither a group nor the prefix of any column raises `FeatureStore:unknownFeatureGroup`.
 
 ## `cultureMatrix`
 

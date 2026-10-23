@@ -41,6 +41,7 @@ classdef DimReducer
                 opts struct = struct()
             end
 
+            MLUtils.checkOptions(opts, "DimReducer");
             opts = DimReducer.defaultOpts(opts);
             norm_groups = MLUtils.groupLabels(opts.NormalizationGroups, height(X));
 

@@ -47,6 +47,22 @@ Return feature names for a (group, set) combination.
 
 For `set = "full"` and `group = "all"`, returns `string.empty` as a sentinel meaning "no column filter."
 
+### `g = FeatureCatalog.groups()`, `FeatureCatalog.rawGroups()`, `tf = FeatureCatalog.isGroup(name)`
+
+The scalar feature groups, the vector groups (`"ReferenceWaveform"`, `"ACG"`, `"FullACG"`), and whether a name is either.
+
+### `tf = FeatureCatalog.matchColumns(group, cols)` and `names = FeatureCatalog.columns(group, cols)`
+
+Which column names belong to a group: the single source of group membership for `FeatureStore` selection and `summarizeFeatureGroups`. Names match exactly, except that graph stems resolve to their algorithm-suffixed columns (`"Density"` matches `Density_CCG`, `Density_STTC_w`; `"RichClub"` matches `RichClub1_CCG`), `"CellTypeGraph"` takes the `_EE` / `_II` columns, `"SpatialFeatures"` includes the E/I-stratified variants (`ConvexHullArea_E`, `SpatialDecayTau_EE`, ...), and the vector groups match `Waveform1..N`, `ACG1..N`. Use `columns` to get exact names, e.g. for `Classifier.classifyByGroups`:
+
+```matlab
+defs = struct('Name', "Graph", 'Columns', FeatureCatalog.columns("NetworkGraph", X.Properties.VariableNames));
+```
+
+### `tf = FeatureCatalog.inSet(cols, set)`
+
+Which columns belong to a feature set (`"full"`: all). Names match exactly; graph stems in the set also match their suffixed columns. So the E/I variants of a core spatial name are not core.
+
 ### `sets = FeatureCatalog.availableSets()`
 
 Return all available set names as a string array, including custom registered sets.
@@ -72,6 +88,6 @@ Remove a previously registered custom set. Built-in sets (`"core"`, `"full"`) ca
 
 ## Notes
 
-- Feature group names correspond to the column prefixes in `FeatureStore.UnitTable` (e.g. `"ActivityFeatures"`, `"WaveformFeatures"`, `"RegularityFeatures"`, `"BombcellMetrics"`, `"BurstParticipation"` (fraction of a unit's spikes in network bursts), `"ACG"`, `"FullACG"`, `"ReferenceWaveform"`, `"Catch22"`; network groups `"NetworkRegularity"`, `"NetworkCatch22"`, `"NetworkGraph"`). Unknown names are matched as column prefixes and may select nothing.
+- Feature group names correspond to the column prefixes in `FeatureStore.UnitTable` (e.g. `"ActivityFeatures"`, `"WaveformFeatures"`, `"RegularityFeatures"`, `"BombcellMetrics"`, `"BurstParticipation"` (fraction of a unit's spikes in network bursts), `"ACG"`, `"FullACG"`, `"ReferenceWaveform"`, `"Catch22"`; network groups `"NetworkRegularity"`, `"NetworkCatch22"`, `"NetworkGraph"`). A name that is not a group is matched as a column prefix; one that matches no column raises `FeatureStore:unknownFeatureGroup`.
 - The `FeatureSet` option in `FeatureStore.unitMatrix()` and `Experiment` opts delegates to `FeatureCatalog.features()` internally.
 - Using `"core"` is recommended for publication-quality results: it removes redundant and unstable features.

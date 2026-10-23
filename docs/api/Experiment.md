@@ -93,7 +93,7 @@ All fields are optional. Unspecified fields use the defaults shown.
 | `FeatureGroups` | `"all"` | Feature groups to include (string array or `"all"`) |
 | `FeatureSet` | `"full"` | `"full"` or `"core"` (curated non-redundant subset) |
 | `ParentFeatures` | `[]` | Parent feature groups to prefer (e.g. `"ACG"`, `"all"`) |
-| `MinFiringRate` | `0` | Exclude units with firing rate below this (Hz) |
+| `MinFiringRate` | `0.1` | Unit level: exclude units with firing rate below this (Hz); sparser units have unreliable ISI and ACG features. `0` keeps all |
 
 ### ML algorithm
 
@@ -104,7 +104,7 @@ All fields are optional. Unspecified fields use the defaults shown.
 | `NHyper` | `0` | Bayesian hyperparameter optimisation evaluations (0 = skip) |
 | `Prior` | `"empirical"` | `"empirical"` or `"uniform"` (balanced class weighting) |
 | `Seed` | `[]` | RNG seed for reproducible CV splits |
-| `RF` | `struct()` | `classify` only: random forest overrides, e.g. `struct('MinLeafSize', 1, 'MinParentSize', 2)` at the `"Recording"` / `"Culture"` level with few rows per class. See [Classifier](Classifier.md) |
+| `RF` | `struct()` | Random forest overrides (`classify` and `regress`), e.g. `struct('MinLeafSize', 1, 'MinParentSize', 2)` at the `"Recording"` / `"Culture"` level with few rows per class. See [Classifier](Classifier.md) |
 | `ComputeImportance` | `true` | RF only: compute permutation importance per fold (forwarded to `Classifier` / `Regressor`) |
 | `ImportanceMethod` | `"auto"` | RF only: `"auto"` (held-out-fold importance when CV groups are set, i.e. at the `"Unit"`/`"Recording"` levels; out-of-bag at the `"Culture"` level), `"test"` or `"oob"`. See [Classifier](Classifier.md) |
 

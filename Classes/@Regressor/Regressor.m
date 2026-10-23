@@ -49,8 +49,10 @@ classdef Regressor
                 opts struct = struct()
             end
 
+            MLUtils.checkOptions(opts, "Regressor");
             opts = Regressor.defaultOpts(opts);
             [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);   % NaN targets
+            reg_params = MLPipeline.rfParams(opts.RF, "Regressor");   % opts.RF overrides (errors early)
 
             % Reproducibility
             if ~isempty(opts.Seed)
@@ -105,7 +107,7 @@ classdef Regressor
                 train_groups = [];
                 if use_gcv, train_groups = cv_groups(train_idx); end
                 [mdl, train_r2] = MLPipeline.createRegressor(X_train, Y_train, opts.Algorithm, ...
-                    opts.NHyper, train_groups);
+                    opts.NHyper, train_groups, reg_params);
                 Y_pred = predict(mdl, X_test);
 
                 predImp = Regressor.importance(mdl, X_test, Y_test, opts);
@@ -116,7 +118,7 @@ classdef Regressor
                     mse_train_val = resubLoss(mdl);     % resubstitution; optimistic (~0 for SVM/KNN)
                 end
                 result(k) = RegressionResult( ...
-                    'Mdl',       mdl, ...
+                    'Mdl',       MLUtils.storedModel(mdl, opts.KeepFullModel), ...
                     'Y_pred',    Y_pred, ...
                     'Y_test',    Y_test, ...
                     'mse_train', mse_train_val, ...
@@ -167,6 +169,9 @@ classdef Regressor
                 n_permutations (1,1) double = 100
             end
 
+            MLUtils.checkOptions(opts, "Regressor");              % once, not in every run
+            w_opts = warning('off', 'Regressor:unknownOption');
+            restore_w = onCleanup(@() warning(w_opts));
             [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);   % before shuffling targets
             obs_result  = Regressor.regress(X, Y, opts);
             obs_summary = RegressionResult.summarizeFolds(obs_result);
@@ -216,6 +221,9 @@ classdef Regressor
                 feature_group_defs struct
                 opts               struct = struct()
             end
+            MLUtils.checkOptions(opts, "Regressor");              % once, not per group
+            w_opts = warning('off', 'Regressor:unknownOption');
+            restore_w = onCleanup(@() warning(w_opts));
             results = struct('Name', {}, 'Result', {});
             for g = 1:numel(feature_group_defs)
                 fg   = feature_group_defs(g);
@@ -253,6 +261,8 @@ classdef Regressor
             if ~isfield(opts, 'StratificationVar'),   opts.StratificationVar = []; end
             if ~isfield(opts, 'ComputeImportance'),   opts.ComputeImportance = true; end
             if ~isfield(opts, 'ImportanceMethod'),    opts.ImportanceMethod = "auto"; end
+            if ~isfield(opts, 'RF'),                  opts.RF = struct();          end
+            if ~isfield(opts, 'KeepFullModel'),       opts.KeepFullModel = false;  end
         end
 
         function predImp = importance(mdl, X_test, Y_test, opts)

@@ -237,6 +237,11 @@ classdef Experiment < handle
                     [X, culture_ids] = exp.FeatureStore.cultureMatrix( ...
                         opts.IdentityKeys, opts.GroupingVar, opts.GroupingValues, ...
                         opts.Normalization, fg, pf, FeatureSet=opts.FeatureSet);
+                    if height(X) == 0
+                        error('Experiment:noCultures', ['No culture has recordings at every %s in ' ...
+                            '[%s]; set opts.GroupingValues to the values present.'], ...
+                            opts.GroupingVar, strjoin(string(opts.GroupingValues), ' '));
+                    end
                     cv_groups   = [];
                     norm_groups = [];
                     % Y must be provided explicitly (culture-level labels cannot be
@@ -309,7 +314,7 @@ classdef Experiment < handle
             if ~ismember(string(label_var), vars)
                 error('Experiment:cultureLabels', ...
                     ['Column "%s" not found in MetadataTable. ' ...
-                     'Pass Y explicitly via opts.Y for culture-level classification.'], ...
+                     'Pass Y explicitly via opts.Y for culture-level classification or regression.'], ...
                     label_var);
             end
             % Build culture IDs per recording (same keys as cultureMatrix)
@@ -365,7 +370,7 @@ classdef Experiment < handle
             if ~isfield(opts, 'GroupingValues'),   opts.GroupingValues = [7,14,21,28]; end
             if ~isfield(opts, 'Normalization'),    opts.Normalization = "";             end
             if ~isfield(opts, 'ParentFeatures'),   opts.ParentFeatures = string.empty;  end
-            if ~isfield(opts, 'MinFiringRate'),    opts.MinFiringRate = 0;              end
+            if ~isfield(opts, 'MinFiringRate'),    opts.MinFiringRate = 0.1;            end   % Hz, unit level: sparser units have unreliable ISI / ACG features
             % ML algorithm parameters (forwarded to Classifier / Regressor)
             if ~isfield(opts, 'Algorithm'),        opts.Algorithm = 'rf';              end
             if ~isfield(opts, 'KFold'),            opts.KFold = 5;                     end

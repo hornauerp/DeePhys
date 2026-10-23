@@ -40,11 +40,19 @@ classdef test_RecordingDatabase < matlab.unittest.TestCase
 
             db.registerRecording(proc);   % re-registration updates, does not duplicate
             tc.verifyEqual(height(db.queryRecordings(ChipID="DBChip")), 1);
+
+            % RecordingProcessor.Status wording, and a summary without a Mutation column
+            tc.verifyWarningFree(@() db.updateProcessingStatus(proc, 'computeUnitFeatures', 'done', 0.5));
+            tc.verifyWarningFree(@() test_RecordingDatabase.quietSummary(db));
         end
 
     end
 
     methods (Static, Access = private)
+        function quietSummary(db)
+            evalc('db.getSummary();');   % prints; only its warnings matter here
+        end
+
         function removeDB(f)
             RecordingDatabase.resetInstance();
             if isfile(f), delete(f); end

@@ -12,12 +12,13 @@ function updateProcessingStatus(db, mearec, analysis_name, status, duration_s, e
         db RecordingDatabase
         mearec   % MEArecording or RecordingProcessor
         analysis_name string
-        status string {mustBeMember(status, ["pending","running","completed","failed"])}
+        status string {mustBeMember(status, ["pending","running","completed","done","failed"])}   % "done" = RecordingProcessor.Status wording for "completed"
         duration_s (1,1) double = 0
         error_msg string = ""
     end
 
     if ~db.IsConnected; return; end
+    if status == "done", status = "completed"; end
     mearec = RecordingDatabase.recordingView(mearec);
 
     try

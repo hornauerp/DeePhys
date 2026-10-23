@@ -13,12 +13,12 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
 %   n_units       - (1 x 1) double, total number of units
 %   duration      - (1 x 1) double, recording duration in seconds
 %   params        - struct with fields:
-%       .Method         "ISIN" (legacy, default), "logISI" or "ISINJoint" (detectNetworkBursts:
-%                       N and threshold chosen jointly against surrogates, with a gate).
-%                       "logISI": log-ISI mixture threshold on the pooled train; events must
-%                       recruit >= max(5, 10 % of the active units) distinct units. It has no
-%                       chance test, so chance coincidences of high-rate units can still pass;
-%                       prefer "ISINJoint"
+%       .Method         "ISINJoint" (default; detectNetworkBursts: N and threshold chosen
+%                       jointly against surrogates, with a gate), "ISIN" (legacy: reports
+%                       bursts in cultures without network bursts) or "logISI" (deprecated:
+%                       log-ISI mixture threshold on the pooled train; events must recruit
+%                       >= max(5, 10 % of the active units) distinct units, but without a
+%                       chance test coincidences of high-rate units still pass)
 %       .TonicMethod    "ISINJoint" only: unit removal before detection (default "gini")
 %       .ShapeLevel     onset / offset level for burst timing and shape (default 0.25, burstShape)
 %       .TonicMinRate   "ISINJoint" only: units below this rate (Hz, or "median") are never removed (default "median")
@@ -41,7 +41,7 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
     end
 
     params = parseStructParameters(struct( ...
-        'Method',      "ISIN", ...
+        'Method',      "ISINJoint", ...
         'MergeFactor', 0.5, ...
         'Outlier',     struct('Method', '', 'ThresholdFactor', 3), ...
         'Binning',     0.01, ...
@@ -50,6 +50,10 @@ function [bursts, burst_features] = computeBursts(spike_times, spike_units, ...
         'TonicMinRate', "median"), params);
     assert(ismember(string(params.Method), ["ISIN", "ISINJoint", "logISI"]), 'computeBursts:unknownMethod', ...
         'Unknown burst detection method "%s" (use "ISIN", "ISINJoint" or "logISI").', string(params.Method));
+    if string(params.Method) == "logISI"
+        warning('computeBursts:logISIDeprecated', ['Burst method "logISI" is deprecated: it has ' ...
+            'no chance test, so coincidences of high-rate units pass as bursts. Use "ISINJoint".']);
+    end
 
     bursts = struct('T_start', [], 'T_end', [], 'Method', params.Method);
 

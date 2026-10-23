@@ -61,6 +61,7 @@ classdef Classifier
                 opts struct = struct()
             end
 
+            MLUtils.checkOptions(opts, "Classifier");
             opts = Classifier.defaultOpts(opts);
             [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);
             [Y, group_labels] = Classifier.prepareLabels(Y, opts.PoolingValues);
@@ -129,7 +130,7 @@ classdef Classifier
                 predImp = Classifier.importance(clf, X_test, Y_test, opts, true);
 
                 result(k) = ClassificationResult( ...
-                    'Mdl',         clf, ...
+                    'Mdl',         MLUtils.storedModel(clf, opts.KeepFullModel), ...
                     'Y_pred',      Y_pred, ...
                     'Y_test',      Y_test, ...
                     'scores',      scores, ...
@@ -191,6 +192,9 @@ classdef Classifier
                 opts           struct = struct()
                 n_permutations (1,1) double = 100
             end
+            MLUtils.checkOptions(opts, "Classifier");             % once, not in every run
+            w_opts = warning('off', 'Classifier:unknownOption');
+            restore_w = onCleanup(@() warning(w_opts));
             opts = Classifier.defaultOpts(opts);
             [X, Y, opts] = MLUtils.dropMissingTargets(X, Y, opts);   % before shuffling labels
 
@@ -248,6 +252,9 @@ classdef Classifier
                 feature_group_defs struct
                 opts               struct = struct()
             end
+            MLUtils.checkOptions(opts, "Classifier");             % once, not per group
+            w_opts = warning('off', 'Classifier:unknownOption');
+            restore_w = onCleanup(@() warning(w_opts));
             results = struct('Name', {}, 'Result', {});
             for g = 1:numel(feature_group_defs)
                 fg   = feature_group_defs(g);
@@ -324,37 +331,14 @@ classdef Classifier
             if ~isfield(opts, 'ComputeImportance'),  opts.ComputeImportance = true; end
             if ~isfield(opts, 'ImportanceMethod'),   opts.ImportanceMethod = "auto"; end
             if ~isfield(opts, 'RF'),                 opts.RF = struct();          end
+            if ~isfield(opts, 'KeepFullModel'),      opts.KeepFullModel = false;  end
         end
 
         function params = modelParams(opts)
-        % MODELPARAMS  MLPipeline parameters with opts.Prior and the opts.RF overrides.
-        %   opts.RF may set any MLPipeline RF field except Prior (that is opts.Prior);
-        %   an unknown field is an error rather than a silently ignored typo.
-            params = MLPipeline.returnDefaultParams();
+        % MODELPARAMS  MLPipeline parameters with opts.Prior and the opts.RF overrides
+        %   (MLPipeline.rfParams: unknown fields and invalid tree sizes are errors).
+            params = MLPipeline.rfParams(opts.RF, "Classifier");
             params.RF.Prior = opts.Prior;
-            if isempty(opts.RF), return; end
-            if ~isstruct(opts.RF) || ~isscalar(opts.RF)
-                error('Classifier:rfOptions', 'opts.RF must be a scalar struct of RF parameters.');
-            end
-            allowed = setdiff(string(fieldnames(params.RF)), "Prior");
-            given   = string(fieldnames(opts.RF));
-            bad     = given(~ismember(given, allowed));
-            if ~isempty(bad)
-                error('Classifier:rfOptions', 'Unknown opts.RF field(s) %s; allowed: %s (use opts.Prior for the prior).', ...
-                    strjoin(bad, ', '), strjoin(allowed, ', '));
-            end
-            for f = given'
-                params.RF.(f) = opts.RF.(f);
-            end
-            is_count = @(v) isnumeric(v) && isscalar(v) && v >= 1 && v == round(v);
-            for f = ["MinLeafSize", "NumCycles"]
-                if ~is_count(params.RF.(f))
-                    error('Classifier:rfOptions', 'opts.RF.%s must be a positive integer.', f);
-                end
-            end
-            if ~isempty(params.RF.MinParentSize) && ~is_count(params.RF.MinParentSize)
-                error('Classifier:rfOptions', 'opts.RF.MinParentSize must be a positive integer or [].');
-            end
         end
 
         function S = expandScores(scores, class_names, n_classes)

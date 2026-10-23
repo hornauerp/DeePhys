@@ -135,9 +135,22 @@ classdef test_SorterFormats < matlab.unittest.TestCase
             tc.verifyFalse(ismember(smallest, [proc.Units.TemplateID]));
             proc.computeUnitFeatures("WaveformFeatures");
             tc.verifyEqual(proc.UnitFeatureTable.Amplitude, uV([proc.Units.TemplateID]), 'RelTol', 1e-5);
-            % another sorter (different scaling convention): no amplitude
+            % Kilosort 4: mean waveforms in whitened space, amplitudes.npy is a PC-feature norm
+            % (not a scaling) and there is no scaleproc: trough(template x whitening_mat_inv).
+            % Its params contain Infinity, which jsondecode rejects.
             fid = fopen(fullfile(ks, 'spikeinterface_params.json'), 'w');
-            fprintf(fid, '{"sorter_name": "kilosort4", "sorter_params": {}}');
+            fprintf(fid, '{"sorter_name": "kilosort4", "sorter_params": {"artifact_threshold": Infinity}}');
+            fclose(fid);
+            ks4_expected = arrayfun(@(u) -min(squeeze(tmpl(u, :, :)) * winv, [], 'all'), (1:5)');
+            tc.verifyEqual(SpikeData.fromKilosort(ks).TemplateAmplitudes, ks4_expected, 'RelTol', 1e-5);
+            % native Kilosort 4 output (no SpikeInterface metadata): ops.npy marks it
+            delete(fullfile(ks, 'spikeinterface_params.json'));
+            writeNPY(0, fullfile(ks, 'ops.npy'));
+            tc.verifyEqual(SpikeData.fromKilosort(ks).TemplateAmplitudes, ks4_expected, 'RelTol', 1e-5);
+            % another sorter (unknown scaling convention): no amplitude
+            delete(fullfile(ks, 'ops.npy'));
+            fid = fopen(fullfile(ks, 'spikeinterface_params.json'), 'w');
+            fprintf(fid, '{"sorter_name": "mountainsort5", "sorter_params": {}}');
             fclose(fid);
             tc.verifyEmpty(SpikeData.fromKilosort(ks).TemplateAmplitudes);
         end

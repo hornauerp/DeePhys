@@ -19,26 +19,35 @@ function [frequency, magnitude, fit_coeff] = computeRegularity(binned_signal, bi
 %                   aperiodic (Poisson) signals give about 3-4, more in longer recordings.
 %                   Compare recordings of equal duration and binning.
 %   fit_coeff     - Exponential decay coefficient (b in fit(f, y, 'exp1'), f in Hz);
-%                   NaN if the fit fails
+%                   NaN if the fit fails or the spectral peak is not significant against
+%                   bin-shuffled surrogates (no rhythm: the fit would describe noise)
 
 NFFT = length(binned_signal);
 F = (0 : 1/NFFT : 1/2-1/NFFT) * (1/binning);
-% Remove mean and linear drift before windowing: a positive signal times the Hanning
-% window has a strong low-frequency lobe, so the "dominant frequency" was always the
-% lowest non-DC bin (1/duration).
-binned_signal = detrend(binned_signal(:))';
-% Apply Hanning window to reduce spectral leakage
-win = hanning(NFFT)';
-binned_signal = binned_signal .* win;
-TEMP = fft(binned_signal, NFFT);
-TEMP(1) = 0;
-freq_domain = abs(TEMP(1:floor(NFFT/2)));
+freq_domain = spectrumMagnitude(binned_signal);
 
 [peak_mag, freq_idx] = max(freq_domain);
 frequency = F(freq_idx);
 % Peak over the mean spectral magnitude: the raw FFT magnitude grows with the number of
 % bins, i.e. with recording duration, even for an aperiodic (Poisson) signal.
 magnitude = peak_mag / max(mean(freq_domain), eps);
+
+% The decay fit describes the harmonics of a rhythm; for an aperiodic signal it fits noise
+% (unbounded coefficients). It is computed only when the spectral peak exceeds that of all
+% 19 bin-shuffled surrogates (p <= 0.05; fixed seed, so results are reproducible).
+fit_coeff = NaN;
+if NFFT < 8 || ~any(binned_signal)
+    return
+end
+rs = RandStream('mt19937ar', 'Seed', 1);
+null_mag = zeros(1, 19);
+for k = 1:numel(null_mag)
+    fd = spectrumMagnitude(binned_signal(randperm(rs, NFFT)));
+    null_mag(k) = max(fd) / max(mean(fd), eps);
+end
+if magnitude <= max(null_mag)
+    return
+end
 
 norm_freq_domain = freq_domain / max(freq_domain);
 [all_pks, all_locs, ~, all_prom] = findpeaks(norm_freq_domain);
@@ -69,4 +78,15 @@ else
     fit_coeff = NaN;
 end
 
+end
+
+function freq_domain = spectrumMagnitude(binned_signal)
+% Magnitude spectrum without DC. Mean and linear drift are removed before the Hanning window:
+% a positive signal times the window has a strong low-frequency lobe, so the "dominant
+% frequency" was always the lowest non-DC bin (1/duration).
+NFFT = length(binned_signal);
+x = detrend(binned_signal(:))' .* hanning(NFFT)';
+TEMP = fft(x, NFFT);
+TEMP(1) = 0;
+freq_domain = abs(TEMP(1:floor(NFFT/2)));
 end

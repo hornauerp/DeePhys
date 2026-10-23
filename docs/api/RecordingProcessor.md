@@ -85,7 +85,7 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 |---|---|---|
 | `Amplitude` | `[20 1000]` | Accepted trough amplitude range (µV) of the unwhitened template (`SpikeData.TemplateAmplitudes` × gain). Skipped with a warning when the sorting gives no amplitude scale or the amplitudes are implausible (median < 5 or > 5000 µV); `[]` turns it off. The same amplitude is the `Amplitude` unit feature (`WaveformFeatures`) |
 | `LSB` | `6.2` | µV per recording unit, used when the sorting does not record its gain (`SpikeData.GainToUV`) |
-| `FiringRate` | `[0.01 10]` | Accepted firing rate range (Hz) |
+| `FiringRate` | `[0.01 100]` | Accepted firing rate range (Hz) |
 | `RPV` | `0.02` | Max fraction of refractory period violations (0–1) |
 | `RefractoryPeriod` | `0.002` | Refractory period (s) used for RPV computation |
 | `Axon` | `0.8` | Waveform axon score threshold (units with score > threshold are excluded) |
@@ -112,7 +112,7 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 
 | Field | Default | Description |
 |---|---|---|
-| `Method` | `"ISIN"` | `"ISIN"` (legacy: N by Dunn index, valley threshold, tonic heuristic), `"logISI"`, or `"ISINJoint"` (`detectNetworkBursts`: N and threshold chosen jointly against circular-shift surrogates; distinct maxima of the significance map are levels of grouping (bursts, sub-events, superbursts / epochs); within the burst level the finest scale that keeps bursts whole, so all synchronous events recruiting `MinBurstUnits` units (significantly more than expected by chance) count; superbursts - trains of bursts without silence between them - are split into their bursts (`proc.Bursts.Superburst`, `proc.Bursts.Info.Superbursts`); returns no bursts for cultures without network bursts; diagnostics in `proc.Bursts.Info`, levels in `proc.Bursts.Info.Levels`) |
+| `Method` | `"ISINJoint"` | `"ISIN"` (legacy: N by Dunn index, valley threshold, tonic heuristic; reports bursts in cultures without network bursts), `"logISI"` (deprecated: no chance test), or `"ISINJoint"` (`detectNetworkBursts`: N and threshold chosen jointly against circular-shift surrogates; distinct maxima of the significance map are levels of grouping (bursts, sub-events, superbursts / epochs); within the burst level the finest scale that keeps bursts whole, so all synchronous events recruiting `MinBurstUnits` units (significantly more than expected by chance) count; superbursts - trains of bursts without silence between them - are split into their bursts (`proc.Bursts.Superburst`, `proc.Bursts.Info.Superbursts`); returns no bursts for cultures without network bursts; diagnostics in `proc.Bursts.Info`, levels in `proc.Bursts.Info.Levels`) |
 | `TonicMethod` | `"gini"` | `"ISINJoint"` only: units removed before detection (`"gini"`: not burstier than Poisson, adaptive bins of ~3 spikes; `"coupling"` population coupling; `"regular"` more regular than Poisson; `"coupling+regular"`; `"either"`, `"both"`, `"legacy"`, `"none"`) |
 | `TonicMinRate` | `"median"` | `"ISINJoint"` only: units firing below this rate (Hz, or `"median"` of the recording's units) are never removed as tonic; low-rate units carry burst spikes rather than background |
 | `ShapeLevel` | `0.25` | Burst onset / offset at this fraction of each burst's peak above baseline (`burstShape`); gives the `BurstWidth`, `BurstRise`, `BurstFall`, `BurstFWHM` features, comparable between detectors and bursts (the legacy `BurstDuration`, `RiseTime`, `FallTime` depend on the detector edges) |
@@ -128,7 +128,7 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `CCG.Duration` | `0.1` | One-sided lag (s) |
 | `CCG.Alpha` | `0.001` | Significance threshold for edge detection |
 | `CCG.InhibitoryCriterion` | `"strict"` | Inhibitory links: `"strict"` (causal trough below the pre-spike mean and the slow 10 ms-to-edge flank; no reverse artefact of strong excitation) or `"cellexplorer"` (CellExplorer `ce_MonoSynConvClick`, the previous DeePhys default; many false positives) |
-| `STTC.MaxLag` | `0.05` | Synchrony window (s). In bursting cultures a 50 ms window mostly measures joint participation in network bursts; use about `0.01` for spike-level synchrony (Cutts & Eglen 2014) |
+| `STTC.MaxLag` | `0.01` | Synchrony window (s): spike-level synchrony (Cutts & Eglen 2014). In bursting cultures a 50 ms window mostly measures joint participation in network bursts |
 | `STTC.JitterSD` | `[]` | SD (s) of the spike jitter of the surrogates; empty = 2 × `MaxLag`. It must exceed `MaxLag` |
 | `STTC.N_Surrogates` | `100` | Surrogate count for significance |
 | `STTC.EdgeTest` | `"fdr"` | Edge test of `.bu`: `"fdr"` z-scores each pair against its surrogates and applies Benjamini-Hochberg control across pairs; `"percentile"` thresholds each pair at its own surrogate percentile (about `100 - Percentile` % false edges among independent pairs) |
@@ -156,4 +156,4 @@ Weighted graph features use the absolute weights of the significant links, norma
 - All `compute*` methods are idempotent: calling them a second time is a no-op. Exceptions: a step whose sub-analysis failed is marked `"failed"` and re-runs on the next call (its own columns are replaced, those of other steps kept); `computeConnectivity(methods)` adds methods not computed before; `computeUnitFeatures(groups)` / `computeParentFeatures(params)` on a finished step warn that the arguments are ignored (set the `Status` field to `"pending"` to recompute).
 - Override parameters by passing a nested struct, e.g.: `RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])))`.
 - Default connectivity methods are `["CCG","STTC"]`. DDC and FullCCG are available but not enabled by default.
-- `Status` tracks each analysis step with tri-state values: `"pending"`, `"done"`, or `"failed"`.
+- `Status` tracks each analysis step: `"pending"`, `"done"`, `"failed"`, or `"skipped"` (parent features when the recording has no parent sorting; the next call tries again).

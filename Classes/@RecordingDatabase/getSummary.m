@@ -53,8 +53,8 @@ function summary = getSummary(db)
             if ~isempty(mut_table) && height(mut_table) > 0
                 fprintf('\n  By mutation:\n');
                 for i = 1:height(mut_table)
-                    mut_name = mut_table.mutation{i};
-                    if isempty(mut_name); mut_name = '<unset>'; end
+                    mut_name = string(mut_table.mutation(i));   % cell, string or <missing>
+                    if ismissing(mut_name) || strlength(mut_name) == 0; mut_name = "<unset>"; end
                     fprintf('    %-20s %d\n', mut_name, mut_table.cnt(i));
                 end
             end

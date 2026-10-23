@@ -111,6 +111,37 @@ classdef MLPipeline
             end
         end
 
+        function params = rfParams(rf_opts, owner)
+        % RFPARAMS  Default parameters with the opts.RF overrides of Classifier / Regressor.
+        %   rf_opts may set any RF field except Prior (opts.Prior); unknown fields and invalid
+        %   tree sizes are errors (<owner>:rfOptions) rather than silently ignored.
+            params = MLPipeline.returnDefaultParams();
+            if isempty(rf_opts), return; end
+            id = char(owner + ":rfOptions");
+            if ~isstruct(rf_opts) || ~isscalar(rf_opts)
+                error(id, 'opts.RF must be a scalar struct of RF parameters.');
+            end
+            allowed = setdiff(string(fieldnames(params.RF)), "Prior");
+            given   = string(fieldnames(rf_opts));
+            bad     = given(~ismember(given, allowed));
+            if ~isempty(bad)
+                error(id, 'Unknown opts.RF field(s) %s; allowed: %s (use opts.Prior for the prior).', ...
+                    strjoin(bad, ', '), strjoin(allowed, ', '));
+            end
+            for f = given'
+                params.RF.(f) = rf_opts.(f);
+            end
+            is_count = @(v) isnumeric(v) && isscalar(v) && v >= 1 && v == round(v);
+            for f = ["MinLeafSize", "NumCycles"]
+                if ~is_count(params.RF.(f))
+                    error(id, 'opts.RF.%s must be a positive integer.', f);
+                end
+            end
+            if ~isempty(params.RF.MinParentSize) && ~is_count(params.RF.MinParentSize)
+                error(id, 'opts.RF.MinParentSize must be a positive integer or [].');
+            end
+        end
+
         function t = treeTemplate(rf, n_features, task)
         % TREETEMPLATE  templateTree of the random forest from the RF parameter struct.
         %   MinParentSize is passed only when set: templateTree's default (10) otherwise
@@ -147,7 +178,7 @@ classdef MLPipeline
             end
         end
 
-        function [mdl, train_r2] = createRegressor(X_train, Y_train, alg, N_hyper, train_groups)
+        function [mdl, train_r2] = createRegressor(X_train, Y_train, alg, N_hyper, train_groups, params)
         % CREATEREGRESSOR  Train a regression model with optional hyperparameter optimization.
         %
         % INPUTS:
@@ -165,9 +196,9 @@ classdef MLPipeline
                 alg     string = "rf"
                 N_hyper (1,1) double = 0
                 train_groups = []   % CV groups of the training rows: grouped inner CV
+                params struct = MLPipeline.returnDefaultParams()   % e.g. MLPipeline.rfParams(opts.RF, ...)
             end
 
-            params = MLPipeline.returnDefaultParams();
             opt_opts = struct('AcquisitionFunctionName', 'expected-improvement-plus', ...
                 'MaxObjectiveEvaluations', N_hyper, 'ShowPlots', false, 'Verbose', 0);
             if N_hyper > 0 && ~isempty(train_groups)

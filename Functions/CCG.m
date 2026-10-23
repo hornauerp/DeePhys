@@ -100,7 +100,7 @@ for i = 1:2:length(varargin),
 				error('Incorrect value for property ''duration'' (type ''help <a href="matlab:help CCG">CCG</a>'' for details).');
             end
             
-            case 'Fs',
+            case 'fs',   % names are lower-cased above ('Fs' never matched: the default 1/20000 applied)
 			Fs = varargin{i+1};
 			if ~isdscalar(Fs,'>0'),
 				error('Incorrect value for property ''Fs'' (type ''help <a href="matlab:help CCG">CCG</a>'' for details).');

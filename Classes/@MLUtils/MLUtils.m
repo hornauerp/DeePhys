@@ -6,6 +6,43 @@ classdef MLUtils
 
     methods (Static)
 
+        function names = optionNames()
+        % OPTIONNAMES  Every opts field read by Classifier, Regressor, DimReducer or Experiment
+        %   (Experiment passes its opts on, so one list serves all of them).
+            names = ["Algorithm", "KFold", "NHyper", "CVGroups", "NormalizationGroups", ...
+                     "NormalizationVar", "NormalizationPipeline", "CovariateLabels", ...
+                     "PoolingValues", "GroupLabels", "Prior", "Seed", "ComputeImportance", ...
+                     "ImportanceMethod", "RF", "KeepFullModel", "StratificationVar", ...
+                     "Method", "NDims", "NNeighbors", "Perplexity", "MinDist", "Spread", ...
+                     "ColorFilePath", ...
+                     "FeatureGroups", "FeatureSet", "CVLevel", "IdentityKeys", "GroupingVar", ...
+                     "GroupingValues", "Normalization", "ParentFeatures", "MinFiringRate", "Y"];
+        end
+
+        function mdl = storedModel(mdl, keep_full)
+        % STOREDMODEL  Model kept in a result: the compact model (no training data, out-of-bag
+        %   or resubstitution methods; it still predicts) unless keep_full. Full bagged
+        %   ensembles hold a copy of the training rows, so results of large unit-level runs
+        %   otherwise take gigabytes. Models without compact() (e.g. kNN) are kept as they are.
+            if keep_full || ~ismethod(mdl, 'compact'), return; end
+            try
+                mdl = compact(mdl);
+            catch
+            end
+        end
+
+        function checkOptions(opts, owner)
+        % CHECKOPTIONS  Warn (<owner>:unknownOption) about opts fields nothing reads, e.g. a
+        %   misspelt KFold, which would otherwise silently fall back to the default.
+            given = string(fieldnames(opts));
+            bad = given(~ismember(given, MLUtils.optionNames()));
+            if ~isempty(bad)
+                warning(char(owner + ":unknownOption"), ...
+                    'Unknown option field(s) %s are ignored. Known fields: %s.', ...
+                    strjoin(bad, ', '), strjoin(sort(MLUtils.optionNames()), ', '));
+            end
+        end
+
         function g = resolveGroups(groups_input, N)
         % RESOLVEGROUPS  Normalise a group vector to a (N x 1) double index, or [].
         %

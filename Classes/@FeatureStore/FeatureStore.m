@@ -285,42 +285,24 @@ classdef FeatureStore < handle
         % Useful after FeatureStore.fromProcessors() to confirm all expected analyses
         % have been run. Groups with zero features likely correspond to analyses not yet
         % executed (e.g., no connectivity columns if computeConnectivity() was not called).
+            % Group membership from FeatureCatalog.matchColumns (the same as for selection)
             unit_cols = string(fs.UnitTable.Properties.VariableNames);
             rec_cols  = string(fs.RecordingTable.Properties.VariableNames);
-
-            unit_groups = struct( ...
-                'ActivityFeatures',  sum(startsWith(unit_cols, ["FiringRate","MeanISI","Variance","CV","Local","Revised","Fano","Partial","ISIBim"])), ...
-                'WaveformFeatures',  sum(startsWith(unit_cols, ["AUC","Rise","Decay","Half","Asym","T2P"]) | unit_cols == "Amplitude"), ...
-                'ReferenceWaveform', sum(startsWith(unit_cols, "Waveform")), ...
-                'ACG',               sum(startsWith(unit_cols, "ACG") & ~startsWith(unit_cols, "FullACG")), ...
-                'FullACG',           sum(startsWith(unit_cols, "FullACG")), ...
-                'RegularityFeatures', sum(startsWith(unit_cols, "Regularity")), ...
-                'Catch22',           sum(startsWith(unit_cols, "SC_")));
-
-            rec_groups = struct( ...
-                'BurstFeatures',     sum(startsWith(rec_cols, ["BurstRate","IBI","BurstDuration","SpikesPerBurst","NetworkBurst"])), ...
-                'NetworkActivity',   sum(startsWith(rec_cols, ["Network","PopulationFR","MeanFR","MeanCV"])), ...
-                'Connectivity',      sum(startsWith(rec_cols, ["MeanSTTC","ExcFraction","InhFraction","GraphDensity","Clustering","PathLength","SmallWorld","Modularity","ExcDensity","InhDensity","NetExc","NetInh"])), ...
-                'CellTypeFeatures',  sum(startsWith(rec_cols, ["ExcitatoryFraction","MeanFiringRate_","FiringRateRatio","MeanCV2_","MeanFano","MeanLvR","MeanISIBim","BurstLead","MeanBurstFrac","IntraBurst","BurstPart","MeanSTTC_E","MeanSTTC_I","STTCS"])), ...
-                'SpatialFeatures',   sum(startsWith(rec_cols, ["ConvexHull","ChipCoverage","MeanPairwise","Centroid","Spatial","DistFromCentroid","FractionExcNN","RipleysL","ClusterScale","DistanceFCCorr","MeanFC_Near","BurstOrigin","MeanBurst"])));
+            groups = [FeatureCatalog.groups(), "ReferenceWaveform", "ACG", "FullACG"];
+            unit_groups = struct(); rec_groups = struct();
+            for g = groups
+                unit_groups.(g) = sum(FeatureCatalog.matchColumns(g, unit_cols));
+                rec_groups.(g)  = sum(FeatureCatalog.matchColumns(g, rec_cols));
+            end
 
             fprintf('\n--- FeatureStore: %d units, %d recordings ---\n', ...
                 height(fs.UnitTable), height(fs.MetadataTable));
-            fprintf('Unit-level feature groups:\n');
-            fns = fieldnames(unit_groups);
-            for i = 1:numel(fns)
-                n = unit_groups.(fns{i});
-                status = '✓';
-                if n == 0; status = '✗ (not computed)'; end
-                fprintf('  %-22s %3d columns  %s\n', fns{i}, n, status);
-            end
-            fprintf('Recording-level feature groups:\n');
-            fns = fieldnames(rec_groups);
-            for i = 1:numel(fns)
-                n = rec_groups.(fns{i});
-                status = '✓';
-                if n == 0; status = '✗ (not computed)'; end
-                fprintf('  %-22s %3d columns  %s\n', fns{i}, n, status);
+            fprintf('%-22s %6s %10s\n', 'Feature group', 'unit', 'recording');
+            for g = groups
+                nu = unit_groups.(g); nr = rec_groups.(g);
+                status = '';
+                if nu == 0 && nr == 0, status = '  (not computed)'; end
+                fprintf('  %-20s %6d %10d%s\n', g, nu, nr, status);
             end
             fprintf('\n');
 
@@ -584,143 +566,31 @@ classdef FeatureStore < handle
                 % Exclude Parent_* columns — they are accessed only via resolveParentFeatures
                 cols = all_cols(~ismember(all_cols, exclude) & ~startsWith(all_cols, "Parent_"));
             else
+                % Group membership comes from FeatureCatalog.matchColumns. A name that is not
+                % a group is a column-name prefix; one that matches nothing is an error, so a
+                % misspelt or outdated group does not silently select no columns.
                 selected = false(1, numel(all_cols));
                 for g = 1:numel(feature_groups)
                     fg = feature_groups(g);
-                    switch fg
-                        case "ActivityFeatures"
-                            names = unitFeatureNames("act");
-                            selected = selected | ismember(all_cols, names);
-                        case "WaveformFeatures"
-                            % Actual column names written by inferWaveformFeatures
-                            wf_names = ["AUC_peak_1","AUC_trough","AUC_peak_2", ...
-                                        "Rise","Decay","HalfWidth","Asymmetry", ...
-                                        "T2Pdelay","T2Pratio","Amplitude"];
-                            selected = selected | ismember(all_cols, wf_names);
-                        case "RegularityFeatures"
-                            names = unitFeatureNames("reg");
-                            selected = selected | ismember(all_cols, names);
-                        case "Catch22"
-                            % Catch22 columns are stored with SC_ prefix
-                            try
-                                names = "SC_" + string(GetAllFeatureNames(false));   % catch22 (no DN_Mean / DN_Spread_Std)
-                                selected = selected | ismember(all_cols, names);
-                            catch
-                                selected = selected | startsWith(all_cols, "SC_");
-                            end
-                        case "GraphFeatures"
-                            % Per-unit graph columns: suffixed by algorithm (e.g. _CCG, _STTC)
-                            graph_roots = ["ClusteringCoefficient","LocalEfficiency","Strength_", ...
-                                           "EigenCentrality","Betweenness"];   % Strength_: weighted graphs
-                            for r = graph_roots
-                                selected = selected | startsWith(all_cols, r);
-                            end
-                        case "BombcellMetrics"
-                            names = unitFeatureNames("bc");
-                            selected = selected | ismember(all_cols, names);
-                        case "BurstParticipation"
-                            names = unitFeatureNames("burst");
-                            selected = selected | ismember(all_cols, names);
-                        case {"ReferenceWaveform","Waveform"}
-                            selected = selected | (startsWith(all_cols,"Waveform") & ~ismember(all_cols, exclude));
-                        case "ACG"
-                            selected = selected | (startsWith(all_cols,"ACG") & ~startsWith(all_cols,"FullACG"));
-                        case "FullACG"
-                            selected = selected | startsWith(all_cols,"FullACG");
-                        case "NetworkBurst"
-                            names = ["MeanInterBurstInterval","BurstDuration", ...
-                                     "RiseTime","FallTime","PeakFR","StdFR", ...
-                                     "StdBurstDuration","StdInterBurstInterval", ...
-                                     "IntraFiringRate","InterFiringRate", ...
-                                     "BurstWidth","BurstRise","BurstFall","BurstFWHM"];
-                            selected = selected | ismember(all_cols, names);
-                        case "NetworkRegularity"
-                            % Network columns are NetworkRegularityFrequency etc.; the bare
-                            % names belong to the single-unit regularity features
-                            names = "Network" + unitFeatureNames("reg");
-                            selected = selected | ismember(all_cols, names);
-                        case "NetworkCatch22"
-                            % Network catch22 columns carry the plain catch22 names; the
-                            % SC_ prefix marks the single-unit features
-                            names = string(GetAllFeatureNames(false));   % bundled (Toolboxes/catch22); catch22, not catch24
-                            selected = selected | ismember(all_cols, names);
-                        case "NetworkGraph"
-                            % Network-level graph columns: suffixed by algorithm (e.g. _CCG)
-                            graph_roots = ["Density","Assortativity","RichClub","MeanStrength_", ...
-                                           "GlobalEfficiency","Modularity","SmallWorldness"];
-                            for r = graph_roots
-                                selected = selected | startsWith(all_cols, r);
-                            end
-                        case "CellTypeGraph"
-                            % Cell-type-stratified graph features (_EE, _II suffixed)
-                            graph_roots = ["Density","Assortativity","RichClub", ...
-                                           "GlobalEfficiency","Modularity","SmallWorldness", ...
-                                           "ClusteringCoefficient","LocalEfficiency", ...
-                                           "EigenCentrality","Betweenness"];
-                            for r = graph_roots
-                                selected = selected | (startsWith(all_cols, r) & ...
-                                    (endsWith(all_cols, "_EE") | endsWith(all_cols, "_II")));
-                            end
-                            selected = selected | startsWith(all_cols, "CrossTypeDensity");
-                            selected = selected | startsWith(all_cols, "WithinTypeConnections");
-                            selected = selected | startsWith(all_cols, "CrossTypeConnections");
-                        case "CellTypeBalance"
-                            names = ["ExcitatoryFraction","MeanFiringRate_E", ...
-                                     "MeanFiringRate_I","FiringRateRatio_EI"];
-                            selected = selected | ismember(all_cols, names);
-                        case "CellTypeActivity"
-                            names = ["MeanCV2_E","MeanCV2_I", ...
-                                     "MeanFanoFactor_E","MeanFanoFactor_I", ...
-                                     "MeanLvR_E","MeanLvR_I", ...
-                                     "MeanISIBimodality_E","MeanISIBimodality_I"];
-                            selected = selected | ismember(all_cols, names);
-                        case "CellTypeBurst"
-                            [net_names, unit_names] = cellTypeBurstFeatureNames();
-                            names = [net_names, unit_names];
-                            selected = selected | ismember(all_cols, names);
-                        case "CellTypeCorrelation"
-                            names = ["MeanSTTC_EE","MeanSTTC_II","MeanSTTC_EI", ...
-                                     "STTCSynchronyIndex", ...
-                                     "MeanSTTC_WithinType","MeanSTTC_CrossType"];
-                            selected = selected | ismember(all_cols, names);
-                        case "SpatialFeatures"
-                            sp_names = ["ConvexHullArea", "ChipCoverage", ...
-                                        "MeanPairwiseDistance", "CentroidSpread", ...
-                                        "SpatialMixingIndex", "MeanFractionExcNN_E", "MeanFractionExcNN_I", ...
-                                        "DistFromCentroid", "FractionExcNN", "FractionInhNN", ...
-                                        "SpatialFRMoransI", "CenterPeripheryFR_ratio", ...
-                                        "RipleysL_max", "ClusterScale", ...
-                                        "SpatialDecayTau", "DistanceFCCorrelation", "MeanFC_NearNeighbors", ...
-                                        "SpatialEIVariability", "SpatialEIMoransI", ...
-                                        "BurstOriginDispersion", "MeanBurstPropagationSpeed", "BurstOriginExcFraction"];
-                            selected = selected | ismember(all_cols, sp_names);
-                        otherwise
-                            % Treat as a column-name prefix
-                            selected = selected | startsWith(all_cols, fg);
+                    if FeatureCatalog.isGroup(fg)
+                        selected = selected | FeatureCatalog.matchColumns(fg, all_cols);
+                    else
+                        hit = startsWith(all_cols, fg);
+                        if ~any(hit)
+                            error('FeatureStore:unknownFeatureGroup', ['"%s" is neither a feature ' ...
+                                'group nor the prefix of a column. Groups: %s.'], fg, ...
+                                strjoin([FeatureCatalog.groups(), FeatureCatalog.rawGroups()], ', '));
+                        end
+                        selected = selected | hit;
                     end
                 end
                 cols = all_cols(selected & ~ismember(all_cols, exclude) & ~startsWith(all_cols, "Parent_"));
             end
 
-            % Apply feature set filter (post-group selection).
-            % "full" → no filter. "core" → intersect with core whitelist.
-            % For NetworkGraph, core names are roots — apply prefix matching.
-            % ("full" is the only set whose empty name list means "no filter"; an empty custom
-            % set selects no columns.)
-            if feature_set ~= "full"
-                whitelist = FeatureCatalog.features("all", feature_set);
-                % Exact match OR prefix match (for algorithm-suffixed columns)
-                keep = false(1, numel(cols));
-                for k = 1:numel(cols)
-                    if ismember(cols(k), whitelist)
-                        keep(k) = true;
-                    elseif ~isempty(whitelist)
-                        % prefix match: any whitelist entry is a leading substring
-                        keep(k) = any(startsWith(cols(k), whitelist));
-                    end
-                end
-                cols = cols(keep);
-            end
+            % Feature set filter after the group selection: "full" keeps everything; "core" and
+            % custom sets match names exactly and graph stems by their suffixed columns
+            % (FeatureCatalog.inSet)
+            cols = cols(FeatureCatalog.inSet(cols, feature_set));
         end
 
         function out_tbl = resolveParentFeatures(~, tbl, child_cols, parent_features)

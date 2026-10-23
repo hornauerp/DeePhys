@@ -259,23 +259,38 @@ classdef SpikeData
 
         function amps = kilosortTemplateAmplitudes(input_path, tmpl, spike_units)
         % KILOSORTTEMPLATEAMPLITUDES  Trough amplitude of each template in recording units.
-        %   Kilosort 1-3 fit the whitened data scaled by ops.scaleproc: a spike is
-        %   scaling (amplitudes.npy) x template, so in recording units it is
-        %   template x whitening_mat_inv x median scaling / scaleproc. [] when the inputs are
-        %   missing or the sorter is not Kilosort 1-3 (another convention), and for phy
+        %   Kilosort 1-3 fit the whitened data scaled by ops.scaleproc and save unit-norm
+        %   templates with a per-spike scaling (amplitudes.npy), so a spike in recording units
+        %   is template x whitening_mat_inv x median scaling / scaleproc.
+        %   Kilosort 4 whitens without scaleproc and saves each cluster's mean waveform in
+        %   whitened space (templates = Wall x wPCA, not unit-norm); amplitudes.npy is the norm
+        %   of the spike's PC features, not a scaling. In recording units the template is
+        %   template x whitening_mat_inv (this matched raw-data spike troughs).
+        %   [] when the inputs are missing, for other sorters (unknown convention) and for phy
         %   exports without whitening (identity whitening_mat_inv, no sorter metadata).
+        %   Templates without spikes get NaN.
             amps = [];
             winv_f  = fullfile(input_path, 'whitening_mat_inv.npy');
             scale_f = fullfile(input_path, 'amplitudes.npy');
-            if ~isfile(winv_f) || ~isfile(scale_f) || isempty(tmpl), return; end
+            if ~isfile(winv_f) || isempty(tmpl), return; end
             [sorter, scaleproc] = SpikeData.kilosortSettings(input_path);
-            if ~ismember(sorter, ["", "kilosort", "kilosort2", "kilosort2_5", "kilosort3"]), return; end
-            winv  = double(readNPY(winv_f));
-            scale = double(readNPY(scale_f));
+            ks4 = sorter == "kilosort4";
+            if ~ks4 && ~ismember(sorter, ["", "kilosort", "kilosort2", "kilosort2_5", "kilosort3"]), return; end
+            winv = double(readNPY(winv_f));
             n = size(tmpl, 1);
-            if size(winv, 1) ~= size(tmpl, 3) || numel(scale) ~= numel(spike_units), return; end
+            if size(winv, 1) ~= size(tmpl, 3), return; end
             if sorter == "" && isequal(winv, eye(size(winv))), return; end
-            med_scale = accumarray(spike_units(:), scale(:), [n 1], @median, NaN);
+            if ks4
+                scale = accumarray(spike_units(:), 1, [n 1]);        % spike counts (no scaling)
+                scale(scale == 0) = NaN;
+                scale(~isnan(scale)) = 1;
+                scaleproc = 1;
+            else
+                if ~isfile(scale_f), return; end
+                spike_scale = double(readNPY(scale_f));
+                if numel(spike_scale) ~= numel(spike_units), return; end
+                scale = accumarray(spike_units(:), spike_scale(:), [n 1], @median, NaN);
+            end
             trough = NaN(n, 1);
             is_diag = isdiag(winv);
             w_diag = diag(winv)';
@@ -284,28 +299,29 @@ classdef SpikeData
                 if is_diag, U = T .* w_diag; else, U = T * winv; end
                 trough(u) = -min(U, [], 'all');
             end
-            amps = trough .* med_scale / scaleproc;
+            amps = trough .* scale / scaleproc;
         end
 
         function [sorter, scaleproc] = kilosortSettings(input_path)
         % KILOSORTSETTINGS  Sorter name and ops.scaleproc from SpikeInterface's
-        %   spikeinterface_params.json (sorter folder or its parent); "" and the Kilosort 1-3
-        %   default 200 without it.
+        %   spikeinterface_params.json (sorter folder or its parent), read with regular
+        %   expressions because Kilosort 4 parameters contain Infinity, which jsondecode
+        %   rejects. Without it, a native Kilosort 4 output (ops.npy / kilosort4.log) is
+        %   "kilosort4"; otherwise "" with the Kilosort 1-3 default scaleproc 200.
             sorter = ""; scaleproc = 200;
             files = [fullfile(input_path, 'spikeinterface_params.json'), ...
                      fullfile(fileparts(input_path), 'spikeinterface_params.json')];
             for f = files
                 if ~isfile(f), continue; end
-                try
-                    j = jsondecode(fileread(f));
-                    if isfield(j, 'sorter_name'), sorter = lower(string(j.sorter_name)); end
-                    if isfield(j, 'sorter_params') && isfield(j.sorter_params, 'scaleproc') && ...
-                            isnumeric(j.sorter_params.scaleproc) && isscalar(j.sorter_params.scaleproc)
-                        scaleproc = double(j.sorter_params.scaleproc);
-                    end
-                catch
-                end
+                txt = fileread(f);
+                tok = regexp(txt, '"sorter_name"\s*:\s*"([^"]+)"', 'tokens', 'once');
+                if ~isempty(tok), sorter = lower(string(tok{1})); end
+                tok = regexp(txt, '"scaleproc"\s*:\s*([-+0-9.eE]+)', 'tokens', 'once');
+                if ~isempty(tok) && isfinite(str2double(tok{1})), scaleproc = str2double(tok{1}); end
                 return
+            end
+            if isfile(fullfile(input_path, 'kilosort4.log')) || isfile(fullfile(input_path, 'ops.npy'))
+                sorter = "kilosort4";
             end
         end
 

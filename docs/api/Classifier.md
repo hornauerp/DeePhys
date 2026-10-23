@@ -146,6 +146,7 @@ result = Classifier.classify(X_wells, patterning, opts);
 | Field | Default | Description |
 |---|---|---|
 | `ComputeImportance` | `true` | Compute permutation importance per fold. It is the slowest step; switch it off when only accuracy is needed (`permutationTest` does so for the null runs) |
+| `KeepFullModel` | `false` | `result(k).Mdl` holds the compact model (it predicts, but has no training data or out-of-bag methods). `true` keeps the full model; full bagged ensembles store a copy of the training rows, which takes gigabytes in large unit-level runs |
 | `ImportanceMethod` | `"auto"` | `"auto"`: `"test"` when `CVGroups` is set, otherwise `"oob"`. `"test"`: shuffle one feature at a time in the held-out fold and record the increase in the classification error. `"oob"`: out-of-bag permuted-predictor importance |
 
 With grouped data the out-of-bag rows come from the same groups as the training rows, so `"oob"` favours features that merely identify a group; `"test"` measures what generalises to unseen groups. The test-fold importance uses a single shuffle per feature and fold, so it is noisy for small folds (values can be negative); interpret the mean and spread over folds from `ClassificationResult.summarizeImportance`, not a single fold. The two methods are on different scales and not comparable.
@@ -157,3 +158,4 @@ With grouped data the out-of-bag rows come from the same groups as the training 
 - `result(k).train_acc` uses OOB error for `"rf"` and resubstitution loss for `"svm"`/`"cnb"`/`"knn"`. It is optimistic whenever rows of a group are correlated; report the held-out `balanced_accuracy` from `ClassificationResult.summarizeFolds`.
 - `CVGroups` is passed to `GroupedCV.byGroups()` internally. See [GroupedCV](GroupedCV.md) for details.
 - NaN values in `X` are imputed with the training-set column median before each fold (via `MLUtils`).
+- An `opts` field that no part of the ML layer reads (e.g. a misspelt `Kfold`) gives a `Classifier:unknownOption` warning instead of being ignored silently.

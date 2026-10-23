@@ -37,7 +37,7 @@ function aligned_wf = alignWaveformsFromData(ref_wf_matrix, sampling_rate, targe
     max_offset = round(peak_idx / 2);
     x = max_offset:size(ref_wf, 1) + max_offset - 1;
     buffer_wf = size(ref_wf, 1) + 2 * max_offset;
-    xq = linspace(1, buffer_wf, buffer_wf * interp_factor);
+    xq = 1:1 / interp_factor:buffer_wf;   % exact 1/interp_factor step (linspace with buffer_wf * interp_factor points stretched the time axis)
 
     interp_wf = interp1(x, ref_wf, xq, "makima");
     interp_wf = interp_wf((max_offset * interp_factor) + 1:((buffer_wf - max_offset - 1) * interp_factor), :);

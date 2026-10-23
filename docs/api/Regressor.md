@@ -90,6 +90,8 @@ All fields are optional.
 | `CovariateLabels` | `[]` | Biological covariates to protect from ComBat removal |
 | `ComputeImportance` | `true` | RF only: compute permutation importance per fold. It dominates RF run time; `permutationTest` switches it off for the null runs |
 | `ImportanceMethod` | `"auto"` | RF only. `"auto"`: `"test"` when `CVGroups` is set, otherwise `"oob"`. `"test"`: shuffle one feature at a time in the held-out fold and record the increase in test MSE. `"oob"`: out-of-bag permuted-predictor importance |
+| `RF` | `struct()` | Random forest overrides as in [Classifier](Classifier.md) (`MinLeafSize`, `MinParentSize`, `NumCycles`, ...); unknown fields are an error |
+| `KeepFullModel` | `false` | `result(k).Mdl` holds the compact model; `true` keeps the full model (with its copy of the training rows) |
 
 With grouped data the out-of-bag rows come from the same groups as the training rows, so `"oob"` favours features that merely identify a group; `"test"` measures what generalises to unseen groups. The test-fold importance uses a single shuffle per feature and fold, so it is noisy for small folds (values can be negative); read the mean and spread over folds from `RegressionResult.summarizeImportance`. The two methods are on different scales and not comparable.
 
