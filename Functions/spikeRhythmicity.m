@@ -57,7 +57,8 @@ K = floor((n - L) / step) + 1;
 if K < 4 || numel(st) < 20, return; end
 
 % -- Welch spectrum -------------------------------------------------------------------
-x = accumarray(floor(st / dt) + 1, 1, [n 1]); x = x - mean(x);
+% a spike just below n*dt can round to bin n+1 (floating point); it belongs to the last bin
+x = accumarray(min(floor(st / dt) + 1, n), 1, [n 1]); x = x - mean(x);
 w = 0.5 - 0.5 * cos(2 * pi * (0:L-1)' / (L - 1));
 P = zeros(L / 2 + 1, 1);
 for k = 1:K

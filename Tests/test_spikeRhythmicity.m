@@ -34,6 +34,18 @@ classdef test_spikeRhythmicity < matlab.unittest.TestCase
             tc.verifyEqual(r.Freq, 10, 'AbsTol', 0.5);
         end
 
+        function testSpikeJustBelowTheLastBinEdge(tc)
+            % for this duration the last kept spike (just below n*dt) rounds to bin n+1
+            d = 61.69; dt = 0.002; n = floor(d / dt);
+            last = n * dt - eps(n * dt);
+            tc.assumeTrue(last < n * dt && floor(last / dt) + 1 > n);
+            rng(14);
+            st = [sort(rand(2000, 1) * (d - 1)); last];
+            r = spikeRhythmicity(st, d);                            % used to fail in accumarray
+            tc.verifyFalse(isnan(r.Exponent));
+            tc.verifyEqual(r.LV, 1, 'AbsTol', 0.15);
+        end
+
         function testTooFewSpikes(tc)
             r = spikeRhythmicity([1; 2; 3], 600);
             tc.verifyFalse(r.Rhythmic);
