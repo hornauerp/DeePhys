@@ -78,7 +78,9 @@ classdef RecordingProcessor < handle
         %      RegularityFit NaN without a significant spectral peak; exact time grid in
         %      alignWaveformsFromData; CCG honours its Fs option; Amplitude (and QC.Amplitude)
         %      also for Kilosort 4 sortings (template x whitening_mat_inv)
-        FeatureDefinitionVersion = 5
+        %   6  waveform Rise / Decay: 10-90 % slopes with levels from the segment's end values
+        %      (were slewrate, whose histogram state levels changed with round-off)
+        FeatureDefinitionVersion = 6
     end
 
     % =====================================================================

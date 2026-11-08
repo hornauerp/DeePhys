@@ -85,19 +85,12 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
             end
         end
 
-        rise_cutout = interp_wf_matrix(unit_trough_idx(u):peak_2_abs_idx, u);
-        if numel(rise_cutout) > 1
-            unit_features.Rise = mean(slewrate(rise_cutout, ms_conversion));   % amplitude per ms, independent of sampling rate
-        else
-            unit_features.Rise = NaN;
-        end
+        % Rise: trough to repolarisation peak; Decay: that peak to the following minimum.
+        % Slopes in amplitude per ms, independent of the sampling rate.
+        unit_features.Rise = transitionSlope(interp_wf_matrix(unit_trough_idx(u):peak_2_abs_idx, u), ms_conversion);
         decay_cutout = interp_wf_matrix(peak_2_abs_idx:end, u);
         decay_cutout = decay_cutout(1:find(decay_cutout==min(decay_cutout), 1, 'first'));
-        if numel(decay_cutout) > 1
-            unit_features.Decay = mean(slewrate(decay_cutout, ms_conversion));
-        else
-            unit_features.Decay = NaN;
-        end
+        unit_features.Decay = transitionSlope(decay_cutout, ms_conversion);
 
         % Width of the trough at half its amplitude: the contiguous run below half-amplitude
         % that contains the trough (not the first and last such samples anywhere, which a
@@ -127,4 +120,36 @@ function waveform_features = computeWaveformFeatures(norm_wf_matrix, sampling_ra
         end
         waveform_features{u} = unit_features;
     end
+end
+
+function s = transitionSlope(x, samples_per_ms)
+% TRANSITIONSLOPE  10-90 % slope of a segment that runs from one extreme (its first value) to
+% the other (its last value), in amplitude per ms; NaN for fewer than two samples or a flat
+% segment.
+%
+% The levels are 10, 50 and 90 % of the way from the first to the last value. As in
+% slewrate, the slope spans the last 10 % crossing before the first 50 % crossing and the
+% first 90 % crossing after it, with crossing times interpolated linearly. Unlike slewrate,
+% whose state levels come from a histogram of the samples, the levels depend continuously on
+% the samples, so round-off cannot change the result by more than round-off.
+x = x(:);
+if numel(x) < 2 || x(end) == x(1)
+    s = NaN;
+    return
+end
+d = sign(x(end) - x(1));
+level = x(1) + [0.1 0.5 0.9] * (x(end) - x(1));
+t10 = crossings(x, level(1), d);
+t50 = crossings(x, level(2), d);
+t90 = crossings(x, level(3), d);
+t_lo = t10(find(t10 <= t50(1), 1, 'last'));
+t_hi = t90(find(t90 >= t50(1), 1, 'first'));
+s = (level(3) - level(1)) / (t_hi - t_lo) * samples_per_ms;
+end
+
+function t = crossings(x, level, d)
+% Fractional sample positions where x passes level in direction d (from d*x < d*level to
+% d*x >= d*level), by linear interpolation.
+k = find(d * x(1:end-1) < d * level & d * x(2:end) >= d * level);
+t = k + (level - x(k)) ./ (x(k + 1) - x(k));
 end

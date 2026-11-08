@@ -313,8 +313,8 @@ classdef FeatureCatalog
         %     than LvR, PartialAutocorrelation at lag-1 captures little beyond CV2.
         %   WaveformFeatures: T2Pdelay is the primary E/I discriminator; HalfWidth
         %     and Asymmetry add complementary shape information. AUC features depend
-        %     on unstable zero-crossing detection. Rise/Decay use slewrate() on AP
-        %     waveform segments (semantic mismatch). T2Pratio correlates with T2Pdelay.
+        %     on unstable zero-crossing detection. Rise/Decay (10-90 % slopes after the
+        %     trough) stay out as before. T2Pratio correlates with T2Pdelay.
         %   RegularityFeatures: Magnitude is correlated with firing rate (normalization
         %     artefact); Frequency and Fit capture the independent variance.
         %   Catch22: generic time-series features; overlaps strongly with activity
