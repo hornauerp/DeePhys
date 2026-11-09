@@ -1,9 +1,12 @@
 function ext_labels = classifyExternalUnits(ctc, wf_test, acg_test, sr_test, opts)
-% CLASSIFYEXTERNALUNITS  Classify external units via a joint UMAP with DeePhys units.
+% CLASSIFYEXTERNALUNITS  Classify external units from the DeePhys units nearest to them.
 %
-% Builds a joint unsupervised UMAP embedding of all DeePhys units plus the
-% external (unlabelled) units. DeePhys training labels from generateTrainLabels
-% seed graph label propagation, which then assigns labels to the external units.
+% By default (Method "knn") each external unit gets the mean P(inhibitory) of its K nearest
+% classified DeePhys units, weighted by 1 / distance (classifyUnits is run first if needed).
+% Method "propagation" propagates the training labels of generateTrainLabels over the joint
+% graph of DeePhys and external units instead; external units from another preparation often
+% form their own cluster in that graph, reach the DeePhys units through a few of them, and all
+% get about the same probability. The joint graph and embedding are built in both modes.
 %
 % Feature space consistency is enforced by applying the stored NormalizationParams
 % (from generateTrainLabels) to both DeePhys and external feature matrices before
@@ -36,6 +39,8 @@ function ext_labels = classifyExternalUnits(ctc, wf_test, acg_test, sr_test, opt
 %                        enriched for one class (e.g. optotagged interneurons) are biased by
 %                        it; train with NormalizationVar = "" for such transfers.
 %   ExternalGroups     - (N_ext x 1) group labels for that z-score (default: one group).
+%   Method             - "knn" (default) or "propagation" (see above).
+%   K                  - neighbours for "knn" (default: the joint graph's NNeighbors).
 %   Cutoff             - threshold on P(inhibitory): 0.5 (default; the calibrated point within
 %                        the training domain) or "auto": inferred from the external scores
 %                        alone (two-component mixture on logit P, used only if clearly
@@ -56,7 +61,8 @@ function ext_labels = classifyExternalUnits(ctc, wf_test, acg_test, sr_test, opt
 %        ctc.Reduction.External.DeePhysEmbedding (n_unique × NDims) DeePhys embedding
 %        ctc.Reduction.External.Confidence   (1 × N_ext) label confidence
 %        ctc.Reduction.External.JointGraph   (n_unique+N_ext square) graph used for propagation
-%        ctc.Reduction.External.Probability  (N_ext × 2) [P(exc) P(inh)] after propagation
+%        ctc.Reduction.External.Probability  (N_ext × 2) [P(exc) P(inh)]
+%        ctc.Reduction.External.Method       "knn" or "propagation"
 % Returns: ext_labels  (1 × N_ext)  1=excitatory, 2=inhibitory, NaN=not reached by
 %          label propagation (no graph path to a DeePhys training unit)
 
@@ -72,6 +78,8 @@ arguments
     opts.PerGroupZScore            = "auto"
     opts.ExternalGroups            = []
     opts.Cutoff                    = 0.5
+    opts.Method (1,1) string {mustBeMember(opts.Method, ["knn", "propagation"])} = "knn"
+    opts.K                  double = []
 end
 
 auto_cutoff = (isstring(opts.Cutoff) || ischar(opts.Cutoff)) && lower(string(opts.Cutoff)) == "auto";
@@ -227,64 +235,86 @@ row_sums = sum(G, 2);
 row_sums(row_sums == 0) = 1;
 W = G ./ row_sums;
 
-% ── Label propagation: DeePhys training units are seeds ────────────────────────
-% DeePhys training unit indices (1-based, into unique-unit space) and their labels.
-% External units at rows n_dphy+1 : end receive labels via propagation.
-train_ids = labels.sorted_train_ids;
-y_train   = labels.sorted_y_train;
-
-F_label = ones(N_all, 2) * 0.5;
-for ti = 1:numel(train_ids)
-    idx = train_ids(ti);
-    if y_train(ti) == 1
-        F_label(idx, :) = [1, 0];
-    else
-        F_label(idx, :) = [0, 1];
+if opts.Method == "knn"
+    % ── Inductive: P(inhibitory) of the nearest classified DeePhys units ──────────
+    if isempty(ctc.UnitLabels)
+        fprintf('classifyExternalUnits: classifying the DeePhys units first (classifyUnits)\n');
+        ctc.classifyUnits();
     end
-end
+    lab   = ctc.UnitLabels(:);
+    p_row = ctc.UnitConfidence(:);
+    p_row(lab == 1) = 1 - p_row(lab == 1);
+    p_row(isnan(lab)) = NaN;
+    [u_ids, first] = unique(nf.all_to_unique(:), 'first');
+    p_dphy = nan(n_dphy, 1);
+    p_dphy(u_ids) = p_row(first);
+    k_nn = n_neighbors;
+    if ~isempty(opts.K), k_nn = opts.K; end
+    p_ext = knnTransferProbability(X_dphy, p_dphy, X_ext, k_nn);
+    F_ext = [1 - p_ext, p_ext];
+    unreached_ext = isnan(p_ext);
+else
+    % ── Label propagation: DeePhys training units are seeds ────────────────────────
+    % DeePhys training unit indices (1-based, into unique-unit space) and their labels.
+    % External units at rows n_dphy+1 : end receive labels via propagation.
+    train_ids = labels.sorted_train_ids;
+    y_train   = labels.sorted_y_train;
 
-max_iter = p_conf.GraphMaxIter;
-tol      = p_conf.GraphConvergenceTol;
-for iter = 1:max_iter
-    F_new = W * F_label;
-    F_row_sum = sum(F_new, 2);
-    F_row_sum(F_row_sum == 0) = 1;
-    F_new = F_new ./ F_row_sum;
-    % Clamp DeePhys training labels
+    F_label = ones(N_all, 2) * 0.5;
     for ti = 1:numel(train_ids)
         idx = train_ids(ti);
         if y_train(ti) == 1
-            F_new(idx, :) = [1, 0];
+            F_label(idx, :) = [1, 0];
         else
-            F_new(idx, :) = [0, 1];
+            F_label(idx, :) = [0, 1];
         end
     end
-    if max(abs(F_new(:) - F_label(:))) < tol
-        fprintf('Graph label propagation converged at iteration %d\n', iter);
+
+    max_iter = p_conf.GraphMaxIter;
+    tol      = p_conf.GraphConvergenceTol;
+    for iter = 1:max_iter
+        F_new = W * F_label;
+        F_row_sum = sum(F_new, 2);
+        F_row_sum(F_row_sum == 0) = 1;
+        F_new = F_new ./ F_row_sum;
+        % Clamp DeePhys training labels
+        for ti = 1:numel(train_ids)
+            idx = train_ids(ti);
+            if y_train(ti) == 1
+                F_new(idx, :) = [1, 0];
+            else
+                F_new(idx, :) = [0, 1];
+            end
+        end
+        if max(abs(F_new(:) - F_label(:))) < tol
+            fprintf('Graph label propagation converged at iteration %d\n', iter);
+            F_label = F_new;
+            break
+        end
         F_label = F_new;
-        break
     end
-    F_label = F_new;
-end
-if iter == max_iter
-    fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
-end
+    if iter == max_iter
+        fprintf('Graph label propagation reached max iterations (%d)\n', max_iter);
+    end
 
-% Units without a graph path to any seed keep the uninformed [0.5 0.5]; flag them
-% before normalisation (previously the tie rule silently called them excitatory).
-unreached = all(abs(F_label - 0.5) < 1e-12, 2);
+    % Units without a graph path to any seed keep the uninformed [0.5 0.5]; flag them
+    % before normalisation (previously the tie rule silently called them excitatory).
+    unreached = all(abs(F_label - 0.5) < 1e-12, 2);
 
-% Seed-count normalisation, as in classifyUnits (no-op for balanced training sets).
-n_seed = [sum(y_train == 1), sum(y_train == 2)];
-if all(n_seed > 0) && n_seed(1) ~= n_seed(2)
-    F_label = F_label ./ n_seed;
-    F_label = F_label ./ max(sum(F_label, 2), eps);
+    % Seed-count normalisation, as in classifyUnits (no-op for balanced training sets).
+    n_seed = [sum(y_train == 1), sum(y_train == 2)];
+    if all(n_seed > 0) && n_seed(1) ~= n_seed(2)
+        F_label = F_label ./ n_seed;
+        F_label = F_label ./ max(sum(F_label, 2), eps);
+    end
+    F_ext = F_label(n_dphy+1:end, :);
+    unreached_ext = unreached(n_dphy+1:end);
 end
 
 % ── Extract external unit labels and confidence ────────────────────────────────
 ext_labels     = nan(1, n_ext);
 ext_confidence = nan(1, n_ext);
-n_unreached    = sum(unreached(n_dphy+1:end));
+n_unreached    = sum(unreached_ext);
 if n_unreached > 0
     warning('CellTypeClassifier:externalUnreached', ...
         ['%d/%d external units have no graph path to a DeePhys training unit and are left ' ...
@@ -293,8 +323,8 @@ if n_unreached > 0
 end
 % Decision threshold on P(inh): 0.5 (calibrated within the training domain) or inferred
 % from the external scores alone (Cutoff = "auto", see inferExternalCutoff).
-p_inh_ext = F_label(n_dphy+1:end, 2);
-p_inh_ext(unreached(n_dphy+1:end)) = NaN;
+p_inh_ext = F_ext(:, 2);
+p_inh_ext(unreached_ext) = NaN;
 cut_info = struct('method', "fixed", 'dBIC', NaN, 'inhibitory_share', NaN, 'bimodal', false);
 if auto_cutoff
     [cutoff, cut_info] = inferExternalCutoff(p_inh_ext);
@@ -309,10 +339,9 @@ else
     cutoff = opts.Cutoff;
 end
 for i = 1:n_ext
-    gi = n_dphy + i;
-    if unreached(gi), continue; end
-    p_exc = F_label(gi, 1);
-    p_inh = F_label(gi, 2);
+    if unreached_ext(i), continue; end
+    p_exc = F_ext(i, 1);
+    p_inh = F_ext(i, 2);
     if p_inh > cutoff
         ext_labels(i)     = 2;
         ext_confidence(i) = p_inh;
@@ -328,7 +357,8 @@ ctc.Reduction.External = struct( ...
     'Confidence',         ext_confidence, ...
     'JointGraph',         G, ...          % rows 1:NumDeePhys = DeePhys units, then external units
     'NumDeePhys',         n_dphy, ...
-    'Probability',        F_label(n_dphy+1:end, :), ...   % [P(exc) P(inh)] per external unit
+    'Probability',        F_ext, ...      % [P(exc) P(inh)] per external unit
+    'Method',             opts.Method, ...
     'Cutoff',             cutoff, ...
     'CutoffInfo',         cut_info);
 

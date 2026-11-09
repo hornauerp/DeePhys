@@ -95,9 +95,13 @@ title('Joint UMAP: DeePhys (circles) + external seeds (triangles)');
 %   1. Apply stored NormalizationParams to both DeePhys and external features
 %      (ensures both sides are in the same normalized feature space).
 %   2. Joint unit graph on the combined set (same construction as the main
-%      pipeline: exact kNN fuzzy graph by default).
-%   3. Graph label propagation: DeePhys training labels are seeds, external
-%      units receive labels (NaN if no graph path reaches them).
+%      pipeline: exact kNN fuzzy graph by default), for the embedding.
+%   3. Method "knn" (default): each external unit gets the P(inhibitory) of its
+%      nearest classified DeePhys units (classifyUnits runs first if needed).
+%      Method "propagation": DeePhys training labels are seeds on the joint graph,
+%      external units receive labels (NaN if no graph path reaches them). External
+%      units from another preparation often form their own cluster in that graph
+%      and then all get about the same probability.
 %
 % Requires generateTrainLabels() to have been run so NormalizationParams are set.
 

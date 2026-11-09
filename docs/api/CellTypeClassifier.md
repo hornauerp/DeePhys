@@ -40,7 +40,7 @@ Several perturbations of the same cell class can be combined with `Bootstrap.Res
 | `generateTrainLabels()` | Normalisation, unit graph, communities and training seeds. Default seeds: Leiden communities enriched (inhibitory) or depleted (excitatory) in responders, as a consensus over restarts. |
 | `classifyUnits()` | Label propagation over the graph (`Classification.Method = "graph"`) or distance-weighted kNN (`"knn"`). Sets `UnitLabels` and `UnitConfidence`. |
 | `classifyUnitsEnsemble()` | Majority vote over several seeds (`Parameters.Ensemble`, off by default); `UnitConfidence` is the share of agreeing runs |
-| `classifyExternalUnits(wf, acg, sr)` | Label units from other data (waveforms, ACGs, sampling rate) on a joint graph with the DeePhys units. The external cut-off is label-free and opt-in. |
+| `classifyExternalUnits(wf, acg, sr)` | Label units from other data (waveforms, ACGs, sampling rate): by default each gets the P(inhibitory) of its `K` nearest classified DeePhys units (`Method="knn"`); `Method="propagation"` propagates the training labels over a joint graph with the DeePhys units. The external cut-off is label-free and opt-in. |
 | `classifyUnitsWithExternalTrain(wf, acg, labels, sr)` | The reverse: externally labelled units (e.g. patch-clamp or optogenetically identified) seed the labels of the DeePhys units |
 | `graphMatrix()` | The symmetric unit graph used for communities and propagation |
 | `clearCache()` | Invalidate cached preprocessing after changing `Parameters` |

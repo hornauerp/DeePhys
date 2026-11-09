@@ -12,7 +12,7 @@ Patch-clamp or optogenetic labels from an external recording train a classifier 
 **Scenario C3 — DeePhys labels → External units**
 DeePhys-derived training labels classify units from an external recording (different device, sampling rate, etc.).
 
-Both methods embed DeePhys and external units jointly in a single unsupervised UMAP, then apply graph label propagation — the same mechanism as Tutorial 4.
+Both methods embed DeePhys and external units jointly in a single unsupervised UMAP. C2 applies graph label propagation, the same mechanism as Tutorial 4. C3 labels each external unit from its nearest classified DeePhys units by default (`Method="knn"`); `Method="propagation"` propagates the training labels over the joint graph instead, which compresses the probabilities of external units that form their own cluster in it.
 
 ## Prerequisites
 
