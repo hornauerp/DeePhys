@@ -80,7 +80,10 @@ classdef RecordingProcessor < handle
         %      also for Kilosort 4 sortings (template x whitening_mat_inv)
         %   6  waveform Rise / Decay: 10-90 % slopes with levels from the segment's end values
         %      (were slewrate, whose histogram state levels changed with round-off)
-        FeatureDefinitionVersion = 6
+        %   7  "ISINJoint" bursts with 50 surrogates (was 20; Bursts.NSurrogates): with 20, burst
+        %      features could depend on the random draws when a unit or threshold sat near its
+        %      cut-off
+        FeatureDefinitionVersion = 7
     end
 
     % =====================================================================
@@ -537,6 +540,9 @@ classdef RecordingProcessor < handle
                     if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'TonicMinRate')
                         burst_params.TonicMinRate = proc.Parameters.Bursts.TonicMinRate;
                     end
+                    if isfield(proc.Parameters, 'Bursts') && isfield(proc.Parameters.Bursts, 'NSurrogates')
+                        burst_params.NSurrogates = proc.Parameters.Bursts.NSurrogates;
+                    end
                     burst_params.Outlier = proc.Parameters.Outlier;
                     burst_params.Binning = proc.Parameters.Bursts.Binning;
 
@@ -785,7 +791,9 @@ classdef RecordingProcessor < handle
                     fr = NaN(numel(proc.Units), 1); cv = fr;
                     if ismember('FiringRate', uft.Properties.VariableNames), fr = uft.FiringRate; end
                     if ismember('CVInterSpikeInterval', uft.Properties.VariableNames), cv = uft.CVInterSpikeInterval; end
-                    bursts = detectNetworkBursts(st, su, duration, TonicMethod=pb.TonicMethod, ...
+                    surr = {};
+                    if isfield(pb, 'NSurrogates'), surr = {'NSurrogates', pb.NSurrogates}; end
+                    bursts = detectNetworkBursts(st, su, duration, surr{:}, TonicMethod=pb.TonicMethod, ...
                         TonicMinRate=pb.TonicMinRate, FiringRates=fr, CVISI=cv, ShapeLevel=pb.ShapeLevel);
                 end
                 cb = proc.Parameters.CellTypeBursts;
@@ -1201,6 +1209,7 @@ classdef RecordingProcessor < handle
             params.Bursts.TonicMethod = "gini";      % "ISINJoint": unit removal before detection (with TonicMinRate)
             params.Bursts.ShapeLevel  = 0.25;        % burst onset / offset at this fraction of the peak (burstShape)
             params.Bursts.TonicMinRate = "median";   % "ISINJoint": units below this rate (Hz or "median") are never removed
+            params.Bursts.NSurrogates = 50;          % "ISINJoint": surrogates per test; 20 is about twice as fast and suffices for clear bursts
             params.Bursts.MergeFactor = 0.5;
             params.Bursts.Binning     = 0.1;
 

@@ -3,7 +3,7 @@ function [bursts, info] = detectNetworkBursts(spike_times, spike_units, duration
 % surrogate data.
 %
 %   [bursts, info] = detectNetworkBursts(spike_times, spike_units, duration)
-%   [...] = detectNetworkBursts(..., TonicMethod="none", NSurrogates=50)
+%   [...] = detectNetworkBursts(..., TonicMethod="none", NSurrogates=20)
 %   [...] = detectNetworkBursts(..., N=20, Threshold=0.1)        % plain ISI_N, fixed parameters
 %
 % 1. Uncoupled units are removed (TonicMethod): units whose firing does not follow the rest of
@@ -92,7 +92,9 @@ function [bursts, info] = detectNetworkBursts(spike_times, spike_units, duration
 %   it the detector agrees with the legacy detector. Known limit: with quasi-periodic bursting,
 %   units firing ~1 spike per burst can look regular at 3 spikes per bin and are removed.
 %   TonicMinRate also takes a rate in Hz or 0 (no floor).
-%   FiringRates / CVISI (per unit 1..max(spike_units), "legacy" only), NSurrogates (20), NValues
+%   FiringRates / CVISI (per unit 1..max(spike_units), "legacy" only), NSurrogates (50: unit
+%   z-scores and the null of G per N; 20 halves the runtime and suffices when bursts are clear,
+%   but near a unit or threshold cut-off the result then depends on the draws), NValues
 %   ([] = 30 log-spaced values from MinBurstUnits to 20 x kept units), LogBin (0.02 decades),
 %   MinZ (3), MinEffect (0.05 nats: absolute floor on G - surrogate; sharp bursts that are rare
 %   in a dense background stay below it - 0 makes them candidates but can add small events of a
@@ -128,7 +130,7 @@ arguments
         ["coupling", "gini", "regular", "coupling+regular", "either", "both", "legacy", "none"])} = "gini"
     opts.FiringRates double = []
     opts.CVISI double = []
-    opts.NSurrogates (1,1) double = 20
+    opts.NSurrogates (1,1) double = 50
     opts.NValues double = []
     opts.LogBin (1,1) double = 0.02
     opts.MinZ (1,1) double = 3
