@@ -82,7 +82,8 @@ classdef RecordingProcessor < handle
         %      (were slewrate, whose histogram state levels changed with round-off)
         %   7  "ISINJoint" bursts with 50 surrogates (was 20; Bursts.NSurrogates): with 20, burst
         %      features could depend on the random draws when a unit or threshold sat near its
-        %      cut-off
+        %      cut-off; QC.PowerCutoff on the power the spike has as an 82-sample template at
+        %      10 kHz (was |FFT|^2 / n at the recording's rate and template length)
         FeatureDefinitionVersion = 7
     end
 
@@ -151,7 +152,7 @@ classdef RecordingProcessor < handle
 
             % QC checks
             if isempty(p.QC.GoodUnits)
-                bad_power = RecordingProcessor.checkPower(norm_wf, p.QC.PowerCutoff);
+                bad_power = RecordingProcessor.checkPower(norm_wf, p.QC.PowerCutoff, sd.SamplingRate);
                 % Amplitude in uV (see templateAmplitudesUV). Kilosort templates are whitened,
                 % so without the conversion their scale is not uV and the criterion is skipped.
                 amp_range  = p.QC.Amplitude;
@@ -1534,11 +1535,18 @@ classdef RecordingProcessor < handle
 
         % ---- QC checks (ported from MEArecording) ----
 
-        function bad = checkPower(norm_wf, cutoff)
-            n     = size(norm_wf, 1);
-            y     = fft(norm_wf);
-            power = abs(y).^2 / n;
-            bad   = max(power)' > cutoff;
+        function bad = checkPower(norm_wf, cutoff, fs)
+        % Largest |FFT|^2 of the normalised waveform as the same spike would have as an
+        % 82-sample template at 10 kHz, where the cut-off was set: zero-padded to at least
+        % 8.2 ms (that template's frequency grid), bins up to 5 kHz, scaled by
+        % (10 kHz / fs)^2 / 82. |FFT|^2 / n itself grows with the sampling rate and shrinks with
+        % the template length (most realistic units failed at 20 kHz).
+            ref_fs = 10000; ref_n = 82;
+            n     = max(size(norm_wf, 1), round(ref_n * fs / ref_fs));
+            f     = abs(((0:n-1)' - n * ((0:n-1)' >= ceil(n / 2))) * fs / n);
+            y     = fft(norm_wf, n);
+            power = abs(y(f <= ref_fs / 2, :)).^2 / ref_n * (ref_fs / fs)^2;
+            bad   = max(power, [], 1)' > cutoff;
             fprintf('QC power: %d bad\n', sum(bad));
         end
 

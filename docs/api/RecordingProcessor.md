@@ -91,7 +91,7 @@ proc = RecordingProcessor(sd, struct('QC', struct('FiringRate', [0.1 10])));
 | `Axon` | `0.8` | Waveform axon score threshold (units with score > threshold are excluded) |
 | `Noise` | `14` | Noise amplitude threshold |
 | `NoiseCutout` | `[-1 1]` | Time window (ms) around trough for noise check |
-| `PowerCutoff` | `1.3` | Max high-frequency power ratio |
+| `PowerCutoff` | `1.3` | Max spectral power of the normalised peak waveform, taken as the power the spike has as an 82-sample template at 10 kHz (bins up to 5 kHz), so it does not depend on the sampling rate or the template length |
 | `N_Units` | `10` | Minimum units per recording (recordings with fewer are dropped) |
 | `MinSpikeCount` | `10` | Minimum spike count per unit |
 | `RateReference` | `"parent"` | For a window of a longer sorting (`split_sortings`, `segment_N`, `ParentPath`): `FiringRate`, `MinSpikeCount` and `RPV` are checked on the whole parent sorting, so every segment keeps the same units (a drug-silenced unit is not dropped from its drug segment). `"recording"`: this window only |
